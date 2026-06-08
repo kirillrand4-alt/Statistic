@@ -84,8 +84,14 @@ def model_tokens(u):
     return brand, model
 
 def signature(u):
+    """LOOSE-ключ: набор токенов без учёта порядка (для поиска кандидатов)."""
     brand, model = model_tokens(u)
     return f"{brand or '?'}::" + "|".join(sorted(model))
+
+def signature_ordered(u):
+    """STRICT-ключ: порядок токенов сохранён (для авто-матча высокой точности)."""
+    brand, model = model_tokens(u)
+    return f"{brand or '?'}::" + "|".join(model)
 
 if __name__ == "__main__":
     import sys
