@@ -26,6 +26,14 @@ BRAND_ALIASES = {
     "ironmac":"ironmac","airman":"airman","buster":"buster","ultratech":"ultratech",
     "comprecit":"comprecit","kaeser":"kaeser","chinook":"chinook","cross":"cross",
     "dgk":"dalgakiran","et":"et",
+    # батч №3 — остальные бренды каталога
+    "renner":"renner","boge":"boge","kraftmachine":"kraftmachine","zega":"zega",
+    "master":"master","zuv":"zuv","coaire":"coaire","das":"das","harrison":"harrison",
+    "global":"global","zammer":"zammer","sullair":"sullair","mark":"mark","chicago":"chicago",
+    "ingro":"ingro","baysar":"baysar","wis":"wis","tamsan":"tamsan","habe":"habe",
+    "crossair":"crossair","spitzenreiter":"spitzenreiter","paramina":"paramina","sigma":"sigma",
+    "aztec":"aztec","chkz":"chkz","hori":"hori","mig":"mig","mmz":"mmz","spr":"spr",
+    "ir":"ir","ingersoll":"ir","rand":"ir","ac":"ac",
 }
 
 # --- IP-рейтинг по умолчанию (шум). Остальные IP — сигнал ---
@@ -84,9 +92,9 @@ def model_tokens(u):
     return brand, model
 
 def _classify(model):
-    """Разложить токены ядра на: СКЕЛЕТ (слова модели в порядке, БЕЗ маркеров разрыва —
-    маркер ложно разъединял один товар, когда сайты ставят давление в разное место),
-    однозначные числа (порядок важен — части дробей), одиночные буквы, многозначные числа."""
+    """Разложить токены ядра на: СКЕЛЕТ (слова модели; в signature сортируются — порядок слов
+    между сайтами нестабилен: peredvizhnoy в начале/конце, «5 Plus»/«Plus 5»), однозначные
+    числа (порядок важен — части дробей), одиночные буквы, многозначные числа."""
     skeleton=[]; onedig=[]; singles=[]; multidig=[]
     for t in model:
         if re.fullmatch(r"\d", t):            # одна цифра — часть дроби (2,5)
@@ -115,7 +123,7 @@ def signature(u):
             mu_field="|".join(mu)
     else:
         mu_field=""
-    return (f"{brand or '?'}::" + "|".join(sk) + "::" + "|".join(one)
+    return (f"{brand or '?'}::" + "|".join(sorted(sk)) + "::" + "|".join(one)
             + "::" + "|".join(sorted(sg)) + "::" + mu_field)
 
 if __name__ == "__main__":
