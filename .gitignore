@@ -2,4 +2,4 @@ __pycache__/
 *.pyc
 # генерируемые файлы-обзоры и списки (пересобираются из build_review.py)
 *_review.xlsx
-price_check_links.txt
+*_links.txt
