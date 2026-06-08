@@ -8,7 +8,7 @@ import openpyxl, re
 from collections import defaultdict
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
-from matcher import signature, domain
+from matcher import signature, domain, find_brand
 
 # Детектор «дробь в названии разная» (класс 5.5↔55, который URL не различает).
 # Фильтруем Excel-битьё названий (1.46031 = сожранное 1,9/1,0) — там матч по URL верный.
@@ -20,9 +20,11 @@ def _clean_dec(name):
 def _corrupt(name): return bool(_CORRUPT.search(str(name)))
 
 SRC = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/03d65e4a-_______________________.xlsx"
+SITEMAP = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/429515e7-all_sitemap_urls.xlsx"
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
                "pnevmo-sklad.ru","v-p-k.ru","rutector.ru"]
-DOM_FIX = {"rostov.pnevmo-sklad.ru":"pnevmo-sklad.ru"}
+DOM_FIX = {"rostov.pnevmo-sklad.ru":"pnevmo-sklad.ru",
+           "novosibirsk.pnevmo-sklad.ru":"pnevmo-sklad.ru"}
 
 def load_all():
     wb = openpyxl.load_workbook(SRC, read_only=True, data_only=True)
@@ -34,6 +36,19 @@ def load_all():
         except: p=None
         if u not in info: info[u]=[name,[]]
         if p is not None: info[u][1].append(p)
+    # подмешиваем sitemap-URL конкурентов (без цены) — кандидаты на прайс-чек
+    try:
+        ws2 = openpyxl.load_workbook(SITEMAP, read_only=True, data_only=True)["Sheet1"]
+        for row in ws2.iter_rows(min_row=2, values_only=True):
+            u=str(row[0]); ul=u.lower()
+            if u in info: continue
+            if "kompressor" not in ul and "compressor" not in ul: continue
+            d=domain(u).replace("www.",""); d=DOM_FIX.get(d,d)
+            if d not in COMPETITORS: continue
+            if not find_brand(u): continue
+            info[u]=[u.rstrip("/").split("/")[-1], []]   # имя = слаг (цены нет)
+    except FileNotFoundError:
+        pass
     return info
 
 def cluster_all(info):
@@ -70,6 +85,7 @@ def add_sheet(wb, info, data, brand, sheet_name):
     warn=PatternFill("solid", fgColor="FFE699")     # жёлтый: >1 разный URL у конкурента
     nomatch=PatternFill("solid", fgColor="F2F2F2")  # серый: не нашлось
     gapfill=PatternFill("solid", fgColor="DDEBF7")  # голубой: кандидат добавить (нас нет)
+    checkfill=PatternFill("solid", fgColor="C6E0B4") # зелёный: есть у конкур., цены нет → проверить
     center=Alignment(horizontal="center", vertical="center", wrap_text=True)
     for c in range(1,len(HDR)+1):
         cell=wsx.cell(1,c); cell.font=bold; cell.fill=hfill; cell.alignment=center
@@ -107,13 +123,16 @@ def add_sheet(wb, info, data, brand, sheet_name):
             cell=wsx.cell(r,8+ci)
             urls=sites.get(comp)
             if urls:
-                cu=_pick_min(urls); pr=urls[cu]
-                if pr is not None: cell.value=pr; cell.number_format="# ##0"; comp_prices.append(pr)
-                else: cell.value="есть, нет цены"
-                cell.hyperlink=cu; cell.font=blue
-                dec_bad=(has_pk and not acorr and not _corrupt(info[cu][0])
-                         and _clean_dec(info[cu][0])!=adec)   # риск занижения — только наши строки
-                if len(urls)>1 or dec_bad: cell.fill=warn   # неоднозначность / разная дробь
+                priced={u:p for u,p in urls.items() if p is not None}
+                if priced:
+                    cu=_pick_min(priced); pr=priced[cu]
+                    cell.value=pr; cell.number_format="# ##0"; comp_prices.append(pr)
+                    cell.hyperlink=cu; cell.font=blue
+                    dec_bad=(has_pk and not acorr and not _corrupt(info[cu][0])
+                             and _clean_dec(info[cu][0])!=adec)   # риск занижения — только наши строки
+                    if len(urls)>1 or dec_bad: cell.fill=warn   # неоднозначность / разная дробь
+                else:                          # товар у конкурента есть, цены нет → на прайс-чек
+                    cell.value="проверить"; cell.hyperlink=next(iter(urls)); cell.font=blue; cell.fill=checkfill
             else:
                 cell.fill=nomatch
         if comp_prices:
