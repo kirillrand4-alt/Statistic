@@ -4,7 +4,7 @@
 Сопоставление по УМНОМУ отпечатку (matcher.signature): безопасные перестановки
 склеиваются автоматически, структурные различия расходятся. Дедуп по URL -> мин. цена.
 ЖЁЛТЫЙ = под один ключ у конкурента попало >1 разного URL (возможная неоднозначность)."""
-import openpyxl, re
+import openpyxl, re, csv
 from collections import defaultdict
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
@@ -20,22 +20,37 @@ def _clean_dec(name):
 def _corrupt(name): return bool(_CORRUPT.search(str(name)))
 
 SRC = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/03d65e4a-_______________________.xlsx"
-SITEMAP = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/429515e7-all_sitemap_urls.xlsx"
+PROKO_CSV = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/e7171060-products_export_20260608.csv"
+SITEMAP = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/63b1d773-all_sitemap_urls_1.xlsx"
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
                "pnevmo-sklad.ru","v-p-k.ru","rutector.ru"]
 DOM_FIX = {"rostov.pnevmo-sklad.ru":"pnevmo-sklad.ru",
            "novosibirsk.pnevmo-sklad.ru":"pnevmo-sklad.ru"}
 
 def load_all():
-    wb = openpyxl.load_workbook(SRC, read_only=True, data_only=True)
-    ws = wb["Лист1"]
     info={}
+    # прайс-файл: берём только КОНКУРЕНТОВ (наши товары — из свежего CSV ниже)
+    ws = openpyxl.load_workbook(SRC, read_only=True, data_only=True)["Лист1"]
     for row in ws.iter_rows(min_row=1, values_only=True):
-        u=str(row[12]); name=str(row[0])
+        u=str(row[12])
+        if domain(u).replace("www.","")=="prokompressor.ru": continue
+        name=str(row[0])
         try: p=float(str(row[3]).replace(",","."))
         except: p=None
         if u not in info: info[u]=[name,[]]
         if p is not None: info[u][1].append(p)
+    # свежий экспорт prokompressor (Название;Ссылка;Цена;Валюта) — наши товары и актуальные цены
+    try:
+        with open(PROKO_CSV, encoding="utf-8-sig", errors="replace") as fh:
+            rd=csv.reader(fh, delimiter=";"); next(rd, None)
+            for row in rd:
+                if len(row)<3 or "prokompressor" not in row[1]: continue
+                u=row[1].strip(); nm=row[0].strip().replace("&quot;",'"')
+                try: p=float(str(row[2]).replace(",",".").replace(" ","")); p=p if p>0 else None
+                except: p=None
+                info[u]=[nm, ([p] if p else [])]
+    except FileNotFoundError:
+        pass
     # подмешиваем sitemap-URL конкурентов (без цены) — кандидаты на прайс-чек
     try:
         ws2 = openpyxl.load_workbook(SITEMAP, read_only=True, data_only=True)["Sheet1"]
