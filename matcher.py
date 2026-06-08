@@ -83,15 +83,31 @@ def model_tokens(u):
         model.append(t)
     return brand, model
 
-def signature(u):
-    """LOOSE-ключ: набор токенов без учёта порядка (для поиска кандидатов)."""
-    brand, model = model_tokens(u)
-    return f"{brand or '?'}::" + "|".join(sorted(model))
+def _classify(model):
+    """Разложить токены ядра на: скелет слов (с маркерами разрыва), однозначные
+    числа (порядок важен — части дробей), одиночные буквы-варианты, многозначные числа."""
+    skeleton=[]; onedig=[]; singles=[]; multidig=[]; gap=False
+    for t in model:
+        if re.fullmatch(r"\d", t):            # одна цифра — часть дроби (2,5)
+            onedig.append(t); gap=True
+        elif re.fullmatch(r"\d+", t):         # многозначное число — ресивер/объём
+            multidig.append(t); gap=True
+        elif re.fullmatch(r"[a-zа-я]", t):    # одна буква — вариант (D, U, Ex...)
+            singles.append(t); gap=True
+        else:                                  # слово модели (sl, vs, pm, dr, nt3, rs15e, ip55)
+            if skeleton and gap: skeleton.append("_")
+            skeleton.append(t); gap=False
+    return skeleton, onedig, singles, multidig
 
-def signature_ordered(u):
-    """STRICT-ключ: порядок токенов сохранён (для авто-матча высокой точности)."""
+def signature(u):
+    """Умный отпечаток. Безопасные перестановки (давление в конце/середине, ресивер↔
+    давление, D VS↔VS D) дают ОДИН ключ; структурные различия (Inversys «7 Plus»≠«Plus»,
+    ZIF 2,5≠5,2) — РАЗНЫЕ ключи. Поля: бренд :: скелет :: одноцифры(порядок) ::
+    буквы(сорт) :: многоцифры(сорт)."""
     brand, model = model_tokens(u)
-    return f"{brand or '?'}::" + "|".join(model)
+    sk, one, sg, mu = _classify(model)
+    return (f"{brand or '?'}::" + "|".join(sk) + "::" + "|".join(one)
+            + "::" + "|".join(sorted(sg)) + "::" + "|".join(sorted(mu, key=int)))
 
 if __name__ == "__main__":
     import sys
