@@ -1,6 +1,6 @@
 """Поссылочный матчер компрессоров. v1 — итеративно дополняется правилами."""
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 # --- слова-типы и единицы: ШУМ (выкидываем) ---
 STOP = {
@@ -44,11 +44,11 @@ def domain(u):
     except: return "?"
 
 def path_tokens(u):
-    p = urlparse(str(u)).path.strip("/").lower()
+    p = unquote(urlparse(str(u)).path).strip("/").lower()   # %D0%B2 -> в (раскодируем кириллицу)
     return [t for t in re.split(r"[-_/.\s]+", p) if t]
 
 def last_segment_tokens(u):
-    p = urlparse(str(u)).path.strip("/").lower()
+    p = unquote(urlparse(str(u)).path).strip("/").lower()
     seg = p.split("/")[-1] if p else ""
     return [t for t in re.split(r"[-_/.\s]+", seg) if t]
 
@@ -89,6 +89,8 @@ def model_tokens(u):
         if t in BRAND_ALIASES: continue          # бренд убираем из ядра
         if re.fullmatch(r"ip\d+", t) and t in IP_DEFAULT: continue
         model.append(t)
+    # ВК (винтовой компрессор) транслитерируется и как vk (мы), и как bk (конкуренты): В→V/B
+    model = [("vk"+t[2:]) if (t=="bk" or re.fullmatch(r"bk\d.*", t)) else t for t in model]
     return brand, model
 
 def _classify(model):
