@@ -4,11 +4,20 @@
 Сопоставление по УМНОМУ отпечатку (matcher.signature): безопасные перестановки
 склеиваются автоматически, структурные различия расходятся. Дедуп по URL -> мин. цена.
 ЖЁЛТЫЙ = под один ключ у конкурента попало >1 разного URL (возможная неоднозначность)."""
-import openpyxl
+import openpyxl, re
 from collections import defaultdict
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from matcher import signature, domain
+
+# Детектор «дробь в названии разная» (класс 5.5↔55, который URL не различает).
+# Фильтруем Excel-битьё названий (1.46031 = сожранное 1,9/1,0) — там матч по URL верный.
+_DEC=re.compile(r'\d+[.,]\d{1,2}(?!\d)')
+_CORRUPT=re.compile(r'\d+[.,]\d{3,}')
+def _clean_dec(name):
+    return frozenset(m.group().replace(",",".")
+                     for m in _DEC.finditer(re.sub(r'(?i)ip\s*\d+'," ",str(name))))
+def _corrupt(name): return bool(_CORRUPT.search(str(name)))
 
 SRC = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/03d65e4a-_______________________.xlsx"
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
@@ -78,6 +87,7 @@ def add_sheet(wb, info, data, brand, sheet_name):
             pk_price=pk[pk_url]; name=info[pk_url][0]
         else:
             pk_url=None; pk_price=None; name=_best_name(info, sites)
+        adec=_clean_dec(name); acorr=_corrupt(name)
         n+=1; r=n+1
         wsx.cell(r,1,n)
         wsx.cell(r,2,_show_key(key))
@@ -101,7 +111,9 @@ def add_sheet(wb, info, data, brand, sheet_name):
                 if pr is not None: cell.value=pr; cell.number_format="# ##0"; comp_prices.append(pr)
                 else: cell.value="есть, нет цены"
                 cell.hyperlink=cu; cell.font=blue
-                if len(urls)>1: cell.fill=warn      # неоднозначность
+                dec_bad=(has_pk and not acorr and not _corrupt(info[cu][0])
+                         and _clean_dec(info[cu][0])!=adec)   # риск занижения — только наши строки
+                if len(urls)>1 or dec_bad: cell.fill=warn   # неоднозначность / разная дробь
             else:
                 cell.fill=nomatch
         if comp_prices:

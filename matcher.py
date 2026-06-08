@@ -84,19 +84,19 @@ def model_tokens(u):
     return brand, model
 
 def _classify(model):
-    """Разложить токены ядра на: скелет слов (с маркерами разрыва), однозначные
-    числа (порядок важен — части дробей), одиночные буквы-варианты, многозначные числа."""
-    skeleton=[]; onedig=[]; singles=[]; multidig=[]; gap=False
+    """Разложить токены ядра на: СКЕЛЕТ (слова модели в порядке, БЕЗ маркеров разрыва —
+    маркер ложно разъединял один товар, когда сайты ставят давление в разное место),
+    однозначные числа (порядок важен — части дробей), одиночные буквы, многозначные числа."""
+    skeleton=[]; onedig=[]; singles=[]; multidig=[]
     for t in model:
         if re.fullmatch(r"\d", t):            # одна цифра — часть дроби (2,5)
-            onedig.append(t); gap=True
+            onedig.append(t)
         elif re.fullmatch(r"\d+", t):         # многозначное число — ресивер/объём
-            multidig.append(t); gap=True
+            multidig.append(t)
         elif re.fullmatch(r"[a-zа-я]", t):    # одна буква — вариант (D, U, Ex...)
-            singles.append(t); gap=True
+            singles.append(t)
         else:                                  # слово модели (sl, vs, pm, dr, nt3, rs15e, ip55)
-            if skeleton and gap: skeleton.append("_")
-            skeleton.append(t); gap=False
+            skeleton.append(t)
     return skeleton, onedig, singles, multidig
 
 def signature(u):
