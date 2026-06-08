@@ -72,11 +72,11 @@ def _split_num_letter(tokens):
 def model_tokens(u):
     brand = find_brand(u)
     toks = last_segment_tokens(u)
+    toks = [t for t in toks if t not in STOP]   # стоп/предлоги — ДО разбиения (чтобы 10s сохранил s-вариант)
     toks = _split_num_letter(toks)
     toks = _merge_ip(toks)
     model=[]
     for t in toks:
-        if t in STOP: continue
         if t in UNIT_WORDS: continue
         if t in BRAND_ALIASES: continue          # бренд убираем из ядра
         if re.fullmatch(r"ip\d+", t) and t in IP_DEFAULT: continue
@@ -103,11 +103,20 @@ def signature(u):
     """Умный отпечаток. Безопасные перестановки (давление в конце/середине, ресивер↔
     давление, D VS↔VS D) дают ОДИН ключ; структурные различия (Inversys «7 Plus»≠«Plus»,
     ZIF 2,5≠5,2) — РАЗНЫЕ ключи. Поля: бренд :: скелет :: одноцифры(порядок) ::
-    буквы(сорт) :: многоцифры(сорт)."""
+    буквы(сорт) :: многоцифры(ресивер=макс плавает, мощность/давление в порядке)."""
     brand, model = model_tokens(u)
     sk, one, sg, mu = _classify(model)
+    if mu:
+        vals=sorted((int(x) for x in mu), reverse=True)
+        if len(mu)==1 or vals[0] >= 2*vals[1]:   # есть явный ресивер (макс ≥2× след.) — он плавает
+            mx=max(mu, key=int); rest=list(mu); rest.remove(mx)
+            mu_field="|".join(rest)+">"+mx
+        else:                                     # близкие величины (мощн./давл.) — порядок значим
+            mu_field="|".join(mu)
+    else:
+        mu_field=""
     return (f"{brand or '?'}::" + "|".join(sk) + "::" + "|".join(one)
-            + "::" + "|".join(sorted(sg)) + "::" + "|".join(sorted(mu, key=int)))
+            + "::" + "|".join(sorted(sg)) + "::" + mu_field)
 
 if __name__ == "__main__":
     import sys
