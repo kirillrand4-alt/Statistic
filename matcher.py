@@ -25,7 +25,7 @@ BRAND_ALIASES = {
     "airpol":"airpol","lupamat":"lupamat","comprag":"comprag","ozen":"ozen",
     "ironmac":"ironmac","airman":"airman","buster":"buster","ultratech":"ultratech",
     "comprecit":"comprecit","kaeser":"kaeser","chinook":"chinook","cross":"cross",
-    "dgk":"dalgakiran",
+    "dgk":"dalgakiran","et":"et",
 }
 
 # --- IP-рейтинг по умолчанию (шум). Остальные IP — сигнал ---
