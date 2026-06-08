@@ -13,12 +13,19 @@ STOP = {
 # --- единицы, которые шум сами по себе (но число рядом — сигнал) ---
 UNIT_WORDS = {"l","л","kvt","kw","at","atm"}
 
-# --- бренды (синонимы -> канон) ---
+# --- бренды (синонимы -> канон). Дополняется по мере охвата каталога ---
 BRAND_ALIASES = {
     "hansmann":"hansmann","remeza":"remeza","fiac":"fiac","abac":"abac",
     "fini":"fini","aso":"aso","zif":"zif","comaro":"comaro","atom":"atom",
     "enger":"enger","airrus":"airrus","elitech":"elitech","ekomak":"ekomak",
     "ceccato":"ceccato","dali":"dali","kraft":"kraft","fubag":"fubag",
+    # добавлено: крупные бренды каталога
+    "dalgakiran":"dalgakiran","atlas":"atlas","berg":"berg","almig":"almig",
+    "ariacom":"ariacom","kraftmann":"kraftmann","magnus":"magnus","atmos":"atmos",
+    "airpol":"airpol","lupamat":"lupamat","comprag":"comprag","ozen":"ozen",
+    "ironmac":"ironmac","airman":"airman","buster":"buster","ultratech":"ultratech",
+    "comprecit":"comprecit","kaeser":"kaeser","chinook":"chinook","cross":"cross",
+    "dgk":"dalgakiran",
 }
 
 # --- IP-рейтинг по умолчанию (шум). Остальные IP — сигнал ---
