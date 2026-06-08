@@ -31,7 +31,7 @@ BRAND_ALIASES = {
     "master":"master","zuv":"zuv","coaire":"coaire","das":"das","harrison":"harrison",
     "global":"global","zammer":"zammer","sullair":"sullair","mark":"mark","chicago":"chicago",
     "ingro":"ingro","baysar":"baysar","wis":"wis","tamsan":"tamsan","habe":"habe",
-    "crossair":"crossair","spitzenreiter":"spitzenreiter","paramina":"paramina","sigma":"sigma",
+    "crossair":"cross","spitzenreiter":"spitzenreiter","paramina":"paramina","sigma":"sigma",
     "aztec":"aztec","chkz":"chkz","hori":"hori","mig":"mig","mmz":"mmz","spr":"spr",
     "ir":"ir","ingersoll":"ir","rand":"ir","ac":"ac",
 }
