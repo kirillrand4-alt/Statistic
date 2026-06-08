@@ -36,8 +36,8 @@ def cluster_all(info):
         data[brand][key][d][u]=min(prices) if prices else None
     return data
 
-HDR=["№","Отпечаток (модель-ключ)","Название (prokompressor)","Ваша цена","Ваша ссылка"]\
-    +COMPETITORS+["ВЕРДИКТ (ок / ошибка: ...)","min конк.","Δ к min, %"]
+HDR=["№","Отпечаток","Название","У нас","Конк-тов","Ваша цена","Ваша ссылка"]\
+    +COMPETITORS+["min конк.","Δ к min, %","ВЕРДИКТ (ок / ошибка: ...)"]
 
 def _pick_min(d):
     return min(d, key=lambda k:(d[k] is None, d[k]))
@@ -47,6 +47,11 @@ def _show_key(key):
     parts=[p[0]] + [x for x in p[1:] if x]
     return " · ".join(parts)
 
+def _best_name(info, sites):
+    """Лучшее имя среди конкурентов: длинное и без Excel-битья (.46xxx)."""
+    cand=[u for c in COMPETITORS if c in sites for u in sites[c]]
+    return info[max(cand, key=lambda u: len(info[u][0]) - (60 if ".46" in info[u][0] else 0))][0]
+
 def add_sheet(wb, info, data, brand, sheet_name):
     bd=data.get(brand, {})
     wsx=wb.create_sheet(sheet_name[:31]); wsx.append(HDR)
@@ -55,25 +60,41 @@ def add_sheet(wb, info, data, brand, sheet_name):
     hfill=PatternFill("solid", fgColor="305496")
     warn=PatternFill("solid", fgColor="FFE699")     # жёлтый: >1 разный URL у конкурента
     nomatch=PatternFill("solid", fgColor="F2F2F2")  # серый: не нашлось
+    gapfill=PatternFill("solid", fgColor="DDEBF7")  # голубой: кандидат добавить (нас нет)
     center=Alignment(horizontal="center", vertical="center", wrap_text=True)
     for c in range(1,len(HDR)+1):
         cell=wsx.cell(1,c); cell.font=bold; cell.fill=hfill; cell.alignment=center
 
-    keys=sorted(k for k,sites in bd.items() if "prokompressor.ru" in sites)
+    ncomp=lambda s: sum(1 for c in COMPETITORS if c in s)
+    pk_keys=sorted(k for k,s in bd.items() if "prokompressor.ru" in s)
+    gap_keys=sorted((k for k,s in bd.items()
+                     if "prokompressor.ru" not in s and ncomp(s)>=2),
+                    key=lambda k:(-ncomp(bd[k]), k))      # популярные — первыми
     n=0
-    for key in keys:
-        sites=bd[key]; pk=sites["prokompressor.ru"]
-        pk_url=_pick_min(pk); pk_price=pk[pk_url]; pk_name=info[pk_url][0]
+    for key in pk_keys+gap_keys:
+        sites=bd[key]; has_pk="prokompressor.ru" in sites; nc=ncomp(sites)
+        if has_pk:
+            pk=sites["prokompressor.ru"]; pk_url=_pick_min(pk)
+            pk_price=pk[pk_url]; name=info[pk_url][0]
+        else:
+            pk_url=None; pk_price=None; name=_best_name(info, sites)
         n+=1; r=n+1
         wsx.cell(r,1,n)
         wsx.cell(r,2,_show_key(key))
-        wsx.cell(r,3,pk_name)
-        c0=wsx.cell(r,4,pk_price if pk_price else "нет цены")
-        if pk_price: c0.number_format="# ##0"
-        lkc=wsx.cell(r,5,"открыть"); lkc.hyperlink=pk_url; lkc.font=blue
+        wsx.cell(r,3,name)
+        uc=wsx.cell(r,4,"да" if has_pk else "нет")
+        if not has_pk: uc.fill=gapfill
+        cc=wsx.cell(r,5,nc)
+        if not has_pk and nc>=4: cc.font=Font(bold=True)   # очень популярный кандидат
+        if has_pk:
+            c6=wsx.cell(r,6, pk_price if pk_price else "нет цены")
+            if pk_price: c6.number_format="# ##0"
+            l=wsx.cell(r,7,"открыть"); l.hyperlink=pk_url; l.font=blue
+        else:
+            wsx.cell(r,6,"—").fill=gapfill
         comp_prices=[]
         for ci,comp in enumerate(COMPETITORS):
-            cell=wsx.cell(r,6+ci)
+            cell=wsx.cell(r,8+ci)
             urls=sites.get(comp)
             if urls:
                 cu=_pick_min(urls); pr=urls[cu]
@@ -85,11 +106,11 @@ def add_sheet(wb, info, data, brand, sheet_name):
                 cell.fill=nomatch
         if comp_prices:
             mn=min(comp_prices)
-            wsx.cell(r,13,mn).number_format="# ##0"
-            if pk_price: wsx.cell(r,14, round((pk_price-mn)/mn*100,1))
-    widths=[5,42,46,11,8]+[14]*len(COMPETITORS)+[26,11,10]
+            wsx.cell(r,14,mn).number_format="# ##0"
+            if pk_price: wsx.cell(r,15, round((pk_price-mn)/mn*100,1))
+    widths=[5,40,44,7,9,11,8]+[13]*len(COMPETITORS)+[11,10,24]
     for i,w in enumerate(widths,1): wsx.column_dimensions[get_column_letter(i)].width=w
-    wsx.freeze_panes="C2"; wsx.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{n+1}"
+    wsx.freeze_panes="D2"; wsx.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{n+1}"
     return n
 
 def build_multi(brands, out_path):
