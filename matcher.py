@@ -34,6 +34,9 @@ BRAND_ALIASES = {
     "crossair":"cross","spitzenreiter":"spitzenreiter","paramina":"paramina","sigma":"sigma",
     "aztec":"aztec","chkz":"chkz","hori":"hori","mig":"mig","mmz":"mmz","spr":"spr",
     "ir":"ir","ingersoll":"ir","rand":"ir","ac":"ac",
+    # конкурентские бренды, которых нет у prokompressor (на рассмотрение)
+    "xeleron":"xeleron","gmp":"gmp","kaishan":"kaishan","denair":"denair","vortex":"vortex",
+    "brestor":"brestor","baldor":"baldor","alup":"alup",
 }
 
 # --- IP-рейтинг по умолчанию (шум). Остальные IP — сигнал ---
