@@ -7,7 +7,7 @@
 <h2>Рост / падение за период</h2>
 
 {% if not sites %}<article><p>Сначала добавьте сайт.</p></article>{% else %}
-<form method="get" action="/compare">
+<form method="get" action="{{ base_path }}/compare">
   <div class="grid">
     <label>Сайт
       <select name="site_id">{% for s in sites %}<option value="{{ s.id }}" {% if site and s.id==site.id %}selected{% endif %}>{{ s.display_name or s.property_uri }}</option>{% endfor %}</select>

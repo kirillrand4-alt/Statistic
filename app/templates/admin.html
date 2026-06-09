@@ -5,7 +5,7 @@
 
 <article>
   <header>Добавить сайт</header>
-  <form method="post" action="/ui/sites">
+  <form method="post" action="{{ base_path }}/ui/sites">
     <div class="grid">
       <label>Источник
         <select name="source_code">
@@ -44,13 +44,13 @@
         <td>{% if s.enabled %}✅{% else %}⏸{% endif %}</td>
         <td>
           <div class="grid">
-            <form method="post" action="/ui/collect"><input type="hidden" name="site_id" value="{{ s.id }}"><button class="outline secondary" type="submit">Собрать</button></form>
-            <form method="post" action="/ui/backfill">
+            <form method="post" action="{{ base_path }}/ui/collect"><input type="hidden" name="site_id" value="{{ s.id }}"><button class="outline secondary" type="submit">Собрать</button></form>
+            <form method="post" action="{{ base_path }}/ui/backfill">
               <input type="hidden" name="site_id" value="{{ s.id }}">
               <input type="number" name="days" value="90" min="1" max="480" style="max-width:6rem">
               <button class="outline" type="submit">Backfill (дней)</button>
             </form>
-            <form method="post" action="/ui/sites/{{ s.id }}/toggle"><button class="outline contrast" type="submit">{% if s.enabled %}Выключить{% else %}Включить{% endif %}</button></form>
+            <form method="post" action="{{ base_path }}/ui/sites/{{ s.id }}/toggle"><button class="outline contrast" type="submit">{% if s.enabled %}Выключить{% else %}Включить{% endif %}</button></form>
           </div>
         </td>
       </tr>

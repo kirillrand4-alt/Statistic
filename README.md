@@ -86,6 +86,13 @@ pytest
 docker compose up --build       # монтирует ./data и ./secrets
 ```
 
+## Деплой на сервер
+
+Пошаговая инструкция (Ubuntu/VPS, systemd + nginx, обслуживание под `/stat` или
+на поддомене) — в [DEPLOY.md](DEPLOY.md). Готовые файлы — в `deploy/`
+(`seostat.service`, `nginx-subpath.conf`, `nginx-subdomain.conf`). Для подпути
+задайте `ROOT_PATH=/stat` в `.env`.
+
 ## Архитектура
 
 ```

@@ -40,3 +40,6 @@ templates.env.filters["numfmt"] = _numfmt
 templates.env.filters["pct"] = _pct
 templates.env.filters["ctr"] = _ctr
 templates.env.filters["pos"] = _pos
+
+# Overridden in app.main.create_app() with the configured base path ("" or "/stat").
+templates.env.globals.setdefault("base_path", "")

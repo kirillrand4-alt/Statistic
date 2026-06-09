@@ -8,7 +8,7 @@
 {% else %}
 <article>
   <header>Новый проект</header>
-  <form method="post" action="/ui/projects">
+  <form method="post" action="{{ base_path }}/ui/projects">
     <div class="grid">
       <label>Название
         <input type="text" name="name" placeholder="Напр. Блог — приоритетные страницы" required>
@@ -33,7 +33,7 @@
     <tbody>
     {% for p in projects %}
       <tr><td>{{ p.name }}</td><td>{{ p.urls|length }}</td>
-          <td><a href="/projects/{{ p.id }}" role="button" class="secondary outline">Открыть</a></td></tr>
+          <td><a href="{{ base_path }}/projects/{{ p.id }}" role="button" class="secondary outline">Открыть</a></td></tr>
     {% endfor %}
     </tbody>
   </table>

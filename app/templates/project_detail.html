@@ -8,7 +8,7 @@
 
 <article>
   <header>Добавить URL</header>
-  <form method="post" action="/ui/projects/{{ project.id }}/urls" enctype="multipart/form-data">
+  <form method="post" action="{{ base_path }}/ui/projects/{{ project.id }}/urls" enctype="multipart/form-data">
     <textarea name="urls_text" rows="4" placeholder="По одному URL в строке или через запятую"></textarea>
     <div class="grid">
       <label>…или файл <input type="file" name="file" accept=".txt,.csv"></label>
@@ -17,7 +17,7 @@
   </form>
 </article>
 
-<form method="get" action="/projects/{{ project.id }}" class="grid">
+<form method="get" action="{{ base_path }}/projects/{{ project.id }}" class="grid">
   <label>С <input type="date" name="start" value="{{ range.start }}"></label>
   <label>По <input type="date" name="end" value="{{ range.end }}"></label>
   <label>ТОП-1 по
@@ -39,7 +39,7 @@
 
 <article>
   <header>Экспорт за период</header>
-  <form method="get" action="/api/export" class="grid">
+  <form method="get" action="{{ base_path }}/api/export" class="grid">
     <input type="hidden" name="site_id" value="{{ site.id }}">
     <input type="hidden" name="project_id" value="{{ project.id }}">
     <input type="hidden" name="start" value="{{ range.start }}">

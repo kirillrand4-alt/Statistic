@@ -20,9 +20,10 @@ from app.api import (
     routes_projects,
 )
 from app.bootstrap import bootstrap
+from app.config import get_settings
 from app.db.base import SessionLocal, init_db
 from app.scheduler.jobs import shutdown_scheduler, start_scheduler
-from app.web import STATIC_DIR
+from app.web import STATIC_DIR, templates
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -43,9 +44,20 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="SEO Статистика", version="0.1.0", lifespan=lifespan)
+    bp = get_settings().base_path  # "" or e.g. "/stat"
 
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    app = FastAPI(
+        title="SEO Статистика",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url=f"{bp}/docs",
+        openapi_url=f"{bp}/openapi.json",
+    )
+
+    # Make the configured prefix available to all templates for link/asset URLs.
+    templates.env.globals["base_path"] = bp
+
+    app.mount(f"{bp}/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     for module in (
         routes_projects,
@@ -55,9 +67,9 @@ def create_app() -> FastAPI:
         routes_admin,
         routes_pages,
     ):
-        app.include_router(module.router)
+        app.include_router(module.router, prefix=bp)
 
-    @app.get("/health", include_in_schema=False)
+    @app.get(f"{bp}/health", include_in_schema=False)
     def health():
         return {"status": "ok"}
 

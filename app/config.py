@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     secret_key: str = "change-me"
     database_url: str = "sqlite:///./data/seo.db"
     timezone: str = "Europe/Moscow"
+    # Serve under a subpath behind a reverse proxy, e.g. "/stat". Empty = root.
+    root_path: str = ""
 
     # Google Search Console
     gsc_auth_mode: str = "service_account"  # service_account | oauth
@@ -44,6 +46,16 @@ class Settings(BaseSettings):
     enable_scheduler: bool = True
     collect_cron_hour: int = 4
     collect_refetch_days: int = 5
+
+    @property
+    def base_path(self) -> str:
+        """Normalized subpath prefix: "" or "/stat" (leading slash, no trailing)."""
+        p = (self.root_path or "").strip()
+        if not p:
+            return ""
+        if not p.startswith("/"):
+            p = "/" + p
+        return p.rstrip("/")
 
 
 @lru_cache

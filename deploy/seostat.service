@@ -1,0 +1,16 @@
+[Unit]
+Description=SEO Statistic (FastAPI)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/seostat
+ExecStart=/opt/seostat/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8011
+Restart=always
+RestartSec=3
+# Recommended: create a dedicated user and uncomment:
+# User=seostat
+# Group=seostat
+
+[Install]
+WantedBy=multi-user.target

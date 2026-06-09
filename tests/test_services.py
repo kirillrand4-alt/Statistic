@@ -13,6 +13,15 @@ from app.services.ctr import ctr_for_project
 from app.services.top_keyword import top_keywords_for_project
 
 
+def test_base_path_normalization():
+    from app.config import Settings
+
+    assert Settings(root_path="").base_path == ""
+    assert Settings(root_path="/stat").base_path == "/stat"
+    assert Settings(root_path="stat/").base_path == "/stat"
+    assert Settings(root_path="/stat/").base_path == "/stat"
+
+
 def _range(days_back_start, days_back_end):
     end = date.today() - timedelta(days=days_back_end)
     start = date.today() - timedelta(days=days_back_start)
