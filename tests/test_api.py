@@ -103,3 +103,20 @@ def test_ui_admin_flows(client):
     # enable/disable toggle
     assert client.post(f"/ui/sites/{site_id}/toggle").status_code == 200
     assert client.get("/api/sites").json()[0]["enabled"] is False
+
+
+def test_gsc_connect_route(client):
+    import json
+
+    key = json.dumps(
+        {
+            "type": "service_account",
+            "client_email": "svc@proj.iam.gserviceaccount.com",
+            "private_key": "-----BEGIN PRIVATE KEY-----\nAA\n-----END PRIVATE KEY-----\n",
+        }
+    )
+    r = client.post("/ui/gsc/connect", data={"gsc_json": key, "backfill_days": "15"})
+    assert r.status_code == 200  # redirect to dashboard, followed
+    # the site is registered synchronously (data pull runs in a background thread)
+    assert len(client.get("/api/sites").json()) >= 1
+    assert client.get("/admin").status_code == 200

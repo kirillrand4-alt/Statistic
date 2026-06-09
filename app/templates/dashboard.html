@@ -3,6 +3,8 @@
 {% block content %}
 <h2>Дашборд</h2>
 
+{% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
+
 {% if not sites %}
   <article>
     <p>Пока нет ни одного сайта. <a href="{{ base_path }}/admin">Добавьте сайт в Настройках</a>

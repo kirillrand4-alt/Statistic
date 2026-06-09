@@ -52,7 +52,7 @@ def _is_retryable(exc: BaseException) -> bool:
 
 class GSCProvider(SearchDataProvider):
     code = "gsc"
-    capabilities = {"page_metrics", "query_metrics_per_url", "site_totals"}
+    capabilities = {"page_metrics", "query_metrics_per_url", "site_totals", "all_query_metrics"}
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
@@ -179,3 +179,28 @@ class GSCProvider(SearchDataProvider):
                 ctr=float(r.get("ctr", 0.0)),
                 position=float(r.get("position", 0.0)),
             )
+
+    def fetch_all_query_metrics(self, site, dr: DateRange) -> Iterable[QueryMetricRow]:
+        """Per-page per-query daily metrics for the whole site (page+query dims)."""
+        body = self._base_body(dr, ["page", "query", "date"])
+        for r in self._paged_rows(site.property_uri, body):
+            page_url, query_text, day = r["keys"][0], r["keys"][1], r["keys"][2]
+            yield QueryMetricRow(
+                query=query_text,
+                url=page_url,
+                date=date.fromisoformat(day),
+                clicks=int(r.get("clicks", 0)),
+                impressions=int(r.get("impressions", 0)),
+                ctr=float(r.get("ctr", 0.0)),
+                position=float(r.get("position", 0.0)),
+            )
+
+    def list_sites(self) -> list[dict]:
+        """List Search Console properties the credentials can access."""
+        resp = self._service().sites().list().execute()
+        out = []
+        for entry in resp.get("siteEntry", []) or []:
+            out.append(
+                {"site_url": entry.get("siteUrl"), "permission": entry.get("permissionLevel")}
+            )
+        return out

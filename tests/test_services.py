@@ -13,6 +13,39 @@ from app.services.ctr import ctr_for_project
 from app.services.top_keyword import top_keywords_for_project
 
 
+def test_connect_gsc_autopull(db):
+    import json
+
+    from sqlalchemy import func, select
+
+    from app.db.models import PageMetricDaily, QueryMetricDaily, Site
+    from app.services.connect import connect_gsc
+
+    key = json.dumps(
+        {
+            "type": "service_account",
+            "client_email": "svc@proj.iam.gserviceaccount.com",
+            "private_key": "-----BEGIN PRIVATE KEY-----\nAA\n-----END PRIVATE KEY-----\n",
+        }
+    )
+    result = connect_gsc(db, key, backfill_days=20, background=False)
+
+    assert result["site_ids"], "a site should be auto-registered from list_sites()"
+    assert db.execute(select(func.count()).select_from(Site)).scalar_one() >= 1
+    # data was pulled automatically (no project needed)
+    assert db.execute(select(func.count()).select_from(PageMetricDaily)).scalar_one() > 0
+    assert db.execute(select(func.count()).select_from(QueryMetricDaily)).scalar_one() > 0
+
+
+def test_connect_gsc_rejects_bad_key(db):
+    import pytest
+
+    from app.services.connect import connect_gsc
+
+    with pytest.raises(Exception):
+        connect_gsc(db, "{ not json", background=False)
+
+
 def test_base_path_normalization():
     from app.config import Settings
 

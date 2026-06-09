@@ -3,6 +3,30 @@
 {% block content %}
 <h2>Настройки</h2>
 
+{% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
+
+<article>
+  <header>Подключить Google Search Console (ключ API)</header>
+  <p>Вставьте JSON-ключ сервисного аккаунта Google. После сохранения сервис сам
+  найдёт ваши сайты в GSC, создаст их и загрузит статистику в фоне — вручную
+  ничего настраивать не нужно.</p>
+  <p><mark>Внимание: страница <code>/stat</code> сейчас открыта публично. Не
+  вставляйте приватный ключ, пока доступ к <code>/stat</code> не закрыт паролем.</mark></p>
+  {% if gsc_key_present %}<p>✅ Ключ уже загружен — можно вставить новый, чтобы заменить.</p>{% endif %}
+  <form method="post" action="{{ base_path }}/ui/gsc/connect">
+    <textarea name="gsc_json" rows="8" required
+      placeholder="Сюда вставьте содержимое JSON-файла ключа сервисного аккаунта (поля type, project_id, private_key, client_email и т.д.)"></textarea>
+    <div class="grid">
+      <label>За сколько дней загрузить историю (макс. 480)
+        <input type="number" name="backfill_days" value="480" min="1" max="480">
+      </label>
+      <label>&nbsp;<button type="submit">Подключить и загрузить данные</button></label>
+    </div>
+  </form>
+  <small>Email сервисного аккаунта (<code>client_email</code>) добавьте пользователем
+  ресурса в Search Console, иначе Google вернёт 403.</small>
+</article>
+
 <article>
   <header>Добавить сайт</header>
   <form method="post" action="{{ base_path }}/ui/sites">

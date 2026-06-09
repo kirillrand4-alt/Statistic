@@ -20,6 +20,14 @@ def clear_overrides() -> None:
     _OVERRIDES.clear()
 
 
+def reset_cache(code: str | None = None) -> None:
+    """Drop cached provider(s) so new credentials take effect on next use."""
+    if code is None:
+        _CACHE.clear()
+    else:
+        _CACHE.pop(code, None)
+
+
 def get_provider(code: str) -> SearchDataProvider:
     if code in _OVERRIDES:
         return _OVERRIDES[code]

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
@@ -22,6 +24,8 @@ from app.web import templates
 
 router = APIRouter(tags=["pages"], include_in_schema=False)
 
+BP = get_settings().base_path  # "" or e.g. "/stat" — for redirect targets
+
 
 def _sites(db: Session) -> list[Site]:
     return db.execute(select(Site).order_by(Site.id)).scalars().all()
@@ -35,12 +39,13 @@ def _resolve_site(db: Session, site_id: int | None) -> Site | None:
 
 @router.get("/")
 def dashboard(request: Request, site_id: int | None = None, start: str | None = None,
-              end: str | None = None, db: Session = Depends(get_db)):
+              end: str | None = None, msg: str | None = None, db: Session = Depends(get_db)):
     sites = _sites(db)
     site = _resolve_site(db, site_id)
     dr = parse_date_range(start, end)
     ctx = {
         "request": request,
+        "msg": msg,
         "sites": sites,
         "site": site,
         "projects": db.execute(select(Project).order_by(Project.id)).scalars().all(),
@@ -81,7 +86,7 @@ def ui_create_project(name: str = Form(...), site_id: int = Form(...),
     project = Project(name=name, site_id=site_id)
     db.add(project)
     db.commit()
-    return RedirectResponse(url=f"/projects/{project.id}", status_code=303)
+    return RedirectResponse(url=f"{BP}/projects/{project.id}", status_code=303)
 
 
 @router.post("/ui/projects/{project_id}/urls")
@@ -105,7 +110,7 @@ async def ui_add_urls(project_id: int, urls_text: str | None = Form(None),
             db.add(ProjectUrl(project_id=project.id, url=url, normalized_url=norm))
             existing.add(norm)
     db.commit()
-    return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
+    return RedirectResponse(url=f"{BP}/projects/{project_id}", status_code=303)
 
 
 @router.post("/ui/collect")
@@ -119,17 +124,19 @@ def ui_collect(site_id: int = Form(...), db: Session = Depends(get_db)):
             collect_site(db, site, dr)
         except Exception:  # noqa: BLE001 - surfaced via /api/admin/status
             pass
-    return RedirectResponse(url=f"/?site_id={site_id}", status_code=303)
+    return RedirectResponse(url=f"{BP}/?site_id={site_id}", status_code=303)
 
 
 @router.get("/admin")
-def admin_page(request: Request, db: Session = Depends(get_db)):
+def admin_page(request: Request, msg: str | None = None, db: Session = Depends(get_db)):
     s = get_settings()
     return templates.TemplateResponse(
         request,
         "admin.html",
         {
             "request": request,
+            "msg": msg,
+            "gsc_key_present": Path(s.gsc_service_account_file).exists(),
             "sites": _sites(db),
             "sources": db.execute(select(Source).order_by(Source.id)).scalars().all(),
             "runs": db.execute(
@@ -163,7 +170,7 @@ def ui_create_site(property_uri: str = Form(...), source_code: str = Form("gsc")
     )
     db.add(site)
     db.commit()
-    return RedirectResponse(url=f"/?site_id={site.id}", status_code=303)
+    return RedirectResponse(url=f"{BP}/?site_id={site.id}", status_code=303)
 
 
 @router.post("/ui/sites/{site_id}/toggle")
@@ -172,7 +179,7 @@ def ui_toggle_site(site_id: int, db: Session = Depends(get_db)):
     if site is not None:
         site.enabled = not site.enabled
         db.commit()
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=f"{BP}/admin", status_code=303)
 
 
 @router.post("/ui/backfill")
@@ -183,7 +190,24 @@ def ui_backfill(site_id: int = Form(...), days: int = Form(90), db: Session = De
         run_backfill(db, site_id, days)
     except Exception:  # noqa: BLE001 - surfaced via the runs table on /admin
         pass
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url=f"{BP}/admin", status_code=303)
+
+
+@router.post("/ui/gsc/connect")
+def ui_gsc_connect(gsc_json: str = Form(...), backfill_days: int = Form(480),
+                   db: Session = Depends(get_db)):
+    from app.services.connect import connect_gsc
+
+    try:
+        result = connect_gsc(db, gsc_json, backfill_days=backfill_days, background=True)
+        n = len(result["site_ids"])
+        msg = (
+            f"Ключ подключён. Сайтов найдено: {n}. Данные загружаются в фоне — "
+            "обновите дашборд через 1–2 минуты."
+        )
+        return RedirectResponse(url=f"{BP}/?msg={quote(msg)}", status_code=303)
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(url=f"{BP}/admin?msg={quote('Ошибка: ' + str(exc))}", status_code=303)
 
 
 @router.get("/projects/{project_id}")

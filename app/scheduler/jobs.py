@@ -80,10 +80,15 @@ def collect_site(db: Session, site: Site, dr: DateRange, job_type: str = "daily"
         total = 0
         total += upsert_site_totals(db, site, provider.fetch_site_totals(site, dr))
         total += upsert_page_metrics(db, site, provider.fetch_page_metrics(site, dr))
-        for url in tracked_urls(db, site):
-            total += upsert_query_metrics(
-                db, site, provider.fetch_query_metrics_for_url(site, url, dr)
-            )
+        if "all_query_metrics" in getattr(provider, "capabilities", set()):
+            # One pass for the whole site (page+query) — populates TOP-1 data for
+            # every page, so data is complete even before any project is created.
+            total += upsert_query_metrics(db, site, provider.fetch_all_query_metrics(site, dr))
+        else:
+            for url in tracked_urls(db, site):
+                total += upsert_query_metrics(
+                    db, site, provider.fetch_query_metrics_for_url(site, url, dr)
+                )
         db.commit()
         run = db.get(CollectionRun, run_id)
         run.status = "ok"

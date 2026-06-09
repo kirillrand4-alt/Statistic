@@ -77,6 +77,10 @@ class SearchDataProvider(ABC):
     ) -> Iterable[QueryMetricRow]:
         raise NotImplementedError
 
+    # Optional — list the properties/sites the credentials can access.
+    def list_sites(self) -> list[dict]:
+        raise NotImplementedError
+
     def data_delay_days(self) -> int:
         """How many recent days are typically not yet finalized."""
         return 0
