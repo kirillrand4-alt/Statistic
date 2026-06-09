@@ -36,10 +36,22 @@ def _pos(v) -> str:
         return "—"
 
 
+_SOURCE_LABELS = {
+    "gsc": "Google",
+    "yandex_webmaster": "Яндекс",
+    "yandex_metrika": "Метрика",
+}
+
+
+def _srclabel(code) -> str:
+    return _SOURCE_LABELS.get(code, code)
+
+
 templates.env.filters["numfmt"] = _numfmt
 templates.env.filters["pct"] = _pct
 templates.env.filters["ctr"] = _ctr
 templates.env.filters["pos"] = _pos
+templates.env.filters["srclabel"] = _srclabel
 
 # Overridden in app.main.create_app() with the configured base path ("" or "/stat").
 templates.env.globals.setdefault("base_path", "")

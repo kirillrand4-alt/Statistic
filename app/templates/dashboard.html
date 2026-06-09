@@ -15,7 +15,7 @@
   <label>Сайт
     <select name="site_id" onchange="this.form.submit()">
       {% for s in sites %}
-      <option value="{{ s.id }}" {% if site and s.id == site.id %}selected{% endif %}>{{ s.display_name or s.property_uri }}</option>
+      <option value="{{ s.id }}" {% if site and s.id == site.id %}selected{% endif %}>{{ s.source.code|srclabel }} · {{ s.display_name or s.property_uri }}</option>
       {% endfor %}
     </select>
   </label>
