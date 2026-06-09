@@ -191,6 +191,26 @@ class SiteTotalDaily(Base):
     position: Mapped[float] = mapped_column(Float, default=0.0)
 
 
+class DeviceMetricDaily(Base):
+    """Per-page daily metrics split by device — for fraud (bot) detection."""
+
+    __tablename__ = "device_metric_daily"
+    __table_args__ = (
+        UniqueConstraint("site_id", "page_id", "date", "device", name="uq_dmd"),
+        Index("ix_dmd_site_date", "site_id", "date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("site.id"))
+    page_id: Mapped[int] = mapped_column(ForeignKey("page.id"))
+    date: Mapped[date_type] = mapped_column(Date)
+    device: Mapped[str] = mapped_column(String(16))  # desktop | mobile | tablet
+    clicks: Mapped[int] = mapped_column(Integer, default=0)
+    impressions: Mapped[int] = mapped_column(Integer, default=0)
+    ctr: Mapped[float] = mapped_column(Float, default=0.0)
+    position: Mapped[float] = mapped_column(Float, default=0.0)
+
+
 class AppSetting(Base):
     """Runtime-editable key/value config (optionally encrypted)."""
 

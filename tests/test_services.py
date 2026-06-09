@@ -142,6 +142,37 @@ def test_credentials_roundtrip(db):
     assert get_cred("missing", "def") == "def"
 
 
+def test_antifraud_analyze(db, site):
+    from datetime import date, timedelta
+
+    from app.db.models import DeviceMetricDaily, Page
+    from app.providers.base import DateRange
+    from app.services.antifraud import analyze
+
+    d = date.today() - timedelta(days=1)
+    flagged = Page(site_id=site.id, url="https://x/bots", normalized_url="https://x/bots")
+    noise = Page(site_id=site.id, url="https://x/quiet", normalized_url="https://x/quiet")
+    db.add_all([flagged, noise])
+    db.commit()
+    db.add_all([
+        # desktop 1000 vs mobile 50 -> ratio 20, total 1050 > 100 -> flagged, bot=desktop
+        DeviceMetricDaily(site_id=site.id, page_id=flagged.id, date=d, device="desktop", clicks=10, impressions=1000),
+        DeviceMetricDaily(site_id=site.id, page_id=flagged.id, date=d, device="mobile", clicks=5, impressions=50),
+        # total 72 <= 100 -> noise, not flagged even though ratio is huge
+        DeviceMetricDaily(site_id=site.id, page_id=noise.id, date=d, device="desktop", clicks=1, impressions=70),
+        DeviceMetricDaily(site_id=site.id, page_id=noise.id, date=d, device="mobile", clicks=0, impressions=2),
+    ])
+    db.commit()
+
+    res = analyze(db, site.id, DateRange(start=d, end=d), ratio_threshold=10.0, min_impressions=100)
+    assert res["summary"]["flagged"] == 1
+    row = res["rows"][0]
+    assert row["url"] == "https://x/bots"
+    assert row["bot_device"] == "desktop"
+    assert row["clean_impr"] == 50
+    assert res["summary"]["removed_impressions"] == 1000
+
+
 def test_base_path_normalization():
     from app.config import Settings
 

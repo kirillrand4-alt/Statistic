@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
+    DeviceMetricDaily,
     Page,
     PageMetricDaily,
     Project,
@@ -94,6 +95,26 @@ def load_site_totals_df(db, site_id, dr: DateRange) -> pd.DataFrame:
         SiteTotalDaily.date <= dr.end,
     )
     return pd.DataFrame(db.execute(stmt).all(), columns=TOTAL_COLS)
+
+
+def load_device_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.DataFrame:
+    stmt = (
+        select(
+            Page.url,
+            DeviceMetricDaily.device,
+            DeviceMetricDaily.clicks,
+            DeviceMetricDaily.impressions,
+        )
+        .join(Page, Page.id == DeviceMetricDaily.page_id)
+        .where(
+            DeviceMetricDaily.site_id == site_id,
+            DeviceMetricDaily.date >= dr.start,
+            DeviceMetricDaily.date <= dr.end,
+        )
+    )
+    if page_ids is not None:
+        stmt = stmt.where(DeviceMetricDaily.page_id.in_(list(page_ids)))
+    return pd.DataFrame(db.execute(stmt).all(), columns=["url", "device", "clicks", "impressions"])
 
 
 def agg_metrics(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:

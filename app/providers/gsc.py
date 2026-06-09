@@ -21,6 +21,7 @@ from tenacity import (
 from app.config import Settings, get_settings
 from app.providers.base import (
     DateRange,
+    DeviceMetricRow,
     PageMetricRow,
     QueryMetricRow,
     SearchDataProvider,
@@ -52,7 +53,9 @@ def _is_retryable(exc: BaseException) -> bool:
 
 class GSCProvider(SearchDataProvider):
     code = "gsc"
-    capabilities = {"page_metrics", "query_metrics_per_url", "site_totals", "all_query_metrics"}
+    capabilities = {
+        "page_metrics", "query_metrics_per_url", "site_totals", "all_query_metrics", "device_metrics",
+    }
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
@@ -205,6 +208,20 @@ class GSCProvider(SearchDataProvider):
                 query=query_text,
                 url=page_url,
                 date=date.fromisoformat(day),
+                clicks=int(r.get("clicks", 0)),
+                impressions=int(r.get("impressions", 0)),
+                ctr=float(r.get("ctr", 0.0)),
+                position=float(r.get("position", 0.0)),
+            )
+
+    def fetch_page_metrics_by_device(self, site, dr: DateRange) -> Iterable[DeviceMetricRow]:
+        body = self._base_body(dr, ["page", "device", "date"])
+        for r in self._paged_rows(site.property_uri, body):
+            page_url, device, day = r["keys"][0], r["keys"][1], r["keys"][2]
+            yield DeviceMetricRow(
+                url=page_url,
+                date=date.fromisoformat(day),
+                device=str(device).lower(),
                 clicks=int(r.get("clicks", 0)),
                 impressions=int(r.get("impressions", 0)),
                 ctr=float(r.get("ctr", 0.0)),

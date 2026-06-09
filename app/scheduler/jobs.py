@@ -19,6 +19,7 @@ from app.db.models import CollectionRun, Project, ProjectUrl, Site
 from app.providers import get_provider
 from app.providers.base import DateRange
 from app.services.ingest import (
+    upsert_device_metrics,
     upsert_page_metrics,
     upsert_query_metrics,
     upsert_site_totals,
@@ -89,6 +90,10 @@ def collect_site(db: Session, site: Site, dr: DateRange, job_type: str = "daily"
                 total += upsert_query_metrics(
                     db, site, provider.fetch_query_metrics_for_url(site, url, dr)
                 )
+        if "device_metrics" in getattr(provider, "capabilities", set()):
+            total += upsert_device_metrics(
+                db, site, provider.fetch_page_metrics_by_device(site, dr)
+            )
         db.commit()
         run = db.get(CollectionRun, run_id)
         run.status = "ok"

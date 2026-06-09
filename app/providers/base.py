@@ -48,6 +48,17 @@ class TotalsRow:
     position: float
 
 
+@dataclass
+class DeviceMetricRow:
+    url: str
+    date: date
+    device: str  # desktop | mobile | tablet
+    clicks: int
+    impressions: int
+    ctr: float
+    position: float
+
+
 class SearchDataProvider(ABC):
     """Common interface for all search-data sources."""
 
@@ -79,6 +90,10 @@ class SearchDataProvider(ABC):
 
     # Optional — list the properties/sites the credentials can access.
     def list_sites(self) -> list[dict]:
+        raise NotImplementedError
+
+    # Optional — per-page metrics split by device (for fraud detection).
+    def fetch_page_metrics_by_device(self, site, dr: DateRange) -> Iterable["DeviceMetricRow"]:
         raise NotImplementedError
 
     def data_delay_days(self) -> int:

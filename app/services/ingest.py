@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
+    DeviceMetricDaily,
     Page,
     PageMetricDaily,
     Query,
@@ -18,7 +19,7 @@ from app.db.models import (
     Site,
     SiteTotalDaily,
 )
-from app.providers.base import PageMetricRow, QueryMetricRow, TotalsRow
+from app.providers.base import DeviceMetricRow, PageMetricRow, QueryMetricRow, TotalsRow
 from app.utils import normalize_url, query_hash
 
 _CHUNK = 500
@@ -151,6 +152,29 @@ def upsert_query_metrics(db: Session, site: Site, rows: Iterable[QueryMetricRow]
     return _upsert(
         db, QueryMetricDaily, payload,
         ["site_id", "page_id", "query_id", "date"],
+        ["clicks", "impressions", "ctr", "position"],
+    )
+
+
+def upsert_device_metrics(db: Session, site: Site, rows: Iterable[DeviceMetricRow]) -> int:
+    rows = list(rows)
+    page_map = ensure_pages(db, site, (r.url for r in rows))
+    payload = [
+        {
+            "site_id": site.id,
+            "page_id": page_map[normalize_url(r.url)],
+            "date": r.date,
+            "device": r.device,
+            "clicks": r.clicks,
+            "impressions": r.impressions,
+            "ctr": r.ctr,
+            "position": r.position,
+        }
+        for r in rows
+    ]
+    return _upsert(
+        db, DeviceMetricDaily, payload,
+        ["site_id", "page_id", "date", "device"],
         ["clicks", "impressions", "ctr", "position"],
     )
 

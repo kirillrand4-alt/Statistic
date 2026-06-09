@@ -357,3 +357,23 @@ def compare_page(request: Request, site_id: int | None = None, metric: str = "cl
             "result": result,
         },
     )
+
+
+@router.get("/antifraud")
+def antifraud_page(request: Request, site_id: int | None = None, start: str | None = None,
+                   end: str | None = None, ratio: float = 10.0, min_impr: int = 100,
+                   db: Session = Depends(get_db)):
+    from app.services.antifraud import analyze
+
+    sites = _sites(db)
+    site = _resolve_site(db, site_id)
+    dr = parse_date_range(start, end)
+    result = analyze(db, site.id, dr, ratio_threshold=ratio, min_impressions=min_impr) if site else None
+    return templates.TemplateResponse(
+        request,
+        "antifraud.html",
+        {
+            "request": request, "sites": sites, "site": site, "range": dr,
+            "ratio": ratio, "min_impr": min_impr, "result": result,
+        },
+    )

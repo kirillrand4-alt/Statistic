@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Антинакрутка · SEO Статистика{% endblock %}
+{% block content %}
+<h2>Антинакрутка (десктоп vs моб)</h2>
+<p><small>Страницы, где показы по устройствам различаются в ≥ N раз, помечаются как
+накрученные; «раздутое» устройство вычитается из статистики. Страницы с малым числом
+показов считаются шумом и не помечаются.</small></p>
+
+{% if not sites %}<article><p>Сначала подключите источник.</p></article>{% else %}
+<form method="get" action="{{ base_path }}/antifraud" class="grid">
+  <label>Сайт
+    <select name="site_id">{% for s in sites %}<option value="{{ s.id }}" {% if site and s.id==site.id %}selected{% endif %}>{{ s.source.code|srclabel }} · {{ s.display_name or s.property_uri }}</option>{% endfor %}</select>
+  </label>
+  <label>С <input type="date" name="start" value="{{ range.start }}"></label>
+  <label>По <input type="date" name="end" value="{{ range.end }}"></label>
+  <label>Порог (раз) <input type="number" name="ratio" value="{{ ratio }}" min="2" step="1"></label>
+  <label>Шум (≤ показов) <input type="number" name="min_impr" value="{{ min_impr }}" min="0"></label>
+  <label>&nbsp;<button type="submit">Проверить</button></label>
+</form>
+
+{% if result %}
+  {% set s = result.summary %}
+  <div class="grid">
+    <article><hgroup><h3>{{ s.flagged|numfmt }}</h3><p>Подозрительных страниц</p></hgroup></article>
+    <article><hgroup><h3>{{ s.removed_impressions|numfmt }}</h3><p>Показов отнято (боты)</p></hgroup></article>
+    <article><hgroup><h3>{{ s.raw_impressions|numfmt }}</h3><p>Показы (сырые)</p></hgroup></article>
+    <article><hgroup><h3>{{ s.clean_impressions|numfmt }}</h3><p>Показы (чистые)</p></hgroup></article>
+  </div>
+
+  <article>
+    <header>Подозрительные страницы (порог {{ s.ratio_threshold }}×, шум ≤ {{ s.min_impressions }})</header>
+    <figure>
+    <table>
+      <thead><tr><th>URL</th><th>Десктоп: показы / CTR</th><th>Моб: показы / CTR</th>
+                 <th>Разница</th><th>Боты</th><th>Отнято показов</th><th>Чистые показы</th></tr></thead>
+      <tbody>
+      {% for r in result.rows %}
+        <tr>
+          <td><small>{{ r.url }}</small></td>
+          <td>{{ r.desktop_impr|numfmt }} / {{ r.desktop_ctr|ctr }}</td>
+          <td>{{ r.mobile_impr|numfmt }} / {{ r.mobile_ctr|ctr }}</td>
+          <td>{% if r.ratio is none %}∞{% else %}{{ r.ratio }}×{% endif %}</td>
+          <td><del>{{ r.bot_device }}</del></td>
+          <td>{{ r.removed_impr|numfmt }}</td>
+          <td>{{ r.clean_impr|numfmt }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7"><small>Подозрительных страниц не найдено за период (или нет данных по устройствам — соберите статистику).</small></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </figure>
+  </article>
+{% endif %}
+{% endif %}
+{% endblock %}

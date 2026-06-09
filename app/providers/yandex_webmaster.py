@@ -19,6 +19,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 from app.config import Settings, get_settings
 from app.providers.base import (
     DateRange,
+    DeviceMetricRow,
     PageMetricRow,
     QueryMetricRow,
     SearchDataProvider,
@@ -39,7 +40,7 @@ def _is_retryable(exc: BaseException) -> bool:
 
 class YandexWebmasterProvider(SearchDataProvider):
     code = "yandex_webmaster"
-    capabilities = {"site_totals", "page_metrics", "all_query_metrics"}
+    capabilities = {"site_totals", "page_metrics", "all_query_metrics", "device_metrics"}
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
@@ -153,13 +154,13 @@ class YandexWebmasterProvider(SearchDataProvider):
                 out.setdefault(d, {})[st.get("field")] = st.get("value")
         return out
 
-    def _query_analytics(self, host_id: str, text_indicator: str, dr: DateRange):
+    def _query_analytics(self, host_id: str, text_indicator: str, dr: DateRange, device: str = "ALL"):
         offset, limit = 0, 500
         while True:
             body = {
                 "offset": offset,
                 "limit": limit,
-                "device_type_indicator": "ALL",
+                "device_type_indicator": device,
                 "text_indicator": text_indicator,
                 "date_from": dr.start.isoformat(),
                 "date_to": dr.end.isoformat(),
@@ -198,6 +199,21 @@ class YandexWebmasterProvider(SearchDataProvider):
                     query=query, url=url, date=date.fromisoformat(d), clicks=clk, impressions=impr,
                     ctr=(clk / impr) if impr else 0.0, position=float(f.get("POSITION") or 0.0),
                 )
+
+    def fetch_page_metrics_by_device(self, site, dr: DateRange) -> Iterable[DeviceMetricRow]:
+        host_id = site.external_host_id or site.property_uri
+        for device in ("DESKTOP", "MOBILE"):
+            for e in self._query_analytics(host_id, "URL", dr, device=device):
+                url = self._full_url(site, (e.get("text_indicator") or {}).get("value"))
+                if not url:
+                    continue
+                for d, f in self._by_date(e).items():
+                    impr, clk = int(f.get("IMPRESSIONS") or 0), int(f.get("CLICKS") or 0)
+                    yield DeviceMetricRow(
+                        url=url, date=date.fromisoformat(d), device=device.lower(),
+                        clicks=clk, impressions=impr,
+                        ctr=(clk / impr) if impr else 0.0, position=float(f.get("POSITION") or 0.0),
+                    )
 
     def fetch_query_metrics_for_url(self, site, url: str, dr: DateRange) -> Iterable[QueryMetricRow]:
         # collection uses fetch_all_query_metrics; this stays a no-op for now.
