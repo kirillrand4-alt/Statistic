@@ -24,6 +24,7 @@ from app.providers.base import (
     SearchDataProvider,
     TotalsRow,
 )
+from app.utils import normalize_url
 
 logger = logging.getLogger(__name__)
 API = "https://api.webmaster.yandex.net/v4"
@@ -38,7 +39,7 @@ def _is_retryable(exc: BaseException) -> bool:
 
 class YandexWebmasterProvider(SearchDataProvider):
     code = "yandex_webmaster"
-    capabilities = {"site_totals"}
+    capabilities = {"site_totals", "page_metrics", "all_query_metrics"}
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
@@ -64,6 +65,23 @@ class YandexWebmasterProvider(SearchDataProvider):
             headers={"Authorization": f"OAuth {self._token()}"},
             params=params,
             timeout=30,
+        )
+        if resp.status_code != 200:
+            raise ValueError(f"Yandex Webmaster {resp.status_code}: {resp.text[:300]}")
+        return resp.json()
+
+    @retry(
+        retry=retry_if_exception(_is_retryable),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        reraise=True,
+    )
+    def _post(self, path: str, body: dict) -> dict:
+        resp = httpx.post(
+            f"{API}{path}",
+            headers={"Authorization": f"OAuth {self._token()}"},
+            json=body,
+            timeout=60,
         )
         if resp.status_code != 200:
             raise ValueError(f"Yandex Webmaster {resp.status_code}: {resp.text[:300]}")
@@ -117,9 +135,70 @@ class YandexWebmasterProvider(SearchDataProvider):
                 position=float(pos.get(d) or 0.0),
             )
 
-    # --- not available in v1 (empty so collection still succeeds) ---
+    # ----- query analytics (per-URL / per-query daily stats) -----
+    def _full_url(self, site, path: str | None) -> str | None:
+        if not path:
+            return None
+        if path.startswith("http"):
+            return path
+        base = (site.property_uri or "").rstrip("/")
+        return base + path if path.startswith("/") else f"{base}/{path}"
+
+    @staticmethod
+    def _by_date(entry: dict) -> dict[str, dict]:
+        out: dict[str, dict] = {}
+        for st in entry.get("statistics", []) or []:
+            d = (st.get("date") or "")[:10]
+            if d:
+                out.setdefault(d, {})[st.get("field")] = st.get("value")
+        return out
+
+    def _query_analytics(self, host_id: str, text_indicator: str, dr: DateRange):
+        offset, limit = 0, 500
+        while True:
+            body = {
+                "offset": offset,
+                "limit": limit,
+                "device_type_indicator": "ALL",
+                "text_indicator": text_indicator,
+                "date_from": dr.start.isoformat(),
+                "date_to": dr.end.isoformat(),
+            }
+            data = self._post(
+                f"/user/{self.user_id()}/hosts/{host_id}/query-analytics/list", body
+            )
+            entries = data.get("text_indicator_to_statistics", []) or []
+            yield from entries
+            if len(entries) < limit:
+                break
+            offset += limit
+
     def fetch_page_metrics(self, site, dr: DateRange, urls=None) -> Iterable[PageMetricRow]:
-        return []
+        host_id = site.external_host_id or site.property_uri
+        wanted = {normalize_url(u) for u in urls} if urls else None
+        for e in self._query_analytics(host_id, "URL", dr):
+            url = self._full_url(site, (e.get("text_indicator") or {}).get("value"))
+            if not url or (wanted is not None and normalize_url(url) not in wanted):
+                continue
+            for d, f in self._by_date(e).items():
+                impr, clk = int(f.get("IMPRESSIONS") or 0), int(f.get("CLICKS") or 0)
+                yield PageMetricRow(
+                    url=url, date=date.fromisoformat(d), clicks=clk, impressions=impr,
+                    ctr=(clk / impr) if impr else 0.0, position=float(f.get("POSITION") or 0.0),
+                )
+
+    def fetch_all_query_metrics(self, site, dr: DateRange) -> Iterable[QueryMetricRow]:
+        host_id = site.external_host_id or site.property_uri
+        for e in self._query_analytics(host_id, "QUERY", dr):
+            query = (e.get("text_indicator") or {}).get("value") or ""
+            url = self._full_url(site, (e.get("popular_complementary_indicator") or {}).get("value"))
+            for d, f in self._by_date(e).items():
+                impr, clk = int(f.get("IMPRESSIONS") or 0), int(f.get("CLICKS") or 0)
+                yield QueryMetricRow(
+                    query=query, url=url, date=date.fromisoformat(d), clicks=clk, impressions=impr,
+                    ctr=(clk / impr) if impr else 0.0, position=float(f.get("POSITION") or 0.0),
+                )
 
     def fetch_query_metrics_for_url(self, site, url: str, dr: DateRange) -> Iterable[QueryMetricRow]:
+        # collection uses fetch_all_query_metrics; this stays a no-op for now.
         return []

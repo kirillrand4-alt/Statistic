@@ -51,6 +51,58 @@ def test_connect_gsc_oauth_autopull(db):
     assert db.execute(select(func.count()).select_from(PageMetricDaily)).scalar_one() > 0
 
 
+def test_yandex_query_analytics_parsing():
+    from datetime import date as _date
+
+    from app.providers.base import DateRange
+    from app.providers.yandex_webmaster import YandexWebmasterProvider
+
+    class _Site:
+        property_uri = "https://prokompressor.ru/"
+        external_host_id = "https:prokompressor.ru:443"
+
+    p = YandexWebmasterProvider()
+    p._uid = 1
+    dr = DateRange(start=_date(2026, 5, 25), end=_date(2026, 5, 25))
+
+    p._post = lambda path, body: {
+        "count": 1,
+        "text_indicator_to_statistics": [
+            {
+                "text_indicator": {"type": "QUERY", "value": "compressor buy"},
+                "popular_complementary_indicator": {"type": "URL", "value": "/catalog/"},
+                "statistics": [
+                    {"date": "2026-05-25", "field": "IMPRESSIONS", "value": 100.0},
+                    {"date": "2026-05-25", "field": "CLICKS", "value": 10.0},
+                    {"date": "2026-05-25", "field": "POSITION", "value": 3.5},
+                ],
+            }
+        ],
+    }
+    rows = list(p.fetch_all_query_metrics(_Site(), dr))
+    assert len(rows) == 1
+    assert rows[0].query == "compressor buy"
+    assert rows[0].url == "https://prokompressor.ru/catalog/"
+    assert rows[0].clicks == 10 and rows[0].impressions == 100
+    assert abs(rows[0].position - 3.5) < 1e-9
+
+    p._post = lambda path, body: {
+        "text_indicator_to_statistics": [
+            {
+                "text_indicator": {"type": "URL", "value": "/catalog/"},
+                "statistics": [
+                    {"date": "2026-05-25", "field": "IMPRESSIONS", "value": 200.0},
+                    {"date": "2026-05-25", "field": "CLICKS", "value": 20.0},
+                ],
+            }
+        ],
+    }
+    prows = list(p.fetch_page_metrics(_Site(), dr))
+    assert len(prows) == 1
+    assert prows[0].url == "https://prokompressor.ru/catalog/"
+    assert prows[0].clicks == 20 and prows[0].impressions == 200
+
+
 def test_connect_yandex_autopull(db):
     from sqlalchemy import func, select
 
