@@ -120,3 +120,23 @@ def test_gsc_connect_route_oauth(client):
     # the site is registered synchronously (data pull runs in a background thread)
     assert len(client.get("/api/sites").json()) >= 1
     assert client.get("/admin").status_code == 200
+
+
+def test_gsc_oauth_start_redirects_to_google(client):
+    r = client.post(
+        "/ui/gsc/oauth/start",
+        data={"client_id": "cid", "client_secret": "sec", "backfill_days": "30"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    loc = r.headers["location"]
+    assert "accounts.google.com" in loc
+    assert "client_id=cid" in loc
+    assert "webmasters.readonly" in loc
+    assert "callback" in loc
+
+
+def test_gsc_oauth_callback_bad_state(client):
+    r = client.get("/oauth/callback?code=abc&state=wrong", follow_redirects=False)
+    assert r.status_code == 303
+    assert "/admin" in r.headers["location"]

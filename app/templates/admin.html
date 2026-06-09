@@ -12,7 +12,19 @@
   паролем (<code>deploy/protect_stat.sh</code>).</mark></p>
   <p>После сохранения сервис сам найдёт ваши сайты в GSC и загрузит статистику в фоне.</p>
 
-  <h4>Вариант 1 — OAuth (client_id + client_secret + refresh_token)</h4>
+  <h4>Вариант 1 (проще всего) — войти через Google</h4>
+  <p>В вашем OAuth-клиенте Google (тип «Web application») добавьте этот Authorized redirect URI:</p>
+  <pre><code>{{ oauth_redirect_uri }}</code></pre>
+  <form method="post" action="{{ base_path }}/ui/gsc/oauth/start">
+    <label>client_id <input type="text" name="client_id" autocomplete="off" required></label>
+    <label>client_secret <input type="password" name="client_secret" autocomplete="off" required></label>
+    <div class="grid">
+      <label>История, дней (макс. 480) <input type="number" name="backfill_days" value="480" min="1" max="480"></label>
+      <label>&nbsp;<button type="submit">Войти через Google</button></label>
+    </div>
+  </form>
+
+  <h4>Вариант 2 — вставить refresh_token вручную</h4>
   <form method="post" action="{{ base_path }}/ui/gsc/connect">
     <input type="hidden" name="mode" value="oauth">
     <label>client_id <input type="text" name="client_id" autocomplete="off" required></label>
@@ -24,7 +36,7 @@
     </div>
   </form>
 
-  <h4>Вариант 2 — сервисный аккаунт (JSON)</h4>
+  <h4>Вариант 3 — сервисный аккаунт (JSON)</h4>
   <form method="post" action="{{ base_path }}/ui/gsc/connect">
     <input type="hidden" name="mode" value="service_account">
     <textarea name="gsc_json" rows="6"

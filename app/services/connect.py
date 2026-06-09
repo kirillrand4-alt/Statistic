@@ -12,7 +12,9 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from urllib.parse import urlencode
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -24,6 +26,50 @@ from app.providers import get_provider, reset_cache
 from app.scheduler.jobs import run_backfill
 
 logger = logging.getLogger(__name__)
+
+GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+GSC_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly"
+
+
+def google_auth_url(client_id: str, redirect_uri: str, state: str) -> str:
+    """Build the Google consent URL (offline + forced consent => refresh token)."""
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": GSC_SCOPE,
+        "access_type": "offline",
+        "prompt": "consent",
+        "include_granted_scopes": "true",
+        "state": state,
+    }
+    return f"{GOOGLE_AUTH_ENDPOINT}?{urlencode(params)}"
+
+
+def exchange_code_for_refresh_token(
+    client_id: str, client_secret: str, code: str, redirect_uri: str
+) -> str:
+    resp = httpx.post(
+        GOOGLE_TOKEN_ENDPOINT,
+        data={
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        },
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise ValueError(f"Google token endpoint {resp.status_code}: {resp.text[:300]}")
+    refresh_token = resp.json().get("refresh_token")
+    if not refresh_token:
+        raise ValueError(
+            "Google не вернул refresh_token. Опубликуйте приложение (Production) и "
+            "повторите вход (доступ выдаётся заново)."
+        )
+    return refresh_token
 
 
 def discover_and_register_sites(db: Session) -> list[Site]:

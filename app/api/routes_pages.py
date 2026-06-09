@@ -1,6 +1,7 @@
 """Server-rendered HTML pages (Jinja2 + Chart.js)."""
 from __future__ import annotations
 
+import secrets
 from datetime import date, timedelta
 from urllib.parse import quote
 
@@ -24,6 +25,16 @@ from app.web import templates
 router = APIRouter(tags=["pages"], include_in_schema=False)
 
 BP = get_settings().base_path  # "" or e.g. "/stat" — for redirect targets
+
+
+def _public_redirect_uri(request: Request) -> str:
+    """The exact OAuth callback URL to register in Google (must match)."""
+    base = get_settings().public_base_url.strip().rstrip("/")
+    if base:
+        return f"{base}{BP}/oauth/callback"
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}{BP}/oauth/callback"
 
 
 def _sites(db: Session) -> list[Site]:
@@ -138,6 +149,7 @@ def admin_page(request: Request, msg: str | None = None, db: Session = Depends(g
             "request": request,
             "msg": msg,
             "gsc_mode": get_cred("gsc_auth_mode"),
+            "oauth_redirect_uri": _public_redirect_uri(request),
             "sites": _sites(db),
             "sources": db.execute(select(Source).order_by(Source.id)).scalars().all(),
             "runs": db.execute(
@@ -210,6 +222,51 @@ def ui_gsc_connect(mode: str = Form("oauth"), gsc_json: str = Form(""),
         msg = (
             f"Подключено. Сайтов найдено: {n}. Данные загружаются в фоне — "
             "обновите дашборд через 1–2 минуты."
+        )
+        return RedirectResponse(url=f"{BP}/?msg={quote(msg)}", status_code=303)
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(url=f"{BP}/admin?msg={quote('Ошибка: ' + str(exc))}", status_code=303)
+
+
+@router.post("/ui/gsc/oauth/start")
+def ui_gsc_oauth_start(request: Request, client_id: str = Form(...),
+                       client_secret: str = Form(...), backfill_days: int = Form(480)):
+    from app.credentials import set_cred
+    from app.services.connect import google_auth_url
+
+    client_id = client_id.strip()
+    set_cred("gsc_oauth_client_id", client_id)
+    set_cred("gsc_oauth_client_secret", client_secret.strip())
+    set_cred("gsc_oauth_backfill_days", str(backfill_days))
+    state = secrets.token_urlsafe(16)
+    set_cred("gsc_oauth_state", state)
+    url = google_auth_url(client_id, _public_redirect_uri(request), state)
+    return RedirectResponse(url=url, status_code=303)
+
+
+@router.get("/oauth/callback", name="gsc_oauth_callback")
+def gsc_oauth_callback(request: Request, code: str = "", state: str = "", error: str = "",
+                       db: Session = Depends(get_db)):
+    from app.credentials import get_cred
+    from app.services.connect import connect_gsc_oauth, exchange_code_for_refresh_token
+
+    if error:
+        return RedirectResponse(url=f"{BP}/admin?msg={quote('Google: ' + error)}", status_code=303)
+    if not code or not state or state != get_cred("gsc_oauth_state"):
+        return RedirectResponse(
+            url=f"{BP}/admin?msg={quote('Авторизация не подтверждена (state).')}", status_code=303
+        )
+    try:
+        client_id = get_cred("gsc_oauth_client_id")
+        client_secret = get_cred("gsc_oauth_client_secret")
+        refresh_token = exchange_code_for_refresh_token(
+            client_id, client_secret, code, _public_redirect_uri(request)
+        )
+        days = int(get_cred("gsc_oauth_backfill_days", "480") or 480)
+        result = connect_gsc_oauth(db, client_id, client_secret, refresh_token, days, True)
+        msg = (
+            f"Google подключён. Сайтов: {len(result['site_ids'])}. "
+            "Данные загружаются в фоне — обновите дашборд через 1–2 минуты."
         )
         return RedirectResponse(url=f"{BP}/?msg={quote(msg)}", status_code=303)
     except Exception as exc:  # noqa: BLE001

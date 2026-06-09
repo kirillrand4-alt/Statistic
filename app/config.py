@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     timezone: str = "Europe/Moscow"
     # Serve under a subpath behind a reverse proxy, e.g. "/stat". Empty = root.
     root_path: str = ""
+    # Public base URL (e.g. https://parsercompressor.online) for OAuth redirects.
+    # If empty, it is derived from the incoming request (Host + X-Forwarded-Proto).
+    public_base_url: str = ""
 
     # Google Search Console
     gsc_auth_mode: str = "service_account"  # service_account | oauth
