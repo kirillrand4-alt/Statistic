@@ -123,13 +123,19 @@ def run_daily_collect(db: Session) -> dict[int, int]:
     return results
 
 
-def run_backfill(db: Session, site_id: int, days: int = 480) -> int:
+def run_backfill(db: Session, site_id: int, days: int = 480, chunk_days: int = 30) -> int:
     site = db.get(Site, site_id)
     if site is None:
         raise ValueError(f"No site {site_id}")
     end = date.today() - timedelta(days=1)
     start = end - timedelta(days=days)
-    return collect_site(db, site, DateRange(start=start, end=end), job_type="backfill")
+    total = 0
+    cur = start
+    while cur <= end:  # commit each chunk separately -> progressive, small transactions
+        chunk_end = min(cur + timedelta(days=chunk_days - 1), end)
+        total += collect_site(db, site, DateRange(start=cur, end=chunk_end), job_type="backfill")
+        cur = chunk_end + timedelta(days=1)
+    return total
 
 
 # ----- APScheduler wiring -----

@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from datetime import date, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,8 +21,7 @@ from app.credentials import set_cred
 from app.db.base import SessionLocal
 from app.db.models import Site
 from app.providers import get_provider, reset_cache
-from app.providers.base import DateRange
-from app.scheduler.jobs import collect_site
+from app.scheduler.jobs import run_backfill
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +51,9 @@ def discover_and_register_sites(db: Session) -> list[Site]:
 def _backfill_all(site_ids: list[int], days: int) -> None:
     db = SessionLocal()
     try:
-        end = date.today() - timedelta(days=1)
-        dr = DateRange(start=end - timedelta(days=days), end=end)
         for sid in site_ids:
-            site = db.get(Site, sid)
-            if site is None:
-                continue
             try:
-                collect_site(db, site, dr, job_type="backfill")
+                run_backfill(db, sid, days)  # chunked: commits every ~30 days
             except Exception:  # noqa: BLE001 - logged; visible in the runs table
                 logger.exception("Auto-backfill failed for site %s", sid)
     finally:
