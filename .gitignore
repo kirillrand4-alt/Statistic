@@ -3,3 +3,4 @@ __pycache__/
 # генерируемые файлы-обзоры и списки (пересобираются из build_review.py)
 *_review.xlsx
 *_links.txt
+*_for_specs.txt
