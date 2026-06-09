@@ -67,7 +67,9 @@ def load_all():
             d=domain(u).replace("www.",""); d=DOM_FIX.get(d,d)
             if d not in COMPETITORS: continue
             if not find_brand(u): continue
-            info[u]=[u.rstrip("/").split("/")[-1], []]   # имя = слаг (цены нет)
+            seg=u.rstrip("/").split("/")[-1]
+            if not any(ch.isdigit() for ch in seg): continue   # нет цифры в слаге = категория/серия, не товар
+            info[u]=[seg, []]   # имя = слаг (цены нет)
     except FileNotFoundError:
         pass
     # присланные проверенные цены + статусы (series_status: снято/под заказ) — несколько прогонов
