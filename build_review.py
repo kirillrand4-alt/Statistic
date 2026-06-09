@@ -22,13 +22,15 @@ def _corrupt(name): return bool(_CORRUPT.search(str(name)))
 SRC = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/03d65e4a-_______________________.xlsx"
 PROKO_CSV = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/e7171060-products_export_20260608.csv"
 SITEMAP = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/63b1d773-all_sitemap_urls_1.xlsx"
+CHECKED = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/c7c60579-prices_checked_20260608.csv"
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
                "pnevmo-sklad.ru","v-p-k.ru","rutector.ru"]
 DOM_FIX = {"rostov.pnevmo-sklad.ru":"pnevmo-sklad.ru",
            "novosibirsk.pnevmo-sklad.ru":"pnevmo-sklad.ru"}
+STATUS = {}   # url -> 'снято' / 'под заказ' (статус товара у конкурента)
 
 def load_all():
-    info={}
+    info={}; STATUS.clear()
     # прайс-файл: берём только КОНКУРЕНТОВ (наши товары — из свежего CSV ниже)
     ws = openpyxl.load_workbook(SRC, read_only=True, data_only=True)["Лист1"]
     for row in ws.iter_rows(min_row=1, values_only=True):
@@ -39,6 +41,7 @@ def load_all():
         except: p=None
         if u not in info: info[u]=[name,[]]
         if p is not None: info[u][1].append(p)
+        if len(row)>8 and row[8] and "снят" in str(row[8]).lower(): STATUS[u]="снято"
     # свежий экспорт prokompressor (Название;Ссылка;Цена;Валюта) — наши товары и актуальные цены
     try:
         with open(PROKO_CSV, encoding="utf-8-sig", errors="replace") as fh:
@@ -62,6 +65,26 @@ def load_all():
             if d not in COMPETITORS: continue
             if not find_brand(u): continue
             info[u]=[u.rstrip("/").split("/")[-1], []]   # имя = слаг (цены нет)
+    except FileNotFoundError:
+        pass
+    # присланные проверенные цены + статусы (series_status: снято/под заказ)
+    try:
+        with open(CHECKED, encoding="utf-8-sig", errors="replace") as fh:
+            for row in csv.DictReader(fh):
+                u=(row.get("product_url") or "").strip()
+                if not u: continue
+                p=None
+                for col in ("price","old_price"):           # цена обычно в old_price
+                    try:
+                        v=float(str(row.get(col,"")).replace(",",".").replace(" ",""))
+                        if v>0: p=v; break
+                    except: pass
+                st=(row.get("series_status") or "").strip().lower()
+                if "снят" in st or st=="нет в наличии": STATUS[u]="снято"
+                elif st=="под заказ": STATUS.setdefault(u,"под заказ")
+                if p:
+                    if u in info: info[u][1].append(p)
+                    else: info[u]=[(row.get("name") or u).strip(), [p]]
     except FileNotFoundError:
         pass
     return info
@@ -95,6 +118,7 @@ def add_sheet(wb, info, data, brand, sheet_name):
     bd=data.get(brand, {})
     wsx=wb.create_sheet(sheet_name[:31]); wsx.append(HDR)
     blue=Font(color="0563C1", underline="single")
+    strike=Font(color="C00000", underline="single", strike=True)  # снято с производства
     bold=Font(bold=True, color="FFFFFF")
     hfill=PatternFill("solid", fgColor="305496")
     warn=PatternFill("solid", fgColor="FFE699")     # жёлтый: >1 разный URL у конкурента
@@ -141,13 +165,20 @@ def add_sheet(wb, info, data, brand, sheet_name):
                 priced={u:p for u,p in urls.items() if p is not None}
                 if priced:
                     cu=_pick_min(priced); pr=priced[cu]
-                    cell.value=pr; cell.number_format="# ##0"; comp_prices.append(pr)
-                    cell.hyperlink=cu; cell.font=blue
-                    dec_bad=(has_pk and not acorr and not _corrupt(info[cu][0])
-                             and _clean_dec(info[cu][0])!=adec)   # риск занижения — только наши строки
-                    if len(urls)>1 or dec_bad: cell.fill=warn   # неоднозначность / разная дробь
-                else:                          # товар у конкурента есть, цены нет → на прайс-чек
-                    cell.value="проверить"; cell.hyperlink=next(iter(urls)); cell.font=blue; cell.fill=checkfill
+                    cell.value=pr; cell.number_format="# ##0"; cell.hyperlink=cu
+                    if STATUS.get(cu)=="снято":
+                        cell.font=strike                      # снято — перечёркнуто, в min не считаем
+                    else:
+                        cell.font=blue; comp_prices.append(pr)
+                        dec_bad=(has_pk and not acorr and not _corrupt(info[cu][0])
+                                 and _clean_dec(info[cu][0])!=adec)   # риск занижения — только наши строки
+                        if len(urls)>1 or dec_bad: cell.fill=warn   # неоднозначность / разная дробь
+                else:                          # товар у конкурента есть, цены нет
+                    cu=next(iter(urls))
+                    if STATUS.get(cu)=="снято":
+                        cell.value="снято"; cell.hyperlink=cu; cell.font=strike
+                    else:
+                        cell.value="проверить"; cell.hyperlink=cu; cell.font=blue; cell.fill=checkfill
             else:
                 cell.fill=nomatch
         if comp_prices:
