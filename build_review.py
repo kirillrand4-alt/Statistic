@@ -22,7 +22,8 @@ def _corrupt(name): return bool(_CORRUPT.search(str(name)))
 SRC = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/03d65e4a-_______________________.xlsx"
 PROKO_CSV = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/e7171060-products_export_20260608.csv"
 SITEMAP = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/63b1d773-all_sitemap_urls_1.xlsx"
-CHECKED = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/c7c60579-prices_checked_20260608.csv"
+CHECKED = ["/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/c7c60579-prices_checked_20260608.csv",
+           "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/7fee0300-all_prices_20260609_102140.csv"]
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
                "pnevmo-sklad.ru","v-p-k.ru","rutector.ru"]
 DOM_FIX = {"rostov.pnevmo-sklad.ru":"pnevmo-sklad.ru",
@@ -67,26 +68,27 @@ def load_all():
             info[u]=[u.rstrip("/").split("/")[-1], []]   # имя = слаг (цены нет)
     except FileNotFoundError:
         pass
-    # присланные проверенные цены + статусы (series_status: снято/под заказ)
-    try:
-        with open(CHECKED, encoding="utf-8-sig", errors="replace") as fh:
-            for row in csv.DictReader(fh):
-                u=(row.get("product_url") or "").strip()
-                if not u: continue
-                p=None
-                for col in ("price","old_price"):           # цена обычно в old_price
-                    try:
-                        v=float(str(row.get(col,"")).replace(",",".").replace(" ",""))
-                        if v>0: p=v; break
-                    except: pass
-                st=(row.get("series_status") or "").strip().lower()
-                if "снят" in st or st=="нет в наличии": STATUS[u]="снято"
-                elif st=="под заказ": STATUS.setdefault(u,"под заказ")
-                if p:
-                    if u in info: info[u][1].append(p)
-                    else: info[u]=[(row.get("name") or u).strip(), [p]]
-    except FileNotFoundError:
-        pass
+    # присланные проверенные цены + статусы (series_status: снято/под заказ) — несколько прогонов
+    for path in CHECKED:
+        try:
+            with open(path, encoding="utf-8-sig", errors="replace") as fh:
+                for row in csv.DictReader(fh):
+                    u=(row.get("product_url") or "").strip()
+                    if not u: continue
+                    p=None
+                    for col in ("price","old_price"):        # цена в price или old_price
+                        try:
+                            v=float(str(row.get(col,"")).replace(",",".").replace(" ",""))
+                            if v>0: p=v; break
+                        except: pass
+                    st=(row.get("series_status") or "").strip().lower()
+                    if "снят" in st or st=="нет в наличии": STATUS[u]="снято"
+                    elif st=="под заказ": STATUS.setdefault(u,"под заказ")
+                    if p:
+                        if u in info: info[u][1].append(p)
+                        else: info[u]=[(row.get("name") or u).strip(), [p]]
+        except FileNotFoundError:
+            pass
     return info
 
 def cluster_all(info):
