@@ -1,0 +1,28 @@
+# Secrets & local data
+.env
+secrets/
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Exports
+exports/
+*.xlsx
+*.csv
+!tests/fixtures/**/*.csv

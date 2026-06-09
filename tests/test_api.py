@@ -1,0 +1,75 @@
+"""End-to-end API smoke test through the FastAPI app (MockProvider)."""
+from __future__ import annotations
+
+from datetime import date, timedelta
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.providers import register_override
+from app.providers.mock import DEFAULT_PAGES, MockProvider
+
+
+@pytest.fixture()
+def client():
+    register_override("gsc", MockProvider())
+    from app.main import app
+
+    with TestClient(app) as c:
+        yield c
+
+
+def test_full_flow(client):
+    # 1. create a site
+    r = client.post(
+        "/api/admin/sites",
+        json={"source_code": "gsc", "property_uri": "sc-domain:example.com", "display_name": "demo"},
+    )
+    assert r.status_code == 200, r.text
+    site_id = r.json()["id"]
+
+    # 2. create a project + upload URLs
+    r = client.post("/api/projects", json={"name": "P", "site_id": site_id})
+    project_id = r.json()["id"]
+    r = client.post(
+        f"/api/projects/{project_id}/urls", data={"urls_text": "\n".join(DEFAULT_PAGES)}
+    )
+    assert r.json()["added"] == len(DEFAULT_PAGES)
+
+    # 3. collect (mock) data
+    r = client.post(f"/api/admin/collect/run?site_id={site_id}")
+    assert r.status_code == 200, r.text
+    assert r.json()["rows"] > 0
+
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=20)
+    qp = f"start={start}&end={end}"
+
+    # 4. TOP-1 keywords
+    r = client.get(f"/api/projects/{project_id}/top-keywords?{qp}")
+    items = r.json()["items"]
+    assert len(items) == len(DEFAULT_PAGES)
+    assert any(i["top_query"] for i in items)
+
+    # 5. site totals
+    r = client.get(f"/api/totals?site_id={site_id}&scope=site&{qp}")
+    assert r.json()["totals"]["clicks"] > 0
+
+    # 6. compare (page grouping)
+    b_end = start - timedelta(days=1)
+    b_start = b_end - timedelta(days=20)
+    r = client.get(
+        f"/api/compare?site_id={site_id}&grouping=page&metric=clicks"
+        f"&a_start={start}&a_end={end}&b_start={b_start}&b_end={b_end}"
+    )
+    assert "rows" in r.json()
+
+    # 7. export CSV
+    r = client.get(f"/api/export?site_id={site_id}&format=csv&level=page&{qp}")
+    assert r.status_code == 200
+    assert "text/csv" in r.headers["content-type"]
+
+    # 8. pages render
+    assert client.get("/").status_code == 200
+    assert client.get(f"/projects/{project_id}?{qp}").status_code == 200
+    assert client.get(f"/compare?site_id={site_id}").status_code == 200

@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} · SEO Статистика{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>{{ project.name }}</h2>
+  <p>{{ site.display_name or site.property_uri }} · {{ project.urls|length }} URL</p>
+</hgroup>
+
+<article>
+  <header>Добавить URL</header>
+  <form method="post" action="/ui/projects/{{ project.id }}/urls" enctype="multipart/form-data">
+    <textarea name="urls_text" rows="4" placeholder="По одному URL в строке или через запятую"></textarea>
+    <div class="grid">
+      <label>…или файл <input type="file" name="file" accept=".txt,.csv"></label>
+      <label>&nbsp;<button type="submit">Загрузить</button></label>
+    </div>
+  </form>
+</article>
+
+<form method="get" action="/projects/{{ project.id }}" class="grid">
+  <label>С <input type="date" name="start" value="{{ range.start }}"></label>
+  <label>По <input type="date" name="end" value="{{ range.end }}"></label>
+  <label>ТОП-1 по
+    <select name="order_by">
+      <option value="clicks" {% if order_by=='clicks' %}selected{% endif %}>кликам</option>
+      <option value="impressions" {% if order_by=='impressions' %}selected{% endif %}>показам</option>
+      <option value="position" {% if order_by=='position' %}selected{% endif %}>позиции</option>
+    </select>
+  </label>
+  <label>&nbsp;<button type="submit">Обновить</button></label>
+</form>
+
+<div class="grid">
+  <article><hgroup><h3>{{ subset_totals.clicks|numfmt }}</h3><p>Клики (подмножество)</p></hgroup></article>
+  <article><hgroup><h3>{{ subset_totals.impressions|numfmt }}</h3><p>Показы</p></hgroup></article>
+  <article><hgroup><h3>{{ subset_totals.ctr|ctr }}</h3><p>CTR</p></hgroup></article>
+  <article><hgroup><h3>{{ subset_totals.position|pos }}</h3><p>Ср. позиция</p></hgroup></article>
+</div>
+
+<p>
+  Экспорт за период:
+  <a href="/api/export?site_id={{ site.id }}&project_id={{ project.id }}&start={{ range.start }}&end={{ range.end }}&level=query&format=xlsx" role="button" class="outline">Excel (по запросам)</a>
+  <a href="/api/export?site_id={{ site.id }}&project_id={{ project.id }}&start={{ range.start }}&end={{ range.end }}&level=page&format=csv" role="button" class="outline secondary">CSV (по страницам)</a>
+</p>
+
+<article>
+  <header>ТОП-1 ключевой запрос по каждому URL</header>
+  <figure>
+  <table>
+    <thead><tr><th>URL</th><th>ТОП-1 запрос</th><th>Клики</th><th>Показы</th><th>CTR</th><th>Позиция</th></tr></thead>
+    <tbody>
+    {% for r in top_keywords %}
+      <tr>
+        <td><small>{{ r.url }}</small></td>
+        <td>{% if r.top_query %}<strong>{{ r.top_query }}</strong>{% else %}<small>нет данных</small>{% endif %}</td>
+        <td>{{ r.clicks|numfmt }}</td><td>{{ r.impressions|numfmt }}</td>
+        <td>{{ r.ctr|ctr }}</td><td>{{ r.position|pos }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6"><small>Нет URL в проекте или нет собранных данных.</small></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </figure>
+</article>
+
+<article>
+  <header>CTR по страницам</header>
+  <figure>
+  <table>
+    <thead><tr><th>URL</th><th>Клики</th><th>Показы</th><th>CTR</th><th>Позиция</th></tr></thead>
+    <tbody>
+    {% for p in ctr.pages %}
+      <tr><td><small>{{ p.url }}</small></td><td>{{ p.clicks|numfmt }}</td>
+          <td>{{ p.impressions|numfmt }}</td><td>{{ p.ctr|ctr }}</td><td>{{ p.position|pos }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </figure>
+</article>
+{% endblock %}

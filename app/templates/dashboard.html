@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Дашборд · SEO Статистика{% endblock %}
+{% block content %}
+<h2>Дашборд</h2>
+
+{% if not sites %}
+  <article>
+    <p>Пока нет ни одного сайта. Укажите <code>GSC_SITE_URL</code> в <code>.env</code> и
+    перезапустите, либо добавьте сайт через <code>POST /api/admin/sites</code>.</p>
+  </article>
+{% else %}
+<form method="get" action="/" class="grid">
+  <label>Сайт
+    <select name="site_id" onchange="this.form.submit()">
+      {% for s in sites %}
+      <option value="{{ s.id }}" {% if site and s.id == site.id %}selected{% endif %}>{{ s.display_name or s.property_uri }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>С <input type="date" name="start" value="{{ range.start }}"></label>
+  <label>По <input type="date" name="end" value="{{ range.end }}"></label>
+  <label>&nbsp;<button type="submit">Показать</button></label>
+</form>
+
+{% if totals %}
+<div class="grid">
+  <article><hgroup><h3>{{ totals.clicks|numfmt }}</h3><p>Клики</p></hgroup></article>
+  <article><hgroup><h3>{{ totals.impressions|numfmt }}</h3><p>Показы</p></hgroup></article>
+  <article><hgroup><h3>{{ totals.ctr|ctr }}</h3><p>CTR</p></hgroup></article>
+  <article><hgroup><h3>{{ totals.position|pos }}</h3><p>Ср. позиция</p></hgroup></article>
+</div>
+{% endif %}
+
+<article>
+  <header>Динамика по дням (весь сайт)</header>
+  {% if daily %}<canvas id="trend" height="90"></canvas>{% else %}
+  <p><small>Нет данных за период. Запустите сбор статистики ниже.</small></p>{% endif %}
+</article>
+
+<form method="post" action="/ui/collect">
+  <input type="hidden" name="site_id" value="{{ site.id }}">
+  <button type="submit" class="secondary">↻ Собрать статистику сейчас</button>
+  <small>Инкрементально подтянет последние дни из источника в БД.</small>
+</form>
+
+<div class="grid">
+  <article>
+    <header>Проекты</header>
+    {% if projects %}
+    <ul>{% for p in projects %}<li><a href="/projects/{{ p.id }}">{{ p.name }}</a> ({{ p.urls|length }} URL)</li>{% endfor %}</ul>
+    {% else %}<p><small>Нет проектов. <a href="/upload">Создать проект</a></small></p>{% endif %}
+  </article>
+  <article>
+    <header>Последние запуски сбора</header>
+    <table>
+      <thead><tr><th>Тип</th><th>Дата</th><th>Статус</th><th>Строк</th></tr></thead>
+      <tbody>
+      {% for r in runs %}
+        <tr><td>{{ r.job_type }}</td><td>{{ r.target_date }}</td>
+            <td>{% if r.status == 'ok' %}✅{% elif r.status == 'error' %}❌{% else %}⏳{% endif %} {{ r.status }}</td>
+            <td>{{ r.rows_written }}</td></tr>
+      {% else %}
+        <tr><td colspan="4"><small>Пока нет запусков</small></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </article>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if daily %}
+<script>
+  const daily = {{ daily|tojson }};
+  new Chart(document.getElementById('trend'), {
+    type: 'line',
+    data: {
+      labels: daily.map(d => d.date),
+      datasets: [
+        {label: 'Клики', data: daily.map(d => d.clicks), borderColor: '#1095c1', yAxisID: 'y', tension: .3},
+        {label: 'Показы', data: daily.map(d => d.impressions), borderColor: '#d93526', yAxisID: 'y1', tension: .3}
+      ]
+    },
+    options: {
+      interaction: {mode: 'index', intersect: false},
+      scales: {y: {position: 'left', title: {display: true, text: 'Клики'}},
+               y1: {position: 'right', grid: {drawOnChartArea: false}, title: {display: true, text: 'Показы'}}}
+    }
+  });
+</script>
+{% endif %}
+{% endblock %}

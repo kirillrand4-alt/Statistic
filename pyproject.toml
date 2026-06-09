@@ -1,0 +1,10 @@
+[project]
+name = "statistic"
+version = "0.1.0"
+description = "Self-hosted SEO analytics service (GSC + Yandex Webmaster + Yandex Metrika)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

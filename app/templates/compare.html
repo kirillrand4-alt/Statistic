@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Сравнение периодов · SEO Статистика{% endblock %}
+{% macro fmtval(v, metric) -%}
+{% if metric == 'ctr' %}{{ v|ctr }}{% elif metric == 'position' %}{{ v|pos }}{% else %}{{ v|numfmt }}{% endif %}
+{%- endmacro %}
+{% block content %}
+<h2>Рост / падение за период</h2>
+
+{% if not sites %}<article><p>Сначала добавьте сайт.</p></article>{% else %}
+<form method="get" action="/compare">
+  <div class="grid">
+    <label>Сайт
+      <select name="site_id">{% for s in sites %}<option value="{{ s.id }}" {% if site and s.id==site.id %}selected{% endif %}>{{ s.display_name or s.property_uri }}</option>{% endfor %}</select>
+    </label>
+    <label>Метрика
+      <select name="metric">
+        {% for m, lbl in [('clicks','Клики'),('impressions','Показы'),('ctr','CTR'),('position','Позиция')] %}
+        <option value="{{ m }}" {% if metric==m %}selected{% endif %}>{{ lbl }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Группировка
+      <select name="grouping">
+        {% for g, lbl in [('site','Весь сайт'),('subset','Подмножество (проект)'),('page','По страницам'),('query','По запросам')] %}
+        <option value="{{ g }}" {% if grouping==g %}selected{% endif %}>{{ lbl }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Проект (для подмножества)
+      <select name="project_id"><option value="">—</option>
+        {% for p in projects %}<option value="{{ p.id }}" {% if project_id==p.id %}selected{% endif %}>{{ p.name }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="grid">
+    <label>Период A — с <input type="date" name="a_start" value="{{ period_a.start }}"></label>
+    <label>по <input type="date" name="a_end" value="{{ period_a.end }}"></label>
+    <label>Период B — с <input type="date" name="b_start" value="{{ period_b.start }}"></label>
+    <label>по <input type="date" name="b_end" value="{{ period_b.end }}"></label>
+  </div>
+  <div class="grid">
+    <label>Мин. показов (фильтр шума) <input type="number" name="min_impressions" value="{{ min_impressions }}" min="0"></label>
+    <label>&nbsp;<button type="submit">Сравнить</button></label>
+  </div>
+</form>
+
+{% if result %}
+  {% set s = result.summary %}
+  <article>
+    <header>Итог по метрике «{{ result.metric }}»</header>
+    <div class="grid">
+      <hgroup><h3>{{ fmtval(s.value_a, result.metric) }}</h3><p>Период A</p></hgroup>
+      <hgroup><h3>{{ fmtval(s.value_b, result.metric) }}</h3><p>Период B</p></hgroup>
+      <hgroup><h3>{{ s.pct_change|pct }}</h3><p>Изменение</p></hgroup>
+    </div>
+  </article>
+
+  {% if result.grouping != 'site' and result.grouping != 'subset' %}
+  <article>
+    <header>Динамика по элементам (топ изменений)</header>
+    <canvas id="movers" height="110"></canvas>
+  </article>
+  {% endif %}
+
+  <article>
+    <header>Детализация</header>
+    <figure>
+    <table>
+      <thead><tr><th>Элемент</th><th>A</th><th>B</th><th>Δ</th><th>%</th><th></th></tr></thead>
+      <tbody>
+      {% for r in result.rows %}
+        <tr>
+          <td><small>{{ r.key }}</small></td>
+          <td>{{ fmtval(r.value_a, result.metric) }}</td>
+          <td>{{ fmtval(r.value_b, result.metric) }}</td>
+          <td>{{ fmtval(r.delta, result.metric) }}</td>
+          <td>{{ r.pct_change|pct }}</td>
+          <td>{% if r.improved %}<ins>рост</ins>{% else %}<del>падение</del>{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6"><small>Нет данных за выбранные периоды.</small></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </figure>
+  </article>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if result and result.grouping not in ('site','subset') and result.rows %}
+<script>
+  const rows = {{ result.rows|tojson }};
+  const top = rows.slice().sort((a,b)=>Math.abs(b.delta)-Math.abs(a.delta)).slice(0,15);
+  new Chart(document.getElementById('movers'), {
+    type: 'bar',
+    data: {
+      labels: top.map(r => r.key.length > 30 ? r.key.slice(0,30)+'…' : r.key),
+      datasets: [{
+        label: 'Δ {{ result.metric }}',
+        data: top.map(r => r.delta),
+        backgroundColor: top.map(r => r.improved ? '#398712' : '#d93526')
+      }]
+    },
+    options: {indexAxis: 'y', plugins: {legend: {display: false}}}
+  });
+</script>
+{% endif %}
+{% endblock %}

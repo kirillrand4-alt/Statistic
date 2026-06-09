@@ -1,0 +1,33 @@
+"""Small shared helpers used across services and providers."""
+from __future__ import annotations
+
+import hashlib
+from urllib.parse import urlsplit, urlunsplit
+
+
+def normalize_url(url: str) -> str:
+    """Normalize a URL for matching/dedup (NOT for display or API calls).
+
+    Lowercases scheme + host, drops a leading ``www.``, removes the fragment,
+    and strips a trailing slash (except for the root path). Path case and the
+    query string are preserved, since paths can be case-sensitive.
+    """
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if "://" not in url:
+        url = "http://" + url
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    host = parts.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = parts.path
+    if len(path) > 1 and path.endswith("/"):
+        path = path.rstrip("/")
+    return urlunsplit((scheme, host, path, parts.query, ""))
+
+
+def query_hash(text: str) -> str:
+    """Stable hash for a query string (used as a unique key per site)."""
+    return hashlib.sha1((text or "").encode("utf-8")).hexdigest()

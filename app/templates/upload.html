@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Проекты · SEO Статистика{% endblock %}
+{% block content %}
+<h2>Проекты</h2>
+
+{% if not sites %}
+  <article><p>Сначала добавьте сайт (см. дашборд).</p></article>
+{% else %}
+<article>
+  <header>Новый проект</header>
+  <form method="post" action="/ui/projects">
+    <div class="grid">
+      <label>Название
+        <input type="text" name="name" placeholder="Напр. Блог — приоритетные страницы" required>
+      </label>
+      <label>Сайт
+        <select name="site_id" required>
+          {% for s in sites %}<option value="{{ s.id }}">{{ s.display_name or s.property_uri }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <button type="submit">Создать проект</button>
+    <small>После создания вы сможете загрузить список URL (вставкой или файлом .txt/.csv).</small>
+  </form>
+</article>
+{% endif %}
+
+<article>
+  <header>Существующие проекты</header>
+  {% if projects %}
+  <table>
+    <thead><tr><th>Проект</th><th>URL</th><th></th></tr></thead>
+    <tbody>
+    {% for p in projects %}
+      <tr><td>{{ p.name }}</td><td>{{ p.urls|length }}</td>
+          <td><a href="/projects/{{ p.id }}" role="button" class="secondary outline">Открыть</a></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p><small>Пока нет проектов.</small></p>{% endif %}
+</article>
+{% endblock %}

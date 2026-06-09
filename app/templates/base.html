@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}SEO Статистика{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head>
+<body>
+  <main class="container">
+    {% include "partials/nav.html" %}
+    {% block content %}{% endblock %}
+    <footer><small>SEO Статистика · источники: Google Search Console, Яндекс.Вебмастер, Яндекс.Метрика</small></footer>
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
