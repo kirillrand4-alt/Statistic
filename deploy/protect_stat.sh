@@ -4,12 +4,24 @@
 # If password is omitted, a random alphanumeric one is generated and printed.
 set -euo pipefail
 
+gen_pass() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 8
+  else
+    python3 -c 'import secrets; print(secrets.token_hex(8))'
+  fi
+}
+
 USER="${1:-admin}"
-PASS="${2:-$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 14)}"
+PASS="${2:-$(gen_pass)}"
 
-command -v htpasswd >/dev/null 2>&1 || apt-get install -y apache2-utils >/dev/null 2>&1 || true
+if ! command -v htpasswd >/dev/null 2>&1; then
+  echo "Installing apache2-utils (for htpasswd)..."
+  apt-get update -qq || true
+  apt-get install -y apache2-utils
+fi
 
-htpasswd -bc /etc/nginx/.htpasswd "$USER" "$PASS" >/dev/null 2>&1
+htpasswd -bc /etc/nginx/.htpasswd "$USER" "$PASS"
 
 FILE="$(grep -RlE 'location /stat/' /etc/nginx/ 2>/dev/null | head -1 || true)"
 if [ -z "$FILE" ]; then
@@ -31,6 +43,6 @@ if nginx -t; then
   echo "  pass: $PASS"
   echo "Save these — the browser will ask for them at /stat."
 else
-  echo "nginx test FAILED — check config."
+  echo "nginx test FAILED — check the config."
   exit 1
 fi
