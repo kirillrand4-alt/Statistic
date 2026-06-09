@@ -73,3 +73,33 @@ def test_full_flow(client):
     assert client.get("/").status_code == 200
     assert client.get(f"/projects/{project_id}?{qp}").status_code == 200
     assert client.get(f"/compare?site_id={site_id}").status_code == 200
+
+
+def test_ui_admin_flows(client):
+    # admin page renders even with no sites
+    assert client.get("/admin").status_code == 200
+
+    # create a site entirely through the UI form (TestClient follows the redirect)
+    r = client.post(
+        "/ui/sites",
+        data={"source_code": "gsc", "property_uri": "sc-domain:example.com", "display_name": "demo"},
+    )
+    assert r.status_code == 200
+    sites = client.get("/api/sites").json()
+    assert len(sites) == 1
+    site_id = sites[0]["id"]
+
+    # project + URLs via UI
+    assert client.post("/ui/projects", data={"name": "P", "site_id": site_id}).status_code == 200
+    pid = client.get("/api/projects").json()[0]["id"]
+    client.post(f"/ui/projects/{pid}/urls", data={"urls_text": "\n".join(DEFAULT_PAGES)})
+
+    # backfill via UI (mock provider) then verify dashboard surfaces data
+    assert client.post("/ui/backfill", data={"site_id": site_id, "days": 40}).status_code == 200
+    page = client.get(f"/?site_id={site_id}")
+    assert page.status_code == 200
+    assert "Топ страниц" in page.text
+
+    # enable/disable toggle
+    assert client.post(f"/ui/sites/{site_id}/toggle").status_code == 200
+    assert client.get("/api/sites").json()[0]["enabled"] is False

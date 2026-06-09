@@ -5,8 +5,8 @@
 
 {% if not sites %}
   <article>
-    <p>Пока нет ни одного сайта. Укажите <code>GSC_SITE_URL</code> в <code>.env</code> и
-    перезапустите, либо добавьте сайт через <code>POST /api/admin/sites</code>.</p>
+    <p>Пока нет ни одного сайта. <a href="/admin">Добавьте сайт в Настройках</a>
+    или укажите <code>GSC_SITE_URL</code> в <code>.env</code>.</p>
   </article>
 {% else %}
 <form method="get" action="/" class="grid">
@@ -40,8 +40,32 @@
 <form method="post" action="/ui/collect">
   <input type="hidden" name="site_id" value="{{ site.id }}">
   <button type="submit" class="secondary">↻ Собрать статистику сейчас</button>
-  <small>Инкрементально подтянет последние дни из источника в БД.</small>
+  <small>Инкрементально подтянет последние дни. Длинная история — в <a href="/admin">Настройках</a> (backfill).</small>
 </form>
+
+<p>
+  Экспорт по сайту за период:
+  <a href="/api/export?site_id={{ site.id }}&start={{ range.start }}&end={{ range.end }}&level=totals&format=xlsx" role="button" class="outline">Excel (сводка по дням)</a>
+  <a href="/api/export?site_id={{ site.id }}&start={{ range.start }}&end={{ range.end }}&level=page&format=xlsx" role="button" class="outline">Excel (по страницам)</a>
+  <a href="/api/export?site_id={{ site.id }}&start={{ range.start }}&end={{ range.end }}&level=page&format=csv" role="button" class="outline secondary">CSV</a>
+</p>
+
+{% if top_pages %}
+<article>
+  <header>Топ страниц сайта (по кликам)</header>
+  <figure>
+  <table>
+    <thead><tr><th>URL</th><th>Клики</th><th>Показы</th><th>CTR</th><th>Позиция</th></tr></thead>
+    <tbody>
+    {% for p in top_pages %}
+      <tr><td><small>{{ p.url }}</small></td><td>{{ p.clicks|numfmt }}</td>
+          <td>{{ p.impressions|numfmt }}</td><td>{{ p.ctr|ctr }}</td><td>{{ p.position|pos }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </figure>
+</article>
+{% endif %}
 
 <div class="grid">
   <article>

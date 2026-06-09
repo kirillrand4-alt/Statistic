@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db.models import CollectionRun, Project, ProjectUrl, Site
+from app.db.models import CollectionRun, Project, ProjectUrl, Site, Source
 from app.deps import get_db, parse_date_range
 from app.providers.base import DateRange
 from app.services import growth
@@ -47,6 +47,7 @@ def dashboard(request: Request, site_id: int | None = None, start: str | None = 
         "range": dr,
         "totals": None,
         "daily": [],
+        "top_pages": [],
         "runs": db.execute(
             select(CollectionRun).order_by(CollectionRun.started_at.desc()).limit(10)
         ).scalars().all(),
@@ -55,6 +56,7 @@ def dashboard(request: Request, site_id: int | None = None, start: str | None = 
     if site is not None:
         ctx["totals"] = totals_svc.site_totals(db, site.id, dr)
         ctx["daily"] = totals_svc.site_daily(db, site.id, dr)
+        ctx["top_pages"] = totals_svc.per_page_totals(db, site.id, dr)[:20]
     return templates.TemplateResponse(request, "dashboard.html", ctx)
 
 
@@ -118,6 +120,70 @@ def ui_collect(site_id: int = Form(...), db: Session = Depends(get_db)):
         except Exception:  # noqa: BLE001 - surfaced via /api/admin/status
             pass
     return RedirectResponse(url=f"/?site_id={site_id}", status_code=303)
+
+
+@router.get("/admin")
+def admin_page(request: Request, db: Session = Depends(get_db)):
+    s = get_settings()
+    return templates.TemplateResponse(
+        request,
+        "admin.html",
+        {
+            "request": request,
+            "sites": _sites(db),
+            "sources": db.execute(select(Source).order_by(Source.id)).scalars().all(),
+            "runs": db.execute(
+                select(CollectionRun).order_by(CollectionRun.started_at.desc()).limit(30)
+            ).scalars().all(),
+            "config": {
+                "gsc_auth_mode": s.gsc_auth_mode,
+                "gsc_site_url": s.gsc_site_url or "—",
+                "enable_scheduler": s.enable_scheduler,
+                "collect_cron_hour": s.collect_cron_hour,
+                "collect_refetch_days": s.collect_refetch_days,
+            },
+        },
+    )
+
+
+@router.post("/ui/sites")
+def ui_create_site(property_uri: str = Form(...), source_code: str = Form("gsc"),
+                   display_name: str | None = Form(None),
+                   external_host_id: str | None = Form(None),
+                   db: Session = Depends(get_db)):
+    source = db.execute(select(Source).where(Source.code == source_code)).scalar_one_or_none()
+    if source is None:
+        raise HTTPException(400, "unknown source")
+    site = Site(
+        source_id=source.id,
+        property_uri=property_uri.strip(),
+        display_name=(display_name or property_uri).strip(),
+        external_host_id=(external_host_id.strip() or None) if external_host_id else None,
+        enabled=True,
+    )
+    db.add(site)
+    db.commit()
+    return RedirectResponse(url=f"/?site_id={site.id}", status_code=303)
+
+
+@router.post("/ui/sites/{site_id}/toggle")
+def ui_toggle_site(site_id: int, db: Session = Depends(get_db)):
+    site = db.get(Site, site_id)
+    if site is not None:
+        site.enabled = not site.enabled
+        db.commit()
+    return RedirectResponse(url="/admin", status_code=303)
+
+
+@router.post("/ui/backfill")
+def ui_backfill(site_id: int = Form(...), days: int = Form(90), db: Session = Depends(get_db)):
+    from app.scheduler.jobs import run_backfill
+
+    try:
+        run_backfill(db, site_id, days)
+    except Exception:  # noqa: BLE001 - surfaced via the runs table on /admin
+        pass
+    return RedirectResponse(url="/admin", status_code=303)
 
 
 @router.get("/projects/{project_id}")

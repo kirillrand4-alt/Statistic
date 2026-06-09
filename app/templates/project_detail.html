@@ -37,11 +37,29 @@
   <article><hgroup><h3>{{ subset_totals.position|pos }}</h3><p>Ср. позиция</p></hgroup></article>
 </div>
 
-<p>
-  Экспорт за период:
-  <a href="/api/export?site_id={{ site.id }}&project_id={{ project.id }}&start={{ range.start }}&end={{ range.end }}&level=query&format=xlsx" role="button" class="outline">Excel (по запросам)</a>
-  <a href="/api/export?site_id={{ site.id }}&project_id={{ project.id }}&start={{ range.start }}&end={{ range.end }}&level=page&format=csv" role="button" class="outline secondary">CSV (по страницам)</a>
-</p>
+<article>
+  <header>Экспорт за период</header>
+  <form method="get" action="/api/export" class="grid">
+    <input type="hidden" name="site_id" value="{{ site.id }}">
+    <input type="hidden" name="project_id" value="{{ project.id }}">
+    <input type="hidden" name="start" value="{{ range.start }}">
+    <input type="hidden" name="end" value="{{ range.end }}">
+    <label>Уровень
+      <select name="level">
+        <option value="query">По запросам</option>
+        <option value="page">По страницам</option>
+        <option value="totals">Сводка по дням (сайт)</option>
+      </select>
+    </label>
+    <label>Формат
+      <select name="format">
+        <option value="xlsx">Excel (.xlsx)</option>
+        <option value="csv">CSV</option>
+      </select>
+    </label>
+    <label>&nbsp;<button type="submit">Скачать</button></label>
+  </form>
+</article>
 
 <article>
   <header>ТОП-1 ключевой запрос по каждому URL</header>
