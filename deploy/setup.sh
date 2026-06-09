@@ -5,10 +5,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
-echo "[1/5] Python venv + dependencies"
+echo "[1/5] Python venv + dependencies (may take a few minutes on a slow link)"
 python3 -m venv .venv
-.venv/bin/pip install --upgrade pip >/dev/null
-.venv/bin/pip install -r requirements.txt >/dev/null
+.venv/bin/python -m pip install --upgrade pip --timeout 120 --retries 10 >/dev/null 2>&1 || true
+.venv/bin/pip install -r requirements.txt --timeout 120 --retries 10
 echo "      ok"
 
 echo "[2/5] .env"
