@@ -105,17 +105,17 @@ def test_ui_admin_flows(client):
     assert client.get("/api/sites").json()[0]["enabled"] is False
 
 
-def test_gsc_connect_route(client):
-    import json
-
-    key = json.dumps(
-        {
-            "type": "service_account",
-            "client_email": "svc@proj.iam.gserviceaccount.com",
-            "private_key": "-----BEGIN PRIVATE KEY-----\nAA\n-----END PRIVATE KEY-----\n",
-        }
+def test_gsc_connect_route_oauth(client):
+    r = client.post(
+        "/ui/gsc/connect",
+        data={
+            "mode": "oauth",
+            "client_id": "cid",
+            "client_secret": "csecret",
+            "refresh_token": "rtoken",
+            "backfill_days": "15",
+        },
     )
-    r = client.post("/ui/gsc/connect", data={"gsc_json": key, "backfill_days": "15"})
     assert r.status_code == 200  # redirect to dashboard, followed
     # the site is registered synchronously (data pull runs in a background thread)
     assert len(client.get("/api/sites").json()) >= 1

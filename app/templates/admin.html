@@ -6,25 +6,37 @@
 {% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
 
 <article>
-  <header>Подключить Google Search Console (ключ API)</header>
-  <p>Вставьте JSON-ключ сервисного аккаунта Google. После сохранения сервис сам
-  найдёт ваши сайты в GSC, создаст их и загрузит статистику в фоне — вручную
-  ничего настраивать не нужно.</p>
-  <p><mark>Внимание: страница <code>/stat</code> сейчас открыта публично. Не
-  вставляйте приватный ключ, пока доступ к <code>/stat</code> не закрыт паролем.</mark></p>
-  {% if gsc_key_present %}<p>✅ Ключ уже загружен — можно вставить новый, чтобы заменить.</p>{% endif %}
+  <header>Подключить Google Search Console</header>
+  {% if gsc_mode %}<p>✅ Подключено (режим: <code>{{ gsc_mode }}</code>). Можно переподключить ниже.</p>{% endif %}
+  <p><mark>Страница <code>/stat</code> публичная — вводите ключи только после защиты
+  паролем (<code>deploy/protect_stat.sh</code>).</mark></p>
+  <p>После сохранения сервис сам найдёт ваши сайты в GSC и загрузит статистику в фоне.</p>
+
+  <h4>Вариант 1 — OAuth (client_id + client_secret + refresh_token)</h4>
   <form method="post" action="{{ base_path }}/ui/gsc/connect">
-    <textarea name="gsc_json" rows="8" required
-      placeholder="Сюда вставьте содержимое JSON-файла ключа сервисного аккаунта (поля type, project_id, private_key, client_email и т.д.)"></textarea>
+    <input type="hidden" name="mode" value="oauth">
+    <label>client_id <input type="text" name="client_id" autocomplete="off" required></label>
+    <label>client_secret <input type="password" name="client_secret" autocomplete="off" required></label>
+    <label>refresh_token <input type="password" name="refresh_token" autocomplete="off" required></label>
     <div class="grid">
-      <label>За сколько дней загрузить историю (макс. 480)
-        <input type="number" name="backfill_days" value="480" min="1" max="480">
-      </label>
-      <label>&nbsp;<button type="submit">Подключить и загрузить данные</button></label>
+      <label>История, дней (макс. 480) <input type="number" name="backfill_days" value="480" min="1" max="480"></label>
+      <label>&nbsp;<button type="submit">Подключить и загрузить</button></label>
     </div>
   </form>
-  <small>Email сервисного аккаунта (<code>client_email</code>) добавьте пользователем
-  ресурса в Search Console, иначе Google вернёт 403.</small>
+
+  <h4>Вариант 2 — сервисный аккаунт (JSON)</h4>
+  <form method="post" action="{{ base_path }}/ui/gsc/connect">
+    <input type="hidden" name="mode" value="service_account">
+    <textarea name="gsc_json" rows="6"
+      placeholder="Содержимое JSON-файла ключа сервисного аккаунта (type, project_id, private_key, client_email...)"></textarea>
+    <div class="grid">
+      <label>История, дней (макс. 480) <input type="number" name="backfill_days" value="480" min="1" max="480"></label>
+      <label>&nbsp;<button type="submit" class="secondary">Подключить (JSON)</button></label>
+    </div>
+  </form>
+  <small>Дайте доступ к ресурсу в Search Console (OAuth — авторизуйтесь под аккаунтом
+  с доступом; сервисный аккаунт — добавьте его <code>client_email</code> пользователем),
+  иначе Google вернёт 403.</small>
 </article>
 
 <article>

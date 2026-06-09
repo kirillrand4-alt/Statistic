@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -129,6 +128,8 @@ def ui_collect(site_id: int = Form(...), db: Session = Depends(get_db)):
 
 @router.get("/admin")
 def admin_page(request: Request, msg: str | None = None, db: Session = Depends(get_db)):
+    from app.credentials import get_cred
+
     s = get_settings()
     return templates.TemplateResponse(
         request,
@@ -136,7 +137,7 @@ def admin_page(request: Request, msg: str | None = None, db: Session = Depends(g
         {
             "request": request,
             "msg": msg,
-            "gsc_key_present": Path(s.gsc_service_account_file).exists(),
+            "gsc_mode": get_cred("gsc_auth_mode"),
             "sites": _sites(db),
             "sources": db.execute(select(Source).order_by(Source.id)).scalars().all(),
             "runs": db.execute(
@@ -194,15 +195,20 @@ def ui_backfill(site_id: int = Form(...), days: int = Form(90), db: Session = De
 
 
 @router.post("/ui/gsc/connect")
-def ui_gsc_connect(gsc_json: str = Form(...), backfill_days: int = Form(480),
+def ui_gsc_connect(mode: str = Form("oauth"), gsc_json: str = Form(""),
+                   client_id: str = Form(""), client_secret: str = Form(""),
+                   refresh_token: str = Form(""), backfill_days: int = Form(480),
                    db: Session = Depends(get_db)):
-    from app.services.connect import connect_gsc
+    from app.services.connect import connect_gsc_oauth, connect_gsc_service_account
 
     try:
-        result = connect_gsc(db, gsc_json, backfill_days=backfill_days, background=True)
+        if mode == "service_account":
+            result = connect_gsc_service_account(db, gsc_json, backfill_days, True)
+        else:
+            result = connect_gsc_oauth(db, client_id, client_secret, refresh_token, backfill_days, True)
         n = len(result["site_ids"])
         msg = (
-            f"Ключ подключён. Сайтов найдено: {n}. Данные загружаются в фоне — "
+            f"Подключено. Сайтов найдено: {n}. Данные загружаются в фоне — "
             "обновите дашборд через 1–2 минуты."
         )
         return RedirectResponse(url=f"{BP}/?msg={quote(msg)}", status_code=303)

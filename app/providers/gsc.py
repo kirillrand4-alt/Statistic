@@ -63,28 +63,44 @@ class GSCProvider(SearchDataProvider):
 
     # ----- auth & client -----
     def _credentials(self):
+        from app.credentials import get_cred
+
         s = self.settings
-        if s.gsc_auth_mode == "service_account":
+        mode = get_cred("gsc_auth_mode", s.gsc_auth_mode)
+
+        if mode == "service_account":
             from google.oauth2 import service_account
 
+            sa_json = get_cred("gsc_sa_json")
+            if sa_json:
+                return service_account.Credentials.from_service_account_info(
+                    json.loads(sa_json), scopes=[SCOPE]
+                )
             return service_account.Credentials.from_service_account_file(
                 s.gsc_service_account_file, scopes=[SCOPE]
             )
-        if s.gsc_auth_mode == "oauth":
+
+        if mode == "oauth":
             from google.oauth2.credentials import Credentials
 
-            with open(s.gsc_oauth_client_file) as fh:
-                client = json.load(fh)
-            data = client.get("installed") or client.get("web") or client
+            client_id = get_cred("gsc_oauth_client_id")
+            client_secret = get_cred("gsc_oauth_client_secret")
+            refresh_token = get_cred("gsc_oauth_refresh_token", s.gsc_oauth_refresh_token)
+            if not (client_id and client_secret):  # fall back to a client-secrets file
+                with open(s.gsc_oauth_client_file) as fh:
+                    data = json.load(fh)
+                data = data.get("installed") or data.get("web") or data
+                client_id = client_id or data.get("client_id")
+                client_secret = client_secret or data.get("client_secret")
             return Credentials(
                 token=None,
-                refresh_token=s.gsc_oauth_refresh_token,
-                token_uri=data.get("token_uri", "https://oauth2.googleapis.com/token"),
-                client_id=data["client_id"],
-                client_secret=data["client_secret"],
+                refresh_token=refresh_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=client_id,
+                client_secret=client_secret,
                 scopes=[SCOPE],
             )
-        raise ValueError(f"Unknown GSC_AUTH_MODE: {s.gsc_auth_mode!r}")
+        raise ValueError(f"Unknown GSC auth mode: {mode!r}")
 
     def _service(self):
         if self._svc is None:

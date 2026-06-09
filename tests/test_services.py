@@ -13,13 +13,13 @@ from app.services.ctr import ctr_for_project
 from app.services.top_keyword import top_keywords_for_project
 
 
-def test_connect_gsc_autopull(db):
+def test_connect_gsc_service_account_autopull(db):
     import json
 
     from sqlalchemy import func, select
 
     from app.db.models import PageMetricDaily, QueryMetricDaily, Site
-    from app.services.connect import connect_gsc
+    from app.services.connect import connect_gsc_service_account
 
     key = json.dumps(
         {
@@ -28,7 +28,7 @@ def test_connect_gsc_autopull(db):
             "private_key": "-----BEGIN PRIVATE KEY-----\nAA\n-----END PRIVATE KEY-----\n",
         }
     )
-    result = connect_gsc(db, key, backfill_days=20, background=False)
+    result = connect_gsc_service_account(db, key, backfill_days=20, background=False)
 
     assert result["site_ids"], "a site should be auto-registered from list_sites()"
     assert db.execute(select(func.count()).select_from(Site)).scalar_one() >= 1
@@ -37,13 +37,37 @@ def test_connect_gsc_autopull(db):
     assert db.execute(select(func.count()).select_from(QueryMetricDaily)).scalar_one() > 0
 
 
-def test_connect_gsc_rejects_bad_key(db):
+def test_connect_gsc_oauth_autopull(db):
+    from sqlalchemy import func, select
+
+    from app.db.models import PageMetricDaily, Site
+    from app.services.connect import connect_gsc_oauth
+
+    result = connect_gsc_oauth(
+        db, "client-id", "client-secret", "refresh-token", backfill_days=20, background=False
+    )
+    assert result["site_ids"]
+    assert db.execute(select(func.count()).select_from(Site)).scalar_one() >= 1
+    assert db.execute(select(func.count()).select_from(PageMetricDaily)).scalar_one() > 0
+
+
+def test_connect_rejects_incomplete(db):
     import pytest
 
-    from app.services.connect import connect_gsc
+    from app.services.connect import connect_gsc_oauth, connect_gsc_service_account
 
     with pytest.raises(Exception):
-        connect_gsc(db, "{ not json", background=False)
+        connect_gsc_service_account(db, "{ not json", background=False)
+    with pytest.raises(Exception):
+        connect_gsc_oauth(db, "", "", "", background=False)
+
+
+def test_credentials_roundtrip(db):
+    from app.credentials import get_cred, set_cred
+
+    set_cred("k", "secret-value")
+    assert get_cred("k") == "secret-value"
+    assert get_cred("missing", "def") == "def"
 
 
 def test_base_path_normalization():
