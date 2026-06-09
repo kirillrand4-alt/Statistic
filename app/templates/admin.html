@@ -52,6 +52,22 @@
 </article>
 
 <article>
+  <header>Подключить Яндекс.Вебмастер (токен)</header>
+  {% if yandex_connected %}<p>✅ Токен Яндекса сохранён — можно вставить новый, чтобы заменить.</p>{% endif %}
+  <p>Вставьте OAuth-токен Яндекса (вида <code>y0_…</code>). Сервис найдёт ваши хосты
+  в Вебмастере и подтянет дневную статистику (клики, показы, CTR, позиция).</p>
+  <form method="post" action="{{ base_path }}/ui/yandex/connect">
+    <label>OAuth-токен <input type="password" name="token" autocomplete="off" placeholder="y0_..." required></label>
+    <div class="grid">
+      <label>История, дней (макс. 480) <input type="number" name="backfill_days" value="480" min="1" max="480"></label>
+      <label>&nbsp;<button type="submit">Подключить Яндекс</button></label>
+    </div>
+  </form>
+  <small>Токен должен иметь доступ «Яндекс.Вебмастер», а аккаунт — подтверждённый сайт
+  в Вебмастере. Аналитика запросов по URL для Яндекса появится следующим обновлением.</small>
+</article>
+
+<article>
   <header>Добавить сайт</header>
   <form method="post" action="{{ base_path }}/ui/sites">
     <div class="grid">

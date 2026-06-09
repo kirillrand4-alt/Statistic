@@ -51,6 +51,26 @@ def test_connect_gsc_oauth_autopull(db):
     assert db.execute(select(func.count()).select_from(PageMetricDaily)).scalar_one() > 0
 
 
+def test_connect_yandex_autopull(db):
+    from sqlalchemy import func, select
+
+    from app.db.models import Site, SiteTotalDaily, Source
+    from app.providers import register_override
+    from app.providers.mock import MockProvider
+    from app.services.connect import connect_yandex
+
+    register_override("yandex_webmaster", MockProvider())
+    result = connect_yandex(db, "y0_testtoken", backfill_days=20, background=False)
+
+    assert result["site_ids"]
+    ywm = db.execute(select(Source).where(Source.code == "yandex_webmaster")).scalar_one()
+    n_sites = db.execute(
+        select(func.count()).select_from(Site).where(Site.source_id == ywm.id)
+    ).scalar_one()
+    assert n_sites >= 1
+    assert db.execute(select(func.count()).select_from(SiteTotalDaily)).scalar_one() > 0
+
+
 def test_connect_rejects_incomplete(db):
     import pytest
 

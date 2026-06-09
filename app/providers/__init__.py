@@ -39,7 +39,9 @@ def get_provider(code: str) -> SearchDataProvider:
 
         provider: SearchDataProvider = GSCProvider()
     elif code == "yandex_webmaster":
-        raise NotImplementedError("Yandex Webmaster provider arrives in Phase 2")
+        from app.providers.yandex_webmaster import YandexWebmasterProvider
+
+        provider = YandexWebmasterProvider()
     elif code == "yandex_metrika":
         raise NotImplementedError("Yandex Metrika provider arrives in Phase 3")
     else:

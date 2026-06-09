@@ -149,6 +149,7 @@ def admin_page(request: Request, msg: str | None = None, db: Session = Depends(g
             "request": request,
             "msg": msg,
             "gsc_mode": get_cred("gsc_auth_mode"),
+            "yandex_connected": bool(get_cred("yandex_wm_token")),
             "oauth_redirect_uri": _public_redirect_uri(request),
             "sites": _sites(db),
             "sources": db.execute(select(Source).order_by(Source.id)).scalars().all(),
@@ -204,6 +205,22 @@ def ui_backfill(site_id: int = Form(...), days: int = Form(90), db: Session = De
     except Exception:  # noqa: BLE001 - surfaced via the runs table on /admin
         pass
     return RedirectResponse(url=f"{BP}/admin", status_code=303)
+
+
+@router.post("/ui/yandex/connect")
+def ui_yandex_connect(token: str = Form(...), backfill_days: int = Form(480),
+                      db: Session = Depends(get_db)):
+    from app.services.connect import connect_yandex
+
+    try:
+        result = connect_yandex(db, token, backfill_days, True)
+        msg = (
+            f"Яндекс подключён. Сайтов: {len(result['site_ids'])}. "
+            "Данные загружаются в фоне — обновите дашборд через 1–2 минуты."
+        )
+        return RedirectResponse(url=f"{BP}/?msg={quote(msg)}", status_code=303)
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(url=f"{BP}/admin?msg={quote('Ошибка Яндекс: ' + str(exc))}", status_code=303)
 
 
 @router.post("/ui/gsc/connect")

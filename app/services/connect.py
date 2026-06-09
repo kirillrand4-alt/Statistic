@@ -145,6 +145,55 @@ def connect_gsc_service_account(
     return _finalize(db, backfill_days, background)
 
 
+def connect_yandex(db: Session, token: str, backfill_days: int = 480, background: bool = True) -> dict:
+    """Save the Yandex OAuth token, register hosts, and start pulling data."""
+    token = (token or "").strip()
+    if not token:
+        raise ValueError("Нужен OAuth-токен Яндекса (y0_...).")
+    set_cred("yandex_wm_token", token)
+    reset_cache("yandex_webmaster")
+
+    src = ensure_sources(db)["yandex_webmaster"]
+    provider = get_provider("yandex_webmaster")
+    created: list[str] = []
+    for entry in provider.list_sites():
+        url = entry.get("site_url")
+        if not url:
+            continue
+        host_id = entry.get("host_id")
+        existing = db.execute(
+            select(Site).where(Site.source_id == src.id, Site.property_uri == url)
+        ).scalar_one_or_none()
+        if existing is None:
+            db.add(
+                Site(
+                    source_id=src.id,
+                    property_uri=url,
+                    external_host_id=host_id,
+                    display_name=url,
+                    enabled=True,
+                )
+            )
+            db.commit()
+            created.append(url)
+        elif host_id and not existing.external_host_id:
+            existing.external_host_id = host_id
+            db.commit()
+
+    site_ids = [
+        s.id
+        for s in db.execute(
+            select(Site).where(Site.source_id == src.id, Site.enabled.is_(True))
+        ).scalars()
+    ]
+    if site_ids:
+        if background:
+            threading.Thread(target=_backfill_all, args=(site_ids, backfill_days), daemon=True).start()
+        else:
+            _backfill_all(site_ids, backfill_days)
+    return {"created": created, "site_ids": site_ids}
+
+
 def connect_gsc_oauth(
     db: Session,
     client_id: str,

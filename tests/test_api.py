@@ -13,6 +13,7 @@ from app.providers.mock import DEFAULT_PAGES, MockProvider
 @pytest.fixture()
 def client():
     register_override("gsc", MockProvider())
+    register_override("yandex_webmaster", MockProvider())
     from app.main import app
 
     with TestClient(app) as c:
@@ -140,3 +141,10 @@ def test_gsc_oauth_callback_bad_state(client):
     r = client.get("/oauth/callback?code=abc&state=wrong", follow_redirects=False)
     assert r.status_code == 303
     assert "/admin" in r.headers["location"]
+
+
+def test_yandex_connect_route(client):
+    r = client.post("/ui/yandex/connect", data={"token": "y0_xxx", "backfill_days": "15"})
+    assert r.status_code == 200  # redirect to dashboard, followed
+    sites = client.get("/api/sites").json()
+    assert any(s["source"] == "yandex_webmaster" for s in sites)
