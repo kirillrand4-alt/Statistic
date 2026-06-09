@@ -24,7 +24,8 @@ PROKO_CSV = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/e7171060
 SITEMAP = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/63b1d773-all_sitemap_urls_1.xlsx"
 CHECKED = ["/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/c7c60579-prices_checked_20260608.csv",
            "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/7fee0300-all_prices_20260609_102140.csv",
-           "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/4b460a4b-prices_checked_20260609.csv"]
+           "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/4b460a4b-prices_checked_20260609.csv",
+           "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/f85cae40-all_prices_20260609_143339.csv"]
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
                "pnevmo-sklad.ru","v-p-k.ru","rutector.ru"]
 DOM_FIX = {"rostov.pnevmo-sklad.ru":"pnevmo-sklad.ru",
