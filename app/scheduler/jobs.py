@@ -130,11 +130,11 @@ def run_backfill(db: Session, site_id: int, days: int = 480, chunk_days: int = 3
     end = date.today() - timedelta(days=1)
     start = end - timedelta(days=days)
     total = 0
-    cur = start
-    while cur <= end:  # commit each chunk separately -> progressive, small transactions
-        chunk_end = min(cur + timedelta(days=chunk_days - 1), end)
-        total += collect_site(db, site, DateRange(start=cur, end=chunk_end), job_type="backfill")
-        cur = chunk_end + timedelta(days=1)
+    chunk_end = end
+    while chunk_end >= start:  # newest chunk first -> recent data (default view) appears first
+        chunk_start = max(chunk_end - timedelta(days=chunk_days - 1), start)
+        total += collect_site(db, site, DateRange(start=chunk_start, end=chunk_end), job_type="backfill")
+        chunk_end = chunk_start - timedelta(days=1)
     return total
 
 

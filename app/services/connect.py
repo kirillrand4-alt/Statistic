@@ -97,11 +97,19 @@ def discover_and_register_sites(db: Session) -> list[Site]:
 def _backfill_all(site_ids: list[int], days: int) -> None:
     db = SessionLocal()
     try:
+        # Pass 1: short recent window for EVERY site, so all dashboards populate fast.
         for sid in site_ids:
             try:
-                run_backfill(db, sid, days)  # chunked: commits every ~30 days
+                run_backfill(db, sid, days=min(days, 14))
             except Exception:  # noqa: BLE001 - logged; visible in the runs table
-                logger.exception("Auto-backfill failed for site %s", sid)
+                logger.exception("Recent backfill failed for site %s", sid)
+        # Pass 2: full history per site (newest-first), only if a longer range was requested.
+        if days > 14:
+            for sid in site_ids:
+                try:
+                    run_backfill(db, sid, days=days)
+                except Exception:  # noqa: BLE001
+                    logger.exception("Full backfill failed for site %s", sid)
     finally:
         db.close()
 
