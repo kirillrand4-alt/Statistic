@@ -35,7 +35,7 @@
   <article>
     <header>Снимки</header>
     {% if snapshots %}
-    <table>
+    <table class="sortable">
       <thead><tr><th>Дата</th><th>Страниц</th></tr></thead>
       <tbody>{% for s in snapshots %}<tr><td>{{ s.date }}</td><td>{{ s.count|numfmt }}</td></tr>{% endfor %}</tbody>
     </table>

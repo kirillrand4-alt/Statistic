@@ -4,6 +4,7 @@ from __future__ import annotations
 from app.providers.base import DateRange
 from app.services.loaders import (
     agg_metrics,
+    load_device_metrics_df,
     load_page_metrics_df,
     load_site_totals_df,
     project_page_id_map,
@@ -51,6 +52,31 @@ def per_page_totals(db, site_id: int, dr: DateRange, page_ids=None) -> list[dict
         }
         for _, r in agg.iterrows()
     ]
+
+
+def per_page_with_devices(db, site_id: int, dr: DateRange, page_ids=None) -> list[dict]:
+    """Per-page totals plus desktop/mobile split (where device data exists)."""
+    base = {
+        p["url"]: dict(p, desktop_impr=0, desktop_clicks=0, mobile_impr=0, mobile_clicks=0)
+        for p in per_page_totals(db, site_id, dr, page_ids=page_ids)
+    }
+    df = load_device_metrics_df(db, site_id, dr, page_ids=page_ids)
+    if not df.empty:
+        g = df.groupby(["url", "device"], as_index=False).agg(
+            clicks=("clicks", "sum"), impressions=("impressions", "sum")
+        )
+        for r in g.itertuples():
+            row = base.get(r.url)
+            if row is not None and r.device in ("desktop", "mobile"):
+                row[f"{r.device}_impr"] = int(r.impressions)
+                row[f"{r.device}_clicks"] = int(r.clicks)
+    out = list(base.values())
+    for row in out:
+        for dev in ("desktop", "mobile"):
+            i = row[f"{dev}_impr"]
+            row[f"{dev}_ctr"] = (row[f"{dev}_clicks"] / i) if i else 0.0
+    out.sort(key=lambda r: r["clicks"], reverse=True)
+    return out
 
 
 def subset_totals(db, project, dr: DateRange) -> dict:

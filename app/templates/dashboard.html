@@ -22,6 +22,7 @@
   <label>С <input type="date" name="start" value="{{ range.start }}"></label>
   <label>По <input type="date" name="end" value="{{ range.end }}"></label>
   <label><input type="checkbox" name="clean" value="1" {% if clean %}checked{% endif %} onchange="this.form.submit()"> Без ботов</label>
+  <label><input type="checkbox" name="devices" value="1" {% if devices %}checked{% endif %} onchange="this.form.submit()"> Десктоп/моб отдельно</label>
   <label>&nbsp;<button type="submit">Показать</button></label>
 </form>
 {% if clean %}<p><mark>KPI ниже — «чистые» (вычтено «ботовое» устройство на страницах с перекосом ≥ {{ ratio }}×). График — сырой.</mark></p>{% endif %}
@@ -56,14 +57,17 @@
 
 {% if top_pages %}
 <article>
-  <header>Топ страниц сайта (по кликам)</header>
+  <header>Топ страниц сайта (по кликам){% if devices %} — десктоп/моб{% endif %}</header>
   <figure>
-  <table>
-    <thead><tr><th>URL</th><th>Клики</th><th>Показы</th><th>CTR</th><th>Позиция</th></tr></thead>
+  <table class="sortable">
+    <thead><tr><th>URL</th><th>Клики</th><th>Показы</th><th>CTR</th><th>Позиция</th>
+      {% if devices %}<th>Десктоп показы</th><th>Десктоп CTR</th><th>Моб показы</th><th>Моб CTR</th>{% endif %}</tr></thead>
     <tbody>
     {% for p in top_pages %}
       <tr><td><small>{{ p.url }}</small></td><td>{{ p.clicks|numfmt }}</td>
-          <td>{{ p.impressions|numfmt }}</td><td>{{ p.ctr|ctr }}</td><td>{{ p.position|pos }}</td></tr>
+          <td>{{ p.impressions|numfmt }}</td><td>{{ p.ctr|ctr }}</td><td>{{ p.position|pos }}</td>
+          {% if devices %}<td>{{ p.desktop_impr|numfmt }}</td><td>{{ p.desktop_ctr|ctr }}</td>
+          <td>{{ p.mobile_impr|numfmt }}</td><td>{{ p.mobile_ctr|ctr }}</td>{% endif %}</tr>
     {% endfor %}
     </tbody>
   </table>
@@ -80,7 +84,7 @@
   </article>
   <article>
     <header>Последние запуски сбора</header>
-    <table>
+    <table class="sortable">
       <thead><tr><th>Тип</th><th>Дата</th><th>Статус</th><th>Строк</th></tr></thead>
       <tbody>
       {% for r in runs %}

@@ -49,7 +49,8 @@ def _resolve_site(db: Session, site_id: int | None) -> Site | None:
 @router.get("/")
 def dashboard(request: Request, site_id: int | None = None, start: str | None = None,
               end: str | None = None, msg: str | None = None, clean: int = 0,
-              ratio: float = 10.0, min_impr: int = 100, db: Session = Depends(get_db)):
+              ratio: float = 10.0, min_impr: int = 100, devices: int = 0,
+              db: Session = Depends(get_db)):
     sites = _sites(db)
     site = _resolve_site(db, site_id)
     dr = parse_date_range(start, end)
@@ -61,6 +62,7 @@ def dashboard(request: Request, site_id: int | None = None, start: str | None = 
         "projects": db.execute(select(Project).order_by(Project.id)).scalars().all(),
         "range": dr,
         "clean": bool(clean), "ratio": ratio, "min_impr": min_impr,
+        "devices": bool(devices),
         "totals": None,
         "daily": [],
         "top_pages": [],
@@ -71,7 +73,10 @@ def dashboard(request: Request, site_id: int | None = None, start: str | None = 
     }
     if site is not None:
         ctx["daily"] = totals_svc.site_daily(db, site.id, dr)
-        ctx["top_pages"] = totals_svc.per_page_totals(db, site.id, dr)[:20]
+        if devices:
+            ctx["top_pages"] = totals_svc.per_page_with_devices(db, site.id, dr)[:20]
+        else:
+            ctx["top_pages"] = totals_svc.per_page_totals(db, site.id, dr)[:20]
         if clean:
             from app.services.antifraud import clean_values_by_url
             vals = clean_values_by_url(db, site.id, dr, ratio_threshold=ratio, min_impressions=min_impr).values()

@@ -59,10 +59,10 @@
 <article>
   <header>По каждому URL</header>
   <figure>
-  <table>
+  <table class="sortable">
     <thead>
-      <tr><th rowspan="2">URL</th>{% for code, label in engine_list %}<th colspan="4">{{ label }}</th>{% endfor %}</tr>
-      <tr>{% for code, label in engine_list %}<th>A</th><th>B</th><th>Δ</th><th>%</th>{% endfor %}</tr>
+      <tr><th rowspan="2" data-col="0">URL</th>{% for code, label in engine_list %}<th colspan="4">{{ label }}</th>{% endfor %}</tr>
+      <tr>{% for code, label in engine_list %}<th data-col="{{ 1 + loop.index0*4 }}">A</th><th data-col="{{ 2 + loop.index0*4 }}">B</th><th data-col="{{ 3 + loop.index0*4 }}">Δ</th><th data-col="{{ 4 + loop.index0*4 }}">%</th>{% endfor %}</tr>
     </thead>
     <tbody>
     {% for r in result.rows %}

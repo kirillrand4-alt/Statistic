@@ -220,6 +220,30 @@ def test_multi_compare_exclude_bots(db, site, project):
     assert res["exclude_bots"] is True
 
 
+def test_per_page_with_devices(db, site):
+    from datetime import date, timedelta
+
+    from app.db.models import DeviceMetricDaily, Page, PageMetricDaily
+    from app.providers.base import DateRange
+    from app.services import totals as totals_svc
+
+    d = date.today() - timedelta(days=1)
+    pg = Page(site_id=site.id, url="https://x/p", normalized_url="https://x/p")
+    db.add(pg)
+    db.commit()
+    db.add(PageMetricDaily(site_id=site.id, page_id=pg.id, date=d, clicks=30, impressions=300, position=4.0))
+    db.add_all([
+        DeviceMetricDaily(site_id=site.id, page_id=pg.id, date=d, device="desktop", clicks=20, impressions=200),
+        DeviceMetricDaily(site_id=site.id, page_id=pg.id, date=d, device="mobile", clicks=10, impressions=100),
+    ])
+    db.commit()
+
+    rows = totals_svc.per_page_with_devices(db, site.id, DateRange(start=d, end=d))
+    r = next(x for x in rows if x["url"] == "https://x/p")
+    assert r["desktop_impr"] == 200 and r["mobile_impr"] == 100
+    assert abs(r["desktop_ctr"] - 0.1) < 1e-9 and abs(r["mobile_ctr"] - 0.1) < 1e-9
+
+
 def test_antifraud_analyze(db, site):
     from datetime import date, timedelta
 

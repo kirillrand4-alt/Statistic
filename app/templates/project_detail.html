@@ -66,7 +66,7 @@
 <article>
   <header>ТОП-1 ключевой запрос по каждому URL</header>
   <figure>
-  <table>
+  <table class="sortable">
     <thead><tr><th>URL</th><th>ТОП-1 запрос</th><th>Клики</th><th>Показы</th><th>CTR</th><th>Позиция</th></tr></thead>
     <tbody>
     {% for r in top_keywords %}
@@ -87,7 +87,7 @@
 <article>
   <header>CTR по страницам</header>
   <figure>
-  <table>
+  <table class="sortable">
     <thead><tr><th>URL</th><th>Клики</th><th>Показы</th><th>CTR</th><th>Позиция</th></tr></thead>
     <tbody>
     {% for p in ctr.pages %}
