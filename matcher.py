@@ -33,7 +33,8 @@ BRAND_ALIASES = {
     "ingro":"ingro","baysar":"baysar","wis":"wis","tamsan":"tamsan","habe":"habe",
     "crossair":"cross","spitzenreiter":"spitzenreiter","paramina":"paramina","sigma":"sigma",
     "aztec":"aztec","chkz":"chkz","hori":"hori","mig":"mig","mmz":"mmz","spr":"spr",
-    "ir":"ir","ingersoll":"ir","rand":"ir","ac":"ac",
+    "ir":"ir","ingersoll":"ir","rand":"ir",
+    "ac":"atlas",   # «AC» = Atlas Copco (у нас: «AC GA22 VSD+», «AC ZR 110»; v-p-k: aq-…-ac-ff)
     # конкурентские бренды, которых нет у prokompressor (на рассмотрение)
     "xeleron":"xeleron","gmp":"gmp","kaishan":"kaishan","denair":"denair","vortex":"vortex",
     "brestor":"brestor","baldor":"baldor","alup":"alup",

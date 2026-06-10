@@ -52,9 +52,11 @@ def best_name(cur, nm):
     if not cur: return nm
     return nm if (len(nm) > len(cur) and ".46" not in nm) else cur
 
-def build():
-    names={}; specs={}; rescanned=set()      # url -> лучшее имя ; url -> объединённый specs
-    # 1) specs + имена из всех прогонов парсера (поздний переписывает ключи)
+def load_universe():
+    """Вся вселенная URL конкурентов: names (лучшее имя), specs (объединённые по URL,
+    поздний прогон переписывает ключи), rescanned (сканированы ОБНОВЛЁННЫМ парсером)."""
+    names={}; specs={}; rescanned=set()
+    # 1) specs + имена из всех прогонов парсера
     for f in SCRAPE_FILES:
         try: fh=open(f, encoding="utf-8-sig", errors="replace")
         except FileNotFoundError: continue
@@ -62,7 +64,7 @@ def build():
         for r in csv.DictReader(fh):
             u=(r.get("product_url") or "").strip()
             if not u: continue
-            if new_era: rescanned.add(u)     # сканирован ОБНОВЛЁННЫМ парсером
+            if new_era: rescanned.add(u)
             names[u]=best_name(names.get(u,""), (r.get("name") or "").strip())
             sp=r.get("specs") or ""
             if sp:
@@ -80,7 +82,10 @@ def build():
         for row in ws2.iter_rows(min_row=2, values_only=True):
             u=str(row[0]); names.setdefault(u, u.rstrip("/").split("/")[-1])
     except (FileNotFoundError, KeyError): pass
+    return names, specs, rescanned
 
+def build():
+    names, specs, rescanned = load_universe()
     # 3) фильтр Atlas-компрессоров конкурентов + проверка полноты характеристик.
     # «На странице нет данных»: URL пересканирован ОБНОВЛЁННЫМ парсером, поле всё равно
     # пустое -> сайт его не публикует, в txt не включаем (для матчинга пусто=не противоречит).
