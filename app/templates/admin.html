@@ -97,8 +97,8 @@
   <header>Сайты</header>
   {% if sites %}
   <figure>
-  <table>
-    <thead><tr><th>#</th><th>Источник</th><th>Ресурс</th><th>Вкл.</th><th>Действия</th></tr></thead>
+  <table class="sortable">
+    <thead><tr><th>#</th><th>Источник</th><th>Ресурс</th><th>Вкл.</th><th>Device (десктоп/моб)</th><th>Действия</th></tr></thead>
     <tbody>
     {% for s in sites %}
       <tr>
@@ -106,6 +106,7 @@
         <td>{{ s.source.code }}</td>
         <td><small>{{ s.property_uri }}</small></td>
         <td>{% if s.enabled %}✅{% else %}⏸{% endif %}</td>
+        <td><small>{{ device_cov.get(s.id, "—") }}</small></td>
         <td>
           <div class="grid">
             <form method="post" action="{{ base_path }}/ui/collect"><input type="hidden" name="site_id" value="{{ s.id }}"><button class="outline secondary" type="submit">Собрать</button></form>
