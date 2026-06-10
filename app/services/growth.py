@@ -21,7 +21,33 @@ METRICS = ("clicks", "impressions", "ctr", "position")
 GROUPINGS = ("site", "subset", "page", "query")
 
 
-def _grouped_frame(db, site_id, dr: DateRange, grouping: str, page_ids) -> pd.DataFrame:
+_CLEAN_COLS = ["key", "clicks", "impressions", "ctr", "position"]
+
+
+def _clean_frame(db, site_id, dr, grouping, page_ids, ratio, min_impr) -> pd.DataFrame:
+    """Bot-filtered grouped frame (site/subset/page) from device-split data."""
+    from app.services.antifraud import clean_values_by_url
+
+    pids = page_ids if grouping in ("subset", "page") else None
+    vals = clean_values_by_url(db, site_id, dr, page_ids=pids, ratio_threshold=ratio, min_impressions=min_impr)
+    if grouping == "page":
+        recs = [{"key": u, **{k: v[k] for k in ("clicks", "impressions", "ctr", "position")}} for u, v in vals.items()]
+        return pd.DataFrame(recs, columns=_CLEAN_COLS)
+    clicks = sum(v["clicks"] for v in vals.values())
+    impr = sum(v["impressions"] for v in vals.values())
+    posw = sum(v["position"] * v["impressions"] for v in vals.values())
+    key = "Весь сайт" if grouping == "site" else "Подмножество"
+    return pd.DataFrame(
+        [{"key": key, "clicks": clicks, "impressions": impr,
+          "ctr": (clicks / impr) if impr else 0.0, "position": (posw / impr) if impr else 0.0}],
+        columns=_CLEAN_COLS,
+    )
+
+
+def _grouped_frame(db, site_id, dr: DateRange, grouping: str, page_ids,
+                   exclude_bots: bool = False, ratio: float = 10.0, min_impr: int = 100) -> pd.DataFrame:
+    if exclude_bots and grouping in ("site", "subset", "page"):
+        return _clean_frame(db, site_id, dr, grouping, page_ids, ratio, min_impr)
     if grouping == "site":
         df = load_site_totals_df(db, site_id, dr).assign(key="Весь сайт")
         return agg_metrics(df, ["key"])
@@ -52,12 +78,15 @@ def compare(
     grouping: str = "site",
     page_ids=None,
     min_impressions: int = 0,
+    exclude_bots: bool = False,
+    ratio: float = 10.0,
+    min_impr: int = 100,
 ) -> dict:
     metric = metric if metric in METRICS else "clicks"
     grouping = grouping if grouping in GROUPINGS else "site"
 
-    ga = _grouped_frame(db, site_id, period_a, grouping, page_ids)
-    gb = _grouped_frame(db, site_id, period_b, grouping, page_ids)
+    ga = _grouped_frame(db, site_id, period_a, grouping, page_ids, exclude_bots, ratio, min_impr)
+    gb = _grouped_frame(db, site_id, period_b, grouping, page_ids, exclude_bots, ratio, min_impr)
     merged = ga.merge(gb, on="key", how="outer", suffixes=("_a", "_b"))
     numeric = [f"{m}_{s}" for m in METRICS for s in ("a", "b")]
     for c in numeric:
@@ -90,7 +119,8 @@ def compare(
     rows.sort(key=lambda x: x["delta"], reverse=(metric != "position"))
 
     summary = _summary(merged, metric)
-    return {"metric": metric, "grouping": grouping, "rows": rows, "summary": summary}
+    return {"metric": metric, "grouping": grouping, "exclude_bots": exclude_bots,
+            "rows": rows, "summary": summary}
 
 
 def _summary(merged: pd.DataFrame, metric: str) -> dict:

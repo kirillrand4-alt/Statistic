@@ -21,8 +21,10 @@
   </label>
   <label>С <input type="date" name="start" value="{{ range.start }}"></label>
   <label>По <input type="date" name="end" value="{{ range.end }}"></label>
+  <label><input type="checkbox" name="clean" value="1" {% if clean %}checked{% endif %} onchange="this.form.submit()"> Без ботов</label>
   <label>&nbsp;<button type="submit">Показать</button></label>
 </form>
+{% if clean %}<p><mark>KPI ниже — «чистые» (вычтено «ботовое» устройство на страницах с перекосом ≥ {{ ratio }}×). График — сырой.</mark></p>{% endif %}
 
 {% if totals %}
 <div class="grid">

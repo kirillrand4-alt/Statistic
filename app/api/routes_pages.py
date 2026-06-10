@@ -48,7 +48,8 @@ def _resolve_site(db: Session, site_id: int | None) -> Site | None:
 
 @router.get("/")
 def dashboard(request: Request, site_id: int | None = None, start: str | None = None,
-              end: str | None = None, msg: str | None = None, db: Session = Depends(get_db)):
+              end: str | None = None, msg: str | None = None, clean: int = 0,
+              ratio: float = 10.0, min_impr: int = 100, db: Session = Depends(get_db)):
     sites = _sites(db)
     site = _resolve_site(db, site_id)
     dr = parse_date_range(start, end)
@@ -59,6 +60,7 @@ def dashboard(request: Request, site_id: int | None = None, start: str | None = 
         "site": site,
         "projects": db.execute(select(Project).order_by(Project.id)).scalars().all(),
         "range": dr,
+        "clean": bool(clean), "ratio": ratio, "min_impr": min_impr,
         "totals": None,
         "daily": [],
         "top_pages": [],
@@ -68,9 +70,18 @@ def dashboard(request: Request, site_id: int | None = None, start: str | None = 
         "gsc_site_url": get_settings().gsc_site_url,
     }
     if site is not None:
-        ctx["totals"] = totals_svc.site_totals(db, site.id, dr)
         ctx["daily"] = totals_svc.site_daily(db, site.id, dr)
         ctx["top_pages"] = totals_svc.per_page_totals(db, site.id, dr)[:20]
+        if clean:
+            from app.services.antifraud import clean_values_by_url
+            vals = clean_values_by_url(db, site.id, dr, ratio_threshold=ratio, min_impressions=min_impr).values()
+            cl = sum(v["clicks"] for v in vals)
+            im = sum(v["impressions"] for v in vals)
+            pw = sum(v["position"] * v["impressions"] for v in vals)
+            ctx["totals"] = {"clicks": cl, "impressions": im,
+                             "ctr": (cl / im) if im else 0.0, "position": (pw / im) if im else 0.0}
+        else:
+            ctx["totals"] = totals_svc.site_totals(db, site.id, dr)
     return templates.TemplateResponse(request, "dashboard.html", ctx)
 
 
@@ -349,7 +360,8 @@ def compare_page(request: Request, site_id: int | None = None, metric: str = "cl
                  grouping: str = "site", project_id: int | None = None,
                  a_start: str | None = None, a_end: str | None = None,
                  b_start: str | None = None, b_end: str | None = None,
-                 min_impressions: int = 0, db: Session = Depends(get_db)):
+                 min_impressions: int = 0, clean: int = 0, ratio: float = 10.0,
+                 min_impr: int = 100, db: Session = Depends(get_db)):
     sites = _sites(db)
     site = _resolve_site(db, site_id)
     result = None
@@ -364,6 +376,7 @@ def compare_page(request: Request, site_id: int | None = None, metric: str = "cl
         result = growth.compare(
             db, site.id, metric, period_a=period_a, period_b=period_b,
             grouping=grouping, page_ids=page_ids, min_impressions=min_impressions,
+            exclude_bots=bool(clean), ratio=ratio, min_impr=min_impr,
         )
     return templates.TemplateResponse(
         request,
@@ -377,6 +390,7 @@ def compare_page(request: Request, site_id: int | None = None, metric: str = "cl
             "grouping": grouping,
             "project_id": project_id,
             "min_impressions": min_impressions,
+            "clean": bool(clean), "ratio": ratio, "min_impr": min_impr,
             "period_a": period_a,
             "period_b": period_b,
             "result": result,

@@ -38,9 +38,13 @@
   </div>
   <div class="grid">
     <label>Мин. показов (фильтр шума) <input type="number" name="min_impressions" value="{{ min_impressions }}" min="0"></label>
+    <label><input type="checkbox" name="clean" value="1" {% if clean %}checked{% endif %}> Вычитать ботов (≥ N×)</label>
+    <label>Порог N× <input type="number" name="ratio" value="{{ ratio }}" min="2" step="1"></label>
+    <label>Шум устройств (≤ показов) <input type="number" name="min_impr" value="{{ min_impr }}" min="0"></label>
     <label>&nbsp;<button type="submit">Сравнить</button></label>
   </div>
 </form>
+{% if clean %}<p><mark>«Чистые» данные: вычтено «ботовое» устройство на страницах с перекосом ≥ {{ ratio }}×. Для группировки «По запросам» фильтр не применяется (нет разбивки запросов по устройствам).</mark></p>{% endif %}
 
 {% if result %}
   {% set s = result.summary %}

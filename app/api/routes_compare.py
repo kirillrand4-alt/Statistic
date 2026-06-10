@@ -23,6 +23,9 @@ def compare(
     b_start: str | None = None,
     b_end: str | None = None,
     min_impressions: int = 0,
+    clean: int = 0,
+    ratio: float = 10.0,
+    min_impr: int = 100,
     db: Session = Depends(get_db),
 ):
     if db.get(Site, site_id) is None:
@@ -46,6 +49,9 @@ def compare(
         grouping=grouping,
         page_ids=page_ids,
         min_impressions=min_impressions,
+        exclude_bots=bool(clean),
+        ratio=ratio,
+        min_impr=min_impr,
     )
     result["period_a"] = {"start": period_a.start.isoformat(), "end": period_a.end.isoformat()}
     result["period_b"] = {"start": period_b.start.isoformat(), "end": period_b.end.isoformat()}
