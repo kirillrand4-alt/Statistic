@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
-# генерируемые файлы-обзоры и списки (пересобираются из build_review.py)
+# генерируемые файлы-обзоры и списки (пересобираются скриптами)
 *_review.xlsx
-*_links.txt
-*_for_specs.txt
+*.txt
+!requirements.txt
+night_run/
+specs/
