@@ -70,6 +70,7 @@ PARTS_RE = re.compile(
     r'охладител|термостат|манометр|реле|плата|датчик|sensor|контроллер|двигател|'
     r'электродвигател|\bмотор\b|\bблок\b|airend|маслоотделит|\bмасло\b|смазк|antifriz|'
     r'осушител[ья]\s|^осушител|рем\.?\s?набор|to-\d|для компрессор|элемент\b|'
+    r'сервис|обслуживан|\bнабор|'
     r'vozdushnyy-filtr|maslyanyy-filtr|remen\b|klapan|podshipnik|separator|filtr|'
     r'dvigatel|kontroller|datchik|mufta|shlang|radiator|ohladitel|termostat|manometr', re.I)
 
