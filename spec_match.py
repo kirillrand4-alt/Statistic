@@ -131,10 +131,11 @@ PARTS_RE = re.compile(
     r'осушител[ья]\s|^осушител|рем\.?\s?набор|to-\d|для компрессор|элемент\b|'
     r'сервис|обслуживан|\bнабор|'
     r'vozdushnyy-filtr|maslyanyy-filtr|remen\b|klapan|podshipnik|separator|filtr|'
-    r'dvigatel|kontroller|datchik|mufta|shlang|radiator|ohladitel|termostat|manometr', re.I)
+    r'dvigatel|kontroller|datchik|mufta|shlang|radiator|ohladitel|termostat|manometr|'
+    r'servis|obsluzhivan|remkomplekt|zapchast|\bnabor|komplekt|\bmaslo\b|maslomineral', re.I)
 
 CATEGORY_RE = re.compile(
-    r'компрессоры\b|kompressoryi\b|kompressoryi[-_]|[-_]kompressoryi|вся\s+серия|модельный\s+ряд',
+    r'компрессоры\b|kompressor(?:yi|y|i)(?![a-z])|вся\s+серия|модельный\s+ряд',
     re.I)
 
 def is_compressor(text):
