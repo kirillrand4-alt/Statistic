@@ -97,10 +97,15 @@ PARTS_RE = re.compile(
     r'vozdushnyy-filtr|maslyanyy-filtr|remen\b|klapan|podshipnik|separator|filtr|'
     r'dvigatel|kontroller|datchik|mufta|shlang|radiator|ohladitel|termostat|manometr', re.I)
 
+CATEGORY_RE = re.compile(
+    r'компрессоры\b|kompressoryi\b|kompressoryi[-_]|[-_]kompressoryi|вся\s+серия|модельный\s+ряд',
+    re.I)
+
 def is_compressor(text):
-    """text = имя + слаг. Компрессор: есть слово «компрессор» (не множ. «компрессоры»
-    в начале = категория), и нет маркеров запчастей."""
-    t = " " + str(text).lower().replace("_", "-") + " "
+    """text = имя + слаг. Компрессор (товар), а не категория/листинг серии и не запчасть.
+    Множественное «компрессорЫ»/«kompressoryi» где угодно = листинг серии -> не товар."""
+    s = str(text).lower()
+    t = " " + s.replace("_", "-") + " "
+    if CATEGORY_RE.search(s) or CATEGORY_RE.search(t): return False   # листинг серии
     if PARTS_RE.search(t): return False
-    if re.match(r'\s*компрессоры\b', str(text).lower()): return False   # листинг серии
     return ("компрессор" in t or "kompressor" in t or "compressor" in t)
