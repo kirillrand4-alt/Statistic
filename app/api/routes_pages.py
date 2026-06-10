@@ -398,6 +398,54 @@ def compare_page(request: Request, site_id: int | None = None, metric: str = "cl
     )
 
 
+@router.get("/indexing")
+def indexing_page(request: Request, site_id: int | None = None, a: str | None = None,
+                  b: str | None = None, msg: str | None = None, db: Session = Depends(get_db)):
+    from app.services import indexing
+
+    sites = _sites(db)
+    site = _resolve_site(db, site_id)
+    snapshots, history, cmp, can_capture = [], [], None, False
+    if site is not None:
+        can_capture = indexing.supports(site)
+        snapshots = indexing.list_snapshots(db, site.id)
+        history = indexing.count_history(db, site)
+        dates = [s["date"] for s in snapshots]
+        da = a or (dates[0] if dates else None)
+        db_ = b or (dates[1] if len(dates) > 1 else None)
+        if da and db_:
+            cmp = indexing.compare_snapshots(db, site.id, date.fromisoformat(da), date.fromisoformat(db_))
+            a, b = da, db_
+    return templates.TemplateResponse(
+        request,
+        "indexing.html",
+        {
+            "request": request, "msg": msg, "sites": sites, "site": site,
+            "snapshots": snapshots, "history": history, "cmp": cmp,
+            "a": a, "b": b, "can_capture": can_capture,
+        },
+    )
+
+
+@router.post("/ui/indexing/capture")
+def ui_indexing_capture(site_id: int = Form(...), db: Session = Depends(get_db)):
+    import threading
+
+    from app.services import indexing
+
+    site = db.get(Site, site_id)
+    if site is None or not indexing.supports(site):
+        return RedirectResponse(
+            url=f"{BP}/indexing?site_id={site_id}&msg={quote('Этот источник не отдаёт список страниц в индексе (доступно для Яндекса).')}",
+            status_code=303,
+        )
+    threading.Thread(target=indexing.capture_async, args=(site_id,), daemon=True).start()
+    return RedirectResponse(
+        url=f"{BP}/indexing?site_id={site_id}&msg={quote('Снимок страниц в индексе создаётся в фоне — обновите через минуту.')}",
+        status_code=303,
+    )
+
+
 @router.get("/antifraud")
 def antifraud_page(request: Request, site_id: int | None = None, start: str | None = None,
                    end: str | None = None, ratio: float = 10.0, min_impr: int = 100,

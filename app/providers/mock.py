@@ -55,7 +55,9 @@ def _daterange(dr: DateRange) -> Iterable[date]:
 
 class MockProvider(SearchDataProvider):
     code = "mock"
-    capabilities = {"page_metrics", "query_metrics_per_url", "site_totals", "all_query_metrics"}
+    capabilities = {
+        "page_metrics", "query_metrics_per_url", "site_totals", "all_query_metrics", "indexed_urls",
+    }
 
     def __init__(self, pages=None, queries_by_page=None):
         self.pages = pages or DEFAULT_PAGES
@@ -92,6 +94,14 @@ class MockProvider(SearchDataProvider):
 
     def list_sites(self):
         return [{"site_url": "sc-domain:example.com", "permission": "siteOwner"}]
+
+    def fetch_indexed_urls(self, site, cap: int = 50000):
+        for u in self.pages:
+            yield {"url": u, "title": u, "last_access": None}
+
+    def fetch_index_count_history(self, site):
+        return [{"date": "2026-01-01", "count": len(self.pages)},
+                {"date": "2026-02-01", "count": len(self.pages) + 2}]
 
     def fetch_site_totals(self, site, dr):
         for day in _daterange(dr):

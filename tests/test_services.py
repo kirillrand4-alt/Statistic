@@ -251,6 +251,32 @@ def test_antifraud_analyze(db, site):
     assert res["summary"]["removed_impressions"] == 1000
 
 
+def test_indexing_capture_and_compare(db, site):
+    from datetime import date, timedelta
+
+    from app.db.models import IndexedUrlSnapshot
+    from app.services import indexing
+
+    n = indexing.capture_indexed_urls(db, site)  # mock -> DEFAULT_PAGES
+    assert n >= 1
+    snaps = indexing.list_snapshots(db, site.id)
+    assert snaps and snaps[0]["count"] == n
+
+    # fabricate an older snapshot missing one URL and with an extra dropped one
+    older = date.today() - timedelta(days=7)
+    today_urls = {s.normalized_url for s in db.execute(
+        select(IndexedUrlSnapshot).where(IndexedUrlSnapshot.captured_on == date.today())
+    ).scalars()}
+    keep = list(today_urls)[:-1]  # drop one -> it "entered" today
+    db.add_all([IndexedUrlSnapshot(site_id=site.id, captured_on=older, url=u, normalized_url=u) for u in keep])
+    db.add(IndexedUrlSnapshot(site_id=site.id, captured_on=older, url="https://gone", normalized_url="https://gone"))
+    db.commit()
+
+    cmp = indexing.compare_snapshots(db, site.id, date.today(), older)
+    assert len(cmp["added"]) == 1     # the URL not in the older snapshot
+    assert any(r["url"] == "https://gone" for r in cmp["removed"])
+
+
 def test_base_path_normalization():
     from app.config import Settings
 

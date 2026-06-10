@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Индексация · SEO Статистика{% endblock %}
+{% block content %}
+<h2>Страницы в индексе</h2>
+{% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
+
+{% if not sites %}<article><p>Сначала подключите источник.</p></article>{% else %}
+<form method="get" action="{{ base_path }}/indexing" class="grid">
+  <label>Сайт
+    <select name="site_id" onchange="this.form.submit()">
+      {% for s in sites %}<option value="{{ s.id }}" {% if site and s.id==site.id %}selected{% endif %}>{{ s.source.code|srclabel }} · {{ s.display_name or s.property_uri }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>&nbsp;<button type="submit">Показать</button></label>
+</form>
+
+{% if can_capture %}
+<form method="post" action="{{ base_path }}/ui/indexing/capture">
+  <input type="hidden" name="site_id" value="{{ site.id }}">
+  <button type="submit">📥 Скачать страницы в индексе (снимок)</button>
+  <small>Сохраняет текущий список проиндексированных URL с сегодняшней датой. Повторяйте периодически — потом можно сравнивать.</small>
+</form>
+{% else %}
+<article><p><small>Выгрузка списка страниц в индексе доступна для <strong>Яндекса</strong>. Выберите Яндекс-сайт.</small></p></article>
+{% endif %}
+
+{% if history %}
+<article>
+  <header>Динамика числа страниц в индексе</header>
+  <canvas id="idx" height="90"></canvas>
+</article>
+{% endif %}
+
+<div class="grid">
+  <article>
+    <header>Снимки</header>
+    {% if snapshots %}
+    <table>
+      <thead><tr><th>Дата</th><th>Страниц</th></tr></thead>
+      <tbody>{% for s in snapshots %}<tr><td>{{ s.date }}</td><td>{{ s.count|numfmt }}</td></tr>{% endfor %}</tbody>
+    </table>
+    {% else %}<p><small>Снимков пока нет — нажмите «Скачать страницы в индексе».</small></p>{% endif %}
+  </article>
+  <article>
+    <header>Сравнить два снимка</header>
+    {% if snapshots|length >= 2 %}
+    <form method="get" action="{{ base_path }}/indexing" class="grid">
+      <input type="hidden" name="site_id" value="{{ site.id }}">
+      <label>Новее
+        <select name="a">{% for s in snapshots %}<option value="{{ s.date }}" {% if a==s.date %}selected{% endif %}>{{ s.date }}</option>{% endfor %}</select>
+      </label>
+      <label>Старее
+        <select name="b">{% for s in snapshots %}<option value="{{ s.date }}" {% if b==s.date %}selected{% endif %}>{{ s.date }}</option>{% endfor %}</select>
+      </label>
+      <label>&nbsp;<button type="submit">Сравнить</button></label>
+    </form>
+    {% else %}<p><small>Нужно минимум два снимка (в разные дни).</small></p>{% endif %}
+  </article>
+</div>
+
+{% if cmp %}
+<div class="grid">
+  <article>
+    <header><ins>Вошли в индекс</ins>: {{ cmp.added|length }} (было {{ cmp.count_b }} → стало {{ cmp.count_a }})</header>
+    <figure><table><tbody>
+      {% for u in cmp.added[:200] %}<tr><td><small>{{ u.url }}</small></td></tr>{% else %}<tr><td><small>—</small></td></tr>{% endfor %}
+    </tbody></table></figure>
+  </article>
+  <article>
+    <header><del>Выпали из индекса</del>: {{ cmp.removed|length }}</header>
+    <figure><table><tbody>
+      {% for u in cmp.removed[:200] %}<tr><td><small>{{ u.url }}</small></td></tr>{% else %}<tr><td><small>—</small></td></tr>{% endfor %}
+    </tbody></table></figure>
+  </article>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if history %}
+<script>
+  const h = {{ history|tojson }};
+  new Chart(document.getElementById('idx'), {
+    type: 'line',
+    data: {labels: h.map(p => p.date), datasets: [{label: 'Страниц в индексе', data: h.map(p => p.count), borderColor: '#1095c1', tension: .2, pointRadius: 0}]},
+    options: {plugins: {legend: {display: false}}}
+  });
+</script>
+{% endif %}
+{% endblock %}

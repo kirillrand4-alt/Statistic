@@ -40,7 +40,9 @@ def _is_retryable(exc: BaseException) -> bool:
 
 class YandexWebmasterProvider(SearchDataProvider):
     code = "yandex_webmaster"
-    capabilities = {"site_totals", "page_metrics", "all_query_metrics", "device_metrics"}
+    capabilities = {
+        "site_totals", "page_metrics", "all_query_metrics", "device_metrics", "indexed_urls",
+    }
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
@@ -218,3 +220,27 @@ class YandexWebmasterProvider(SearchDataProvider):
     def fetch_query_metrics_for_url(self, site, url: str, dr: DateRange) -> Iterable[QueryMetricRow]:
         # collection uses fetch_all_query_metrics; this stays a no-op for now.
         return []
+
+    # ----- pages in the search index -----
+    def fetch_indexed_urls(self, site, cap: int = 50000):
+        host_id = site.external_host_id or site.property_uri
+        base = f"/user/{self.user_id()}/hosts/{host_id}/search-urls/in-search/samples"
+        offset, limit = 0, 100
+        while offset < cap:
+            data = self._get(base, params={"limit": limit, "offset": offset})
+            samples = data.get("samples", []) or []
+            for s in samples:
+                u = s.get("url")
+                if u:
+                    yield {"url": u, "title": s.get("title"), "last_access": s.get("last_access")}
+            if len(samples) < limit:
+                break
+            offset += limit
+
+    def fetch_index_count_history(self, site) -> list[dict]:
+        host_id = site.external_host_id or site.property_uri
+        data = self._get(f"/user/{self.user_id()}/hosts/{host_id}/search-urls/in-search/history")
+        return [
+            {"date": (p.get("date") or "")[:10], "count": int(p.get("value") or 0)}
+            for p in data.get("history", []) or []
+        ]

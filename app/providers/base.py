@@ -96,6 +96,14 @@ class SearchDataProvider(ABC):
     def fetch_page_metrics_by_device(self, site, dr: DateRange) -> Iterable["DeviceMetricRow"]:
         raise NotImplementedError
 
+    # Optional — pages currently in the search index: yields {url, title, last_access}.
+    def fetch_indexed_urls(self, site, cap: int = 50000) -> Iterable[dict]:
+        raise NotImplementedError
+
+    # Optional — history of the number of pages in the index: [{date, count}].
+    def fetch_index_count_history(self, site) -> list[dict]:
+        raise NotImplementedError
+
     def data_delay_days(self) -> int:
         """How many recent days are typically not yet finalized."""
         return 0

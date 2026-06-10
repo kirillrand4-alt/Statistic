@@ -211,6 +211,23 @@ class DeviceMetricDaily(Base):
     position: Mapped[float] = mapped_column(Float, default=0.0)
 
 
+class IndexedUrlSnapshot(Base):
+    """A dated snapshot of URLs in the search index (for in/out comparison)."""
+
+    __tablename__ = "indexed_url_snapshot"
+    __table_args__ = (
+        UniqueConstraint("site_id", "captured_on", "normalized_url", name="uq_ius"),
+        Index("ix_ius_site_date", "site_id", "captured_on"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("site.id"))
+    captured_on: Mapped[date_type] = mapped_column(Date)
+    url: Mapped[str] = mapped_column(String(2048))
+    normalized_url: Mapped[str] = mapped_column(String(2048))
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+
 class AppSetting(Base):
     """Runtime-editable key/value config (optionally encrypted)."""
 
