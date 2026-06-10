@@ -62,3 +62,21 @@ def match(o, cands):
         if not agree(o.get("rv"), c.get("rv")): continue
         out.append(c)
     return out
+
+# --- классификатор «это компрессор, а не запчасть/категория» (по имени+слагу) ---
+PARTS_RE = re.compile(
+    r'фильтр|filter|\bkit\b|ремкомплект|запчаст|сепаратор|separator|клапан|valve|'
+    r'ремень|belt|подшипник|прокладк|gasket|картридж|шланг|hose|муфта|радиатор|'
+    r'охладител|термостат|манометр|реле|плата|датчик|sensor|контроллер|двигател|'
+    r'электродвигател|\bмотор\b|\bблок\b|airend|маслоотделит|\bмасло\b|смазк|antifriz|'
+    r'осушител[ья]\s|^осушител|рем\.?\s?набор|to-\d|для компрессор|элемент\b|'
+    r'vozdushnyy-filtr|maslyanyy-filtr|remen\b|klapan|podshipnik|separator|filtr|'
+    r'dvigatel|kontroller|datchik|mufta|shlang|radiator|ohladitel|termostat|manometr', re.I)
+
+def is_compressor(text):
+    """text = имя + слаг. Компрессор: есть слово «компрессор» (не множ. «компрессоры»
+    в начале = категория), и нет маркеров запчастей."""
+    t = " " + str(text).lower().replace("_", "-") + " "
+    if PARTS_RE.search(t): return False
+    if re.match(r'\s*компрессоры\b', str(text).lower()): return False   # листинг серии
+    return ("компрессор" in t or "kompressor" in t or "compressor" in t)
