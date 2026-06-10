@@ -17,4 +17,10 @@ SCRAPE_FILES = [
     U + "2ad0f5e3-all_prices_20260610_060124.csv",
     U + "9c5d90fd-all_prices_20260610_061533.csv",
     U + "c6dd7a65-all_prices_20260610_063956.csv",
+    U + "5beded8c-all_prices_20260610_074407.csv",   # дочистка Atlas: прогон по atlas_competitors_need_specs
 ]
+
+# прогоны ОБНОВЛЁННОГО парсера (фиксы проверены с 06:01 10.06, см. PARSER_NOTES).
+# Если URL сканирован новым парсером и поле всё равно пустое — на странице данных нет,
+# повторный прогон не поможет.
+NEW_PARSER_FILES = [f for f in SCRAPE_FILES if f.split("-all_prices_")[-1] >= "20260610_060124"]

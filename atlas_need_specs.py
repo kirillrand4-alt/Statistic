@@ -11,7 +11,7 @@ from collections import Counter
 from urllib.parse import urlparse, unquote
 from matcher import brand_of, domain
 from spec_match import is_compressor
-from scrape_files import SCRAPE_FILES, U
+from scrape_files import SCRAPE_FILES, NEW_PARSER_FILES, U
 
 SRC     = U + "03d65e4a-_______________________.xlsx"          # большой прайс-файл конкурентов
 SITEMAP = U + "63b1d773-all_sitemap_urls_1.xlsx"
@@ -25,10 +25,15 @@ def slug(u):  # последний сегмент пути (без домена:
     return p.split("/")[-1] if p else ""
 
 def is_product_url(u):
-    """Отсев НЕ-товарных страниц (аренда / категории-листинги), которые проходят по бренду+числу."""
+    """Отсев НЕ-товарных страниц (аренда / категории-листинги / статьи / проекты / б-у),
+    которые проходят по бренду+числу."""
     ul=str(u).lower()
     if "arenda" in ul: return False             # аренда оборудования, не продажа
     if "v-p-k.ru/catalog" in ul: return False   # v-p-k: /catalog/=категория; товары в /product/
+    if re.search(r"/(stati|articles|blog|news|novosti|company|nashi_proekty|proekty)/", ul):
+        return False                            # статьи-обзоры / новости / кейсы «наши проекты»
+    if "bu-oborud" in ul or re.search(r"(?:^|[-_/])b[-_]?u(?:[-_/0-9]|$)|bez_narabotki", ul):
+        return False                            # б/у: цена несопоставима с новым
     return True
 
 # --- наличие характеристики в specs (СНЯЛ ли парсер число; не матчинг-санити!) ---
@@ -48,14 +53,16 @@ def best_name(cur, nm):
     return nm if (len(nm) > len(cur) and ".46" not in nm) else cur
 
 def build():
-    names={}; specs={}                       # url -> лучшее имя ; url -> объединённый specs
+    names={}; specs={}; rescanned=set()      # url -> лучшее имя ; url -> объединённый specs
     # 1) specs + имена из всех прогонов парсера (поздний переписывает ключи)
     for f in SCRAPE_FILES:
         try: fh=open(f, encoding="utf-8-sig", errors="replace")
         except FileNotFoundError: continue
+        new_era = f in NEW_PARSER_FILES
         for r in csv.DictReader(fh):
             u=(r.get("product_url") or "").strip()
             if not u: continue
+            if new_era: rescanned.add(u)     # сканирован ОБНОВЛЁННЫМ парсером
             names[u]=best_name(names.get(u,""), (r.get("name") or "").strip())
             sp=r.get("specs") or ""
             if sp:
@@ -74,8 +81,10 @@ def build():
             u=str(row[0]); names.setdefault(u, u.rstrip("/").split("/")[-1])
     except (FileNotFoundError, KeyError): pass
 
-    # 3) фильтр Atlas-компрессоров конкурентов + проверка полноты характеристик
-    need=[]; complete=0
+    # 3) фильтр Atlas-компрессоров конкурентов + проверка полноты характеристик.
+    # «На странице нет данных»: URL пересканирован ОБНОВЛЁННЫМ парсером, поле всё равно
+    # пустое -> сайт его не публикует, в txt не включаем (для матчинга пусто=не противоречит).
+    need=[]; nodata=[]; complete=0
     by_site=Counter(); reason=Counter()
     for u,nm in names.items():
         if dm(u) not in COMPETITORS: continue
@@ -88,6 +97,8 @@ def build():
         kw=has_kw(sd); bar=has_bar(sd); fl=has_flow(sd)
         if kw and bar and fl:
             complete+=1; continue
+        if u in rescanned:
+            nodata.append(u); continue
         need.append(u); by_site[dm(u)]+=1
         if not sd:                 reason["нет данных вообще (не сканировали)"]+=1
         else:
@@ -98,12 +109,14 @@ def build():
     need=sorted(set(need))
     with open(OUT, "w", encoding="utf-8") as fh:
         fh.write("\n".join(need)+"\n")
-    print(f"Atlas-компрессоры конкурентов: всего {complete+len(need)} | "
-          f"полные {complete} | НАДО ДОЧИСТИТЬ {len(need)}")
+    print(f"Atlas-компрессоры конкурентов: всего {complete+len(need)+len(nodata)} | "
+          f"полные {complete} | сайт не публикует {len(nodata)} | НАДО ДОЧИСТИТЬ {len(need)}")
     print("\nпо сайтам (надо дочистить):")
     for s,c in by_site.most_common(): print(f"  {s:<20} {c}")
     print("\nпричины:")
     for s,c in reason.most_common(): print(f"  {s:<35} {c}")
+    print("\nсайт не публикует поле (пересканировано новым парсером, в txt НЕ включены):")
+    for u in sorted(nodata): print("  ", u)
     print(f"\n-> {OUT}")
 
 if __name__=="__main__":
