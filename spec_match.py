@@ -72,6 +72,7 @@ def bar_from_text(t):
     return sane_bar(num(m.group(1))) if m else None
 
 
+
 def flow_to_lmin(v, key=""):
     """Производительность -> л/мин, с учётом единицы из ключа.
     'м3/мин'/'м³/мин' -> *1000; 'м3/час' -> /60*1000=/0.06; 'л/мин' как есть.
@@ -87,6 +88,17 @@ def flow_to_lmin(v, key=""):
 
 def sane_flow(v, key=""):   # совместимость
     return flow_to_lmin(v, key)
+
+def flow_value(raw, key=""):
+    """Из значения производительности (возможно диапазон '8,2 - 21,9') берём МАКСИМУМ
+    и приводим к л/мин по единице ключа. Так VSD (диапазон) сравнивается по максимуму,
+    как и прописано в каталоге prokompressor."""
+    s = str(raw)
+    nums = re.findall(r'\d+[.,]?\d*', s.replace(" ", ""))
+    if not nums: return None
+    vals = [float(x.replace(",", ".")) for x in nums]
+    return flow_to_lmin(max(vals), key)
+
 
 def agree(a, b):                 # пусто с любой стороны = не противоречит
     return a is None or b is None or a == b
