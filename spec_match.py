@@ -26,16 +26,32 @@ def series_num(text, ser_re=SER_ATLAS):
     return (m.group(1).lower(), float(m.group(2).replace(",","."))) if m else None
 
 def text_flags(text):
-    """FF (осушитель) / VSD (частотник) / объём ресивера — вшиты в артикул."""
+    """FF (осушитель) / VSD (частотник) / ресивер — вшиты в артикул.
+    rv: None = ресивер не упомянут; 1 = упомянут без объёма; N = объём в литрах."""
     tl = " " + str(text).lower().replace("_","-") + " "
     ff  = 1 if re.search(r'\bff\b', tl) else None
     vsd = 1 if ("vsd" in tl or "частот" in tl) else None
     rv = None
-    m = re.search(r'\b(tm|на ресивере|resiver)[- ]?(\d{2,3})?\b', tl)
-    if m: rv = num(m.group(2)) or 1
+    m = re.search(r'(?:ресивер\w*|resiver\w*|receiver\w*|\btm\b)[- ]?(\d{2,3})?', tl)
+    if m: rv = num(m.group(1)) or 1
     m2 = re.search(r'[- ](270|500|900)\b', tl)
     if m2: rv = float(m2.group(1))
     return ff, vsd, rv
+
+def receiver_filter(o_rv, cands):
+    """Направленное правило ресивера (наш артикул кодирует вариант всегда):
+    - у нас ресивера НЕТ -> кандидаты с явным ресивером исключаются;
+    - у нас ЕСТЬ -> если есть кандидаты с явным ресивером, молчаливые отбрасываем
+      (раз сосед подписан, молчание = без ресивера); объёмы, если оба известны, должны сойтись."""
+    if o_rv is None:
+        return [c for c in cands if c.get("rv") is None]
+    explicit=[c for c in cands if c.get("rv") is not None]
+    pool = explicit if explicit else cands
+    out=[]
+    for c in pool:
+        crv=c.get("rv")
+        if crv is None or crv==1 or o_rv==1 or crv==o_rv: out.append(c)
+    return out
 
 def sane_kw(v):  return v if v and 0.2 <= v <= 2000 else None   # мусор (вес 0.0001) -> None
 def sane_bar(v): return v if v and 3 <= v <= 400 else None
