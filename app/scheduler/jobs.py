@@ -115,6 +115,8 @@ def collect_site(db: Session, site: Site, dr: DateRange, job_type: str = "daily"
 
 
 def run_daily_collect(db: Session) -> dict[int, int]:
+    from app.services import indexing
+
     settings = get_settings()
     today = date.today()
     results: dict[int, int] = {}
@@ -125,6 +127,13 @@ def run_daily_collect(db: Session) -> dict[int, int]:
             results[site.id] = collect_site(db, site, dr, job_type="daily")
         except Exception:  # noqa: BLE001 - already logged; continue with other sites
             results[site.id] = -1
+        # Accumulate an index snapshot daily where supported (Yandex), so the
+        # set of indexed pages builds history beyond the API's live window.
+        try:
+            if indexing.supports(site):
+                indexing.capture_indexed_urls(db, site)
+        except Exception:  # noqa: BLE001
+            logger.exception("Daily index snapshot failed for site %s", site.id)
     return results
 
 

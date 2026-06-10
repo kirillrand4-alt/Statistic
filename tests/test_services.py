@@ -275,6 +275,17 @@ def test_antifraud_analyze(db, site):
     assert res["summary"]["removed_impressions"] == 1000
 
 
+def test_daily_collect_accumulates_index(db, site):
+    from sqlalchemy import func, select
+
+    from app.db.models import IndexedUrlSnapshot
+    from app.scheduler.jobs import run_daily_collect
+
+    run_daily_collect(db)  # mock supports indexed_urls -> snapshot captured
+    cnt = db.execute(select(func.count()).select_from(IndexedUrlSnapshot)).scalar_one()
+    assert cnt > 0
+
+
 def test_indexing_capture_and_compare(db, site):
     from datetime import date, timedelta
 
