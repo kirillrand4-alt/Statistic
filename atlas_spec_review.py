@@ -9,8 +9,8 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from collections import defaultdict
 from matcher import brand_of, domain
-from spec_match import (num, sane_kw, sane_bar, bar_from_text, flow_value, series_num,
-                        text_flags, is_compressor, match, receiver_filter)
+from spec_match import (num, sane_kw, sane_bar, bar_value, bar_from_text, flow_value,
+                        series_num, text_flags, is_compressor, match, receiver_filter)
 from atlas_need_specs import is_product_url, slug, dm, best_name
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
                "pnevmo-sklad.ru","v-p-k.ru","rutector.ru"]   # порядок колонок как в осн. отчётах
@@ -59,7 +59,7 @@ def load_ours():
         fl = flow_value(r.get("IP_PROP22571"), "л/мин") or flow_value(r.get("IP_PROP22658"), "м3/мин")
         nm,url,p = price.get(code.lower(), (name, f"https://prokompressor.ru/catalog/{code}/", None))
         ours.append(dict(sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
-                         bar=sane_bar(num(r.get("IP_PROP22573"))) or bar_from_text(name+" "+code),
+                         bar=bar_value(r.get("IP_PROP22573")) or bar_from_text(name+" "+code),
                          fl=fl, oil=oil_of(r.get("IP_PROP22583")), ff=ff, vsd=vsd, rv=rv,
                          name=nm or name, url=url, price=p))
     return ours
@@ -79,11 +79,12 @@ def load_comp():
                 try: d=json.loads(sp)
                 except Exception: d=None
                 if isinstance(d, dict) and d: specs.setdefault(u,{}).update(d)
-            for col in ("price","old_price"):
-                try:
-                    v=float(str(r.get(col,"")).replace(",",".").replace(" ",""))
-                    if v>0: price[u]=v; break
-                except: pass
+            # ТОЛЬКО price: old_price = перечёркнутое «было», часто устаревший мусор
+            # (pnevmo-sklad «по запросу»: price пуст, old_price=395960 повторяется по серии).
+            try:
+                v=float(str(r.get("price","")).replace(",",".").replace(" ",""))
+                if v>0: price[u]=v
+            except: pass
             if "снят" in (r.get("series_status") or "").lower(): status[u]="снято"
     cands=[]
     for u,nm in names.items():
@@ -100,7 +101,7 @@ def load_comp():
         for k,v in d.items():
             kl=k.lower()
             if kw is None and "мощ" in kl and "шум" not in kl and "звук" not in kl: kw=sane_kw(num(v))
-            if bar is None and "давлен" in kl: bar=sane_bar(num(v))
+            if bar is None and "давлен" in kl: bar=bar_value(v)          # диапазон VSD -> макс
             if fl is None and "произв" in kl: fl=flow_value(v, kl+" "+str(v))
             if oil is None and "безмасл" in kl: oil=oil_of(v)
         if kw is None and fl is None: continue   # совсем без спеков — липнет ко всей серии

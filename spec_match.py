@@ -101,6 +101,14 @@ def flow_value(raw, key=""):
     vals = [float(x.replace(",", ".")) for x in nums]
     return flow_to_lmin(max(vals), key)
 
+def bar_value(raw):
+    """Давление из значения, возможно диапазон ('4 бар – 13 бар' у VSD) -> МАКСИМУМ
+    (номинал модели = верх диапазона, как «GA37 ...13FF» и в каталоге prokompressor).
+    Санити-фильтр (3..400 бар) отсекает приклеенные объёмы/мусор."""
+    vals = [sane_bar(float(x.replace(",", "."))) for x in re.findall(r'\d+[.,]?\d*', str(raw))]
+    vals = [v for v in vals if v]
+    return max(vals) if vals else None
+
 
 def agree(a, b):                 # пусто с любой стороны = не противоречит
     return a is None or b is None or a == b

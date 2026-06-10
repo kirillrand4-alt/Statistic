@@ -80,11 +80,10 @@ def load_all():
                     u=(row.get("product_url") or "").strip()
                     if not u: continue
                     p=None
-                    for col in ("price","old_price"):        # цена в price или old_price
-                        try:
-                            v=float(str(row.get(col,"")).replace(",",".").replace(" ",""))
-                            if v>0: p=v; break
-                        except: pass
+                    try:                                     # ТОЛЬКО price: old_price=перечёркнутое
+                        v=float(str(row.get("price","")).replace(",",".").replace(" ",""))
+                        if v>0: p=v                           # «было» (устаревший мусор при «по запросу»)
+                    except: pass
                     st=(row.get("series_status") or "").strip().lower()
                     if "снят" in st or st=="нет в наличии": STATUS[u]="снято"
                     elif st=="под заказ": STATUS.setdefault(u,"под заказ")
