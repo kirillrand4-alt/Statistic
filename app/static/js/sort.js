@@ -1,21 +1,38 @@
 // Click a column header to sort the table. Add class="sortable" to a <table>.
-// For tables with a multi-row header (colspan), mark sortable <th> with data-col="N".
+// For multi-row headers (colspan) mark sortable <th> with data-col="N".
+// Tables with > LIMIT rows get a checkbox to show only the first LIMIT rows
+// (after sorting); hidden rows stay in the DOM and keep participating in sorts.
 (function () {
+  const LIMIT = 1000;
+
   function val(td) {
     const t = (td ? td.textContent : "").trim();
-    if (!t || t === "—" || t === "-") return null;        // empty -> sort last
+    if (!t || t === "—" || t === "-") return null;
     if (t === "∞") return Infinity;
     const n = parseFloat(t.replace(/\s/g, "").replace(/%/g, "").replace(",", "."));
     return isNaN(n) ? t.toLowerCase() : n;
   }
   function cmp(a, b, dir) {
     if (a === null && b === null) return 0;
-    if (a === null) return 1;                              // nulls always last
+    if (a === null) return 1;
     if (b === null) return -1;
     let r;
     if (typeof a === "number" && typeof b === "number") r = a - b;
     else r = String(a).localeCompare(String(b));
     return dir === "asc" ? r : -r;
+  }
+  function applyLimit(table) {
+    const tb = table.tBodies[0];
+    if (!tb) return;
+    let shown = 0;
+    for (const row of tb.rows) {
+      if (table._limitOn && shown >= LIMIT) {
+        row.style.display = "none";
+      } else {
+        row.style.display = "";
+        shown++;
+      }
+    }
   }
   function sortBy(table, col, dir) {
     const tb = table.tBodies[0];
@@ -23,8 +40,34 @@
     const rows = Array.from(tb.rows).filter((r) => r.cells.length > col);
     rows.sort((x, y) => cmp(val(x.cells[col]), val(y.cells[col]), dir));
     rows.forEach((r) => tb.appendChild(r));
+    applyLimit(table);
   }
+
   document.querySelectorAll("table.sortable").forEach(function (table) {
+    // ----- row-display limit -----
+    const tb = table.tBodies[0];
+    const total = tb ? tb.rows.length : 0;
+    table._limitOn = false;
+    if (total > LIMIT) {
+      table._limitOn = true;
+      const bar = document.createElement("p");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = true;
+      const lbl = document.createElement("label");
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(` Показывать первые ${LIMIT} из ${total} строк (сортировка/статистика — по всем)`));
+      bar.appendChild(lbl);
+      const anchor = table.closest("figure") || table;
+      anchor.parentNode.insertBefore(bar, anchor);
+      cb.addEventListener("change", function () {
+        table._limitOn = cb.checked;
+        applyLimit(table);
+      });
+      applyLimit(table);
+    }
+
+    // ----- sortable headers -----
     const explicit = table.querySelectorAll("th[data-col]");
     let headers, getCol;
     if (explicit.length) {
