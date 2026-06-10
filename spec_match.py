@@ -72,11 +72,21 @@ def bar_from_text(t):
     return sane_bar(num(m.group(1))) if m else None
 
 
-def sane_flow(v):
-    """Производительность -> л/мин. Если значение <100 — это м³/мин, домножаем."""
-    if not v: return None
-    if v < 100: v = v*1000
+def flow_to_lmin(v, key=""):
+    """Производительность -> л/мин, с учётом единицы из ключа.
+    'м3/мин'/'м³/мин' -> *1000; 'м3/час' -> /60*1000=/0.06; 'л/мин' как есть.
+    Без единицы: <60 трактуем как м³/мин (1.82->1820). Защита: отсекаем нереальное
+    (<60 л/мин невозможно для компрессора; так давление 8/10/9.75 в поле не пройдёт)."""
+    if v is None: return None
+    kl = str(key).lower()
+    if "м3/час" in kl or "м³/час" in kl or "m3/h" in kl: v = v/0.06
+    elif "м3" in kl or "м³" in kl: v = v*1000
+    elif "л/мин" in kl or "l/min" in kl: pass
+    elif v < 60: v = v*1000        # без единицы и маленькое = м³/мин
     return v if 100 <= v <= 120000 else None
+
+def sane_flow(v, key=""):   # совместимость
+    return flow_to_lmin(v, key)
 
 def agree(a, b):                 # пусто с любой стороны = не противоречит
     return a is None or b is None or a == b
