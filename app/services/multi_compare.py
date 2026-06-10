@@ -43,9 +43,16 @@ def sites_for_project(db: Session, project) -> dict[str, Site]:
     return out
 
 
-def _values_by_url(db, site_id: int, project, dr: DateRange) -> dict[str, dict]:
+def _values_by_url(db, site_id: int, project, dr: DateRange, exclude_bots: bool = False,
+                   ratio: float = 10.0, min_impr: int = 100) -> dict[str, dict]:
     page_map = project_page_id_map(db, site_id, project)
-    df = load_page_metrics_df(db, site_id, dr, page_ids=list(page_map.values()))
+    page_ids = list(page_map.values())
+    if exclude_bots:
+        from app.services.antifraud import clean_values_by_url
+
+        return clean_values_by_url(db, site_id, dr, page_ids=page_ids,
+                                   ratio_threshold=ratio, min_impressions=min_impr)
+    df = load_page_metrics_df(db, site_id, dr, page_ids=page_ids)
     out: dict[str, dict] = {}
     if df.empty:
         return out
@@ -85,15 +92,16 @@ def _diff(metric: str, a: float, b: float) -> dict:
     }
 
 
-def compare_project(db, project, metric: str, period_a: DateRange, period_b: DateRange) -> dict:
+def compare_project(db, project, metric: str, period_a: DateRange, period_b: DateRange,
+                    exclude_bots: bool = False, ratio: float = 10.0, min_impr: int = 100) -> dict:
     metric = metric if metric in METRICS else "clicks"
     sites = sites_for_project(db, project)
 
     engines: dict[str, dict] = {}
     per_url: dict[str, tuple[dict, dict]] = {}
     for code, site in sites.items():
-        a_vals = _values_by_url(db, site.id, project, period_a)
-        b_vals = _values_by_url(db, site.id, project, period_b)
+        a_vals = _values_by_url(db, site.id, project, period_a, exclude_bots, ratio, min_impr)
+        b_vals = _values_by_url(db, site.id, project, period_b, exclude_bots, ratio, min_impr)
         per_url[code] = (a_vals, b_vals)
         tot_a, tot_b = _totals(a_vals), _totals(b_vals)
         engines[code] = {
@@ -114,6 +122,7 @@ def compare_project(db, project, metric: str, period_a: DateRange, period_b: Dat
 
     return {
         "metric": metric,
+        "exclude_bots": exclude_bots,
         "period_a": {"start": period_a.start.isoformat(), "end": period_a.end.isoformat()},
         "period_b": {"start": period_b.start.isoformat(), "end": period_b.end.isoformat()},
         "engines": engines,

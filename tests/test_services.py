@@ -191,6 +191,35 @@ def test_multi_compare_project(db, site, project):
     assert len(res["rows"]) == len(project.urls)
 
 
+def test_multi_compare_exclude_bots(db, site, project):
+    from datetime import date, timedelta
+
+    from app.db.models import DeviceMetricDaily, Page
+    from app.providers.base import DateRange
+    from app.services.multi_compare import compare_project
+
+    pu = project.urls[0]
+    today = date.today()
+    d_a = today - timedelta(days=2)
+    pg = Page(site_id=site.id, url=pu.url, normalized_url=pu.normalized_url)
+    db.add(pg)
+    db.commit()
+    # desktop 1000 (bots) vs mobile 50 in period A -> clean clicks = mobile only
+    db.add_all([
+        DeviceMetricDaily(site_id=site.id, page_id=pg.id, date=d_a, device="desktop", clicks=200, impressions=1000),
+        DeviceMetricDaily(site_id=site.id, page_id=pg.id, date=d_a, device="mobile", clicks=5, impressions=50),
+    ])
+    db.commit()
+
+    period_a = DateRange(start=today - timedelta(days=5), end=today - timedelta(days=1))
+    period_b = DateRange(start=today - timedelta(days=12), end=today - timedelta(days=6))
+    res = compare_project(db, project, "clicks", period_a, period_b,
+                          exclude_bots=True, ratio=10.0, min_impr=100)
+    row = next(r for r in res["rows"] if r["url"] == pu.url)
+    assert row["engines"]["gsc"]["a"] == 5  # desktop (bot) removed, only mobile clicks remain
+    assert res["exclude_bots"] is True
+
+
 def test_antifraud_analyze(db, site):
     from datetime import date, timedelta
 

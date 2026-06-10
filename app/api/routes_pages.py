@@ -317,6 +317,7 @@ def project_page(request: Request, project_id: int, start: str | None = None,
 def project_compare_page(request: Request, project_id: int, metric: str = "clicks",
                          a_start: str | None = None, a_end: str | None = None,
                          b_start: str | None = None, b_end: str | None = None,
+                         clean: int = 0, ratio: float = 10.0, min_impr: int = 100,
                          db: Session = Depends(get_db)):
     from app.services.multi_compare import ENGINE_LABELS, ENGINES, compare_project
 
@@ -325,7 +326,8 @@ def project_compare_page(request: Request, project_id: int, metric: str = "click
         raise HTTPException(404, "project not found")
     period_a = parse_date_range(a_start, a_end)
     period_b = resolve_period_b(period_a, b_start, b_end)
-    result = compare_project(db, project, metric, period_a, period_b)
+    result = compare_project(db, project, metric, period_a, period_b,
+                             exclude_bots=bool(clean), ratio=ratio, min_impr=min_impr)
     return templates.TemplateResponse(
         request,
         "project_compare.html",
@@ -333,6 +335,7 @@ def project_compare_page(request: Request, project_id: int, metric: str = "click
             "request": request,
             "project": project,
             "metric": result["metric"],
+            "clean": bool(clean), "ratio": ratio, "min_impr": min_impr,
             "period_a": period_a,
             "period_b": period_b,
             "result": result,

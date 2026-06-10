@@ -104,6 +104,7 @@ def load_device_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.Data
             DeviceMetricDaily.device,
             DeviceMetricDaily.clicks,
             DeviceMetricDaily.impressions,
+            DeviceMetricDaily.position,
         )
         .join(Page, Page.id == DeviceMetricDaily.page_id)
         .where(
@@ -114,7 +115,9 @@ def load_device_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.Data
     )
     if page_ids is not None:
         stmt = stmt.where(DeviceMetricDaily.page_id.in_(list(page_ids)))
-    return pd.DataFrame(db.execute(stmt).all(), columns=["url", "device", "clicks", "impressions"])
+    return pd.DataFrame(
+        db.execute(stmt).all(), columns=["url", "device", "clicks", "impressions", "position"]
+    )
 
 
 def agg_metrics(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
