@@ -62,6 +62,21 @@ def find_brand(u):
             return BRAND_ALIASES[t]
     return None
 
+# бренд по НАЗВАНИЮ (фолбэк: часть сайтов, напр. v-p-k, не пишут бренд в URL)
+_NAME_BRANDS = sorted(set(BRAND_ALIASES) | {"atlas copco","ingersoll rand","cross air"},
+                      key=len, reverse=True)
+def brand_from_text(text):
+    """Распознать бренд в произвольном тексте (название товара). Длинные имена раньше."""
+    t = " " + re.sub(r"[^a-zа-я0-9 ]", " ", str(text).lower()) + " "
+    for b in _NAME_BRANDS:
+        if " " + b + " " in t:
+            return BRAND_ALIASES.get(b, BRAND_ALIASES.get(b.split()[0], b.split()[0]))
+    return None
+
+def brand_of(u, name=""):
+    """Бренд: сперва из URL, иначе — из названия товара."""
+    return find_brand(u) or (brand_from_text(name) if name else None)
+
 def _merge_ip(tokens):
     """ip + 54  ->  ip54 ; ip-54 уже разбит на ip,54."""
     out=[]; i=0
