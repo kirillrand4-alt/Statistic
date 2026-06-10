@@ -142,6 +142,55 @@ def test_credentials_roundtrip(db):
     assert get_cred("missing", "def") == "def"
 
 
+def test_domain_of():
+    from app.utils import domain_of
+
+    assert domain_of("sc-domain:example.com") == "example.com"
+    assert domain_of("https://www.example.com/") == "example.com"
+    assert domain_of("https://example.com:443/") == "example.com"
+
+
+def test_multi_compare_project(db, site, project):
+    from datetime import date, timedelta
+
+    from app.bootstrap import ensure_sources
+    from app.db.models import Page, PageMetricDaily, Site
+    from app.providers.base import DateRange
+    from app.services.multi_compare import compare_project
+
+    ywm = ensure_sources(db)["yandex_webmaster"]
+    ysite = Site(source_id=ywm.id, property_uri="https://example.com/", display_name="ya")
+    db.add(ysite)
+    db.commit()
+
+    pu = project.urls[0]
+    today = date.today()
+    d_a, d_b = today - timedelta(days=2), today - timedelta(days=9)
+    # gsc: 100 -> 50 clicks (рост в A); yandex: 30 -> 60 (падение в A)
+    for s_, clk_a, clk_b in ((site, 100, 50), (ysite, 30, 60)):
+        pg = Page(site_id=s_.id, url=pu.url, normalized_url=pu.normalized_url)
+        db.add(pg)
+        db.commit()
+        db.add_all([
+            PageMetricDaily(site_id=s_.id, page_id=pg.id, date=d_a, clicks=clk_a, impressions=1000, position=5.0),
+            PageMetricDaily(site_id=s_.id, page_id=pg.id, date=d_b, clicks=clk_b, impressions=900, position=6.0),
+        ])
+        db.commit()
+
+    period_a = DateRange(start=today - timedelta(days=5), end=today - timedelta(days=1))
+    period_b = DateRange(start=today - timedelta(days=12), end=today - timedelta(days=6))
+    res = compare_project(db, project, "clicks", period_a, period_b)
+
+    assert set(res["engines"]) == {"gsc", "yandex_webmaster"}
+    row = next(r for r in res["rows"] if r["url"] == pu.url)
+    g, y = row["engines"]["gsc"], row["engines"]["yandex_webmaster"]
+    assert (g["a"], g["b"], g["delta"], g["improved"]) == (100, 50, 50, True)
+    assert (y["a"], y["b"], y["delta"], y["improved"]) == (30, 60, -30, False)
+    assert res["engines"]["gsc"]["a"] == 100 and res["engines"]["yandex_webmaster"]["b"] == 60
+    # URLs without data still present, zero-filled
+    assert len(res["rows"]) == len(project.urls)
+
+
 def test_antifraud_analyze(db, site):
     from datetime import date, timedelta
 

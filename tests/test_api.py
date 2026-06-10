@@ -75,6 +75,17 @@ def test_full_flow(client):
     assert client.get(f"/projects/{project_id}?{qp}").status_code == 200
     assert client.get(f"/compare?site_id={site_id}").status_code == 200
 
+    # 9. two-engine project comparison (JSON, page, CSV export)
+    r = client.get(f"/api/projects/{project_id}/compare?metric=clicks&a_start={start}&a_end={end}")
+    assert r.status_code == 200
+    body = r.json()
+    assert "gsc" in body["engines"]
+    assert len(body["rows"]) == len(DEFAULT_PAGES)
+    assert client.get(f"/projects/{project_id}/compare").status_code == 200
+    r = client.get(f"/api/projects/{project_id}/compare?format=csv")
+    assert r.status_code == 200
+    assert "text/csv" in r.headers["content-type"]
+
 
 def test_ui_admin_flows(client):
     # admin page renders even with no sites

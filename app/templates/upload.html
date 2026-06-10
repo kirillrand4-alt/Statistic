@@ -33,7 +33,8 @@
     <tbody>
     {% for p in projects %}
       <tr><td>{{ p.name }}</td><td>{{ p.urls|length }}</td>
-          <td><a href="{{ base_path }}/projects/{{ p.id }}" role="button" class="secondary outline">Открыть</a></td></tr>
+          <td><a href="{{ base_path }}/projects/{{ p.id }}" role="button" class="secondary outline">Открыть</a>
+              <a href="{{ base_path }}/projects/{{ p.id }}/compare" role="button" class="outline">Google+Яндекс</a></td></tr>
     {% endfor %}
     </tbody>
   </table>

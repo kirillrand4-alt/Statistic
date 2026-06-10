@@ -28,6 +28,21 @@ def normalize_url(url: str) -> str:
     return urlunsplit((scheme, host, path, parts.query, ""))
 
 
+def domain_of(property_uri: str) -> str:
+    """Bare domain of a site property: 'sc-domain:x.ru' / 'https://x.ru/' -> 'x.ru'."""
+    p = (property_uri or "").strip().lower()
+    if p.startswith("sc-domain:"):
+        host = p[len("sc-domain:"):]
+    else:
+        if "://" not in p:
+            p = "http://" + p
+        host = urlsplit(p).netloc
+    host = host.split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
 def query_hash(text: str) -> str:
     """Stable hash for a query string (used as a unique key per site)."""
     return hashlib.sha1((text or "").encode("utf-8")).hexdigest()

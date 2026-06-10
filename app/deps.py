@@ -24,3 +24,12 @@ def parse_date_range(start: str | None = None, end: str | None = None) -> DateRa
     if s > e:
         s = e
     return DateRange(start=s, end=e)
+
+
+def resolve_period_b(period_a: DateRange, b_start: str | None, b_end: str | None) -> DateRange:
+    """Period B from params, or the adjacent previous window of equal length."""
+    if not b_start and not b_end:
+        length = (period_a.end - period_a.start).days + 1
+        b_end_d = period_a.start - timedelta(days=1)
+        return DateRange(start=b_end_d - timedelta(days=length - 1), end=b_end_d)
+    return parse_date_range(b_start, b_end)

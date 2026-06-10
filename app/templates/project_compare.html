@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} · Google + Яндекс · SEO Статистика{% endblock %}
+{% macro fmtval(v, metric) -%}
+{% if v is none %}—{% elif metric == 'ctr' %}{{ v|ctr }}{% elif metric == 'position' %}{{ v|pos }}{% else %}{{ v|numfmt }}{% endif %}
+{%- endmacro %}
+{% block content %}
+<hgroup>
+  <h2>Сравнение периодов: Google + Яндекс</h2>
+  <p>{{ project.name }} · {{ project.urls|length }} URL · <a href="{{ base_path }}/projects/{{ project.id }}">← к проекту</a></p>
+</hgroup>
+
+<form method="get" action="{{ base_path }}/projects/{{ project.id }}/compare">
+  <div class="grid">
+    <label>Метрика
+      <select name="metric">
+        {% for m, lbl in [('clicks','Клики'),('impressions','Показы'),('ctr','CTR'),('position','Позиция')] %}
+        <option value="{{ m }}" {% if metric==m %}selected{% endif %}>{{ lbl }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Период A — с <input type="date" name="a_start" value="{{ period_a.start }}"></label>
+    <label>по <input type="date" name="a_end" value="{{ period_a.end }}"></label>
+    <label>Период B — с <input type="date" name="b_start" value="{{ period_b.start }}"></label>
+    <label>по <input type="date" name="b_end" value="{{ period_b.end }}"></label>
+    <label>&nbsp;<button type="submit">Сравнить</button></label>
+  </div>
+</form>
+
+{% set qs = "metric=" ~ metric ~ "&a_start=" ~ period_a.start ~ "&a_end=" ~ period_a.end ~ "&b_start=" ~ period_b.start ~ "&b_end=" ~ period_b.end %}
+<p>
+  Экспорт:
+  <a href="{{ base_path }}/api/projects/{{ project.id }}/compare?{{ qs }}&format=xlsx" role="button" class="outline">Excel</a>
+  <a href="{{ base_path }}/api/projects/{{ project.id }}/compare?{{ qs }}&format=csv" role="button" class="outline secondary">CSV</a>
+</p>
+
+<div class="grid">
+{% for code, label in engine_list %}
+  {% set s = result.engines.get(code) %}
+  <article>
+    <header><strong>{{ label }}</strong> <small>(итог по списку URL)</small></header>
+    {% if s %}
+    <div class="grid">
+      <hgroup><h3>{{ fmtval(s.a, metric) }}</h3><p>Период A</p></hgroup>
+      <hgroup><h3>{{ fmtval(s.b, metric) }}</h3><p>Период B</p></hgroup>
+      <hgroup><h3>{{ s.pct|pct }}</h3><p>{% if s.improved %}<ins>рост</ins>{% else %}<del>падение</del>{% endif %}</p></hgroup>
+    </div>
+    {% else %}<p><small>Для домена проекта не найден сайт этого источника.</small></p>{% endif %}
+  </article>
+{% endfor %}
+</div>
+
+<article>
+  <header>По каждому URL</header>
+  <figure>
+  <table>
+    <thead>
+      <tr><th rowspan="2">URL</th>{% for code, label in engine_list %}<th colspan="4">{{ label }}</th>{% endfor %}</tr>
+      <tr>{% for code, label in engine_list %}<th>A</th><th>B</th><th>Δ</th><th>%</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+    {% for r in result.rows %}
+      <tr>
+        <td><small>{{ r.url }}</small></td>
+        {% for code, label in engine_list %}
+          {% set e = r.engines.get(code) %}
+          {% if e %}
+          <td>{{ fmtval(e.a, metric) }}</td><td>{{ fmtval(e.b, metric) }}</td>
+          <td>{% if e.improved %}<ins>{{ fmtval(e.delta, metric) }}</ins>{% else %}<del>{{ fmtval(e.delta, metric) }}</del>{% endif %}</td>
+          <td>{{ e.pct|pct }}</td>
+          {% else %}<td>—</td><td>—</td><td>—</td><td>—</td>{% endif %}
+        {% endfor %}
+      </tr>
+    {% else %}
+      <tr><td colspan="9"><small>В проекте нет URL — загрузите список на странице проекта.</small></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </figure>
+</article>
+{% endblock %}

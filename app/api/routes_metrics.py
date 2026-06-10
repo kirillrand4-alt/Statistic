@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Project, Site
-from app.deps import get_db, parse_date_range
+from app.deps import get_db, parse_date_range, resolve_period_b
 from app.services import totals as totals_svc
 from app.services.ctr import ctr_for_project
+from app.services.multi_compare import build_compare_export, compare_project
 from app.services.top_keyword import top_keywords_for_project
 
 router = APIRouter(prefix="/api", tags=["metrics"])
@@ -64,6 +66,30 @@ def project_ctr(
         raise HTTPException(404, "project not found")
     dr = parse_date_range(start, end)
     return {"range": _range_dict(dr), **ctr_for_project(db, project, dr)}
+
+
+@router.get("/projects/{project_id}/compare")
+def project_compare(
+    project_id: int,
+    metric: str = "clicks",
+    a_start: str | None = None,
+    a_end: str | None = None,
+    b_start: str | None = None,
+    b_end: str | None = None,
+    format: str = "json",
+    db: Session = Depends(get_db),
+):
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "project not found")
+    period_a = parse_date_range(a_start, a_end)
+    period_b = resolve_period_b(period_a, b_start, b_end)
+    result = compare_project(db, project, metric, period_a, period_b)
+    if format in ("csv", "xlsx"):
+        filename, buf, media = build_compare_export(result, project, fmt=format)
+        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+        return StreamingResponse(buf, media_type=media, headers=headers)
+    return result
 
 
 @router.get("/totals")

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import date, timedelta
+from datetime import date
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -12,8 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.models import CollectionRun, Project, ProjectUrl, Site, Source
-from app.deps import get_db, parse_date_range
-from app.providers.base import DateRange
+from app.deps import get_db, parse_date_range, resolve_period_b
 from app.services import growth
 from app.services import totals as totals_svc
 from app.services.ctr import ctr_for_project
@@ -314,6 +313,34 @@ def project_page(request: Request, project_id: int, start: str | None = None,
     )
 
 
+@router.get("/projects/{project_id}/compare")
+def project_compare_page(request: Request, project_id: int, metric: str = "clicks",
+                         a_start: str | None = None, a_end: str | None = None,
+                         b_start: str | None = None, b_end: str | None = None,
+                         db: Session = Depends(get_db)):
+    from app.services.multi_compare import ENGINE_LABELS, ENGINES, compare_project
+
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "project not found")
+    period_a = parse_date_range(a_start, a_end)
+    period_b = resolve_period_b(period_a, b_start, b_end)
+    result = compare_project(db, project, metric, period_a, period_b)
+    return templates.TemplateResponse(
+        request,
+        "project_compare.html",
+        {
+            "request": request,
+            "project": project,
+            "metric": result["metric"],
+            "period_a": period_a,
+            "period_b": period_b,
+            "result": result,
+            "engine_list": [(code, ENGINE_LABELS[code]) for code in ENGINES],
+        },
+    )
+
+
 @router.get("/compare")
 def compare_page(request: Request, site_id: int | None = None, metric: str = "clicks",
                  grouping: str = "site", project_id: int | None = None,
@@ -324,12 +351,7 @@ def compare_page(request: Request, site_id: int | None = None, metric: str = "cl
     site = _resolve_site(db, site_id)
     result = None
     period_a = parse_date_range(a_start, a_end)
-    if not b_start and not b_end:
-        length = (period_a.end - period_a.start).days + 1
-        b_end_d = period_a.start - timedelta(days=1)
-        period_b = DateRange(start=b_end_d - timedelta(days=length - 1), end=b_end_d)
-    else:
-        period_b = parse_date_range(b_start, b_end)
+    period_b = resolve_period_b(period_a, b_start, b_end)
     if site is not None and (a_start or b_start or site_id):
         page_ids = None
         if grouping in ("subset", "page", "query") and project_id:

@@ -17,6 +17,8 @@
   </form>
 </article>
 
+<p><a href="{{ base_path }}/projects/{{ project.id }}/compare" role="button" class="contrast">⚖ Сравнение периодов: Google + Яндекс</a></p>
+
 <form method="get" action="{{ base_path }}/projects/{{ project.id }}" class="grid">
   <label>С <input type="date" name="start" value="{{ range.start }}"></label>
   <label>По <input type="date" name="end" value="{{ range.end }}"></label>
