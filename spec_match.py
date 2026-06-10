@@ -60,6 +60,13 @@ def bar_from_text(t):
     m = re.search(r'[- ](\d{1,2}[.,]?\d?)\s*(?:бар|bar|p\b|р\b)', str(t).lower().replace("_","-"))
     return sane_bar(num(m.group(1))) if m else None
 
+
+def sane_flow(v):
+    """Производительность -> л/мин. Если значение <100 — это м³/мин, домножаем."""
+    if not v: return None
+    if v < 100: v = v*1000
+    return v if 100 <= v <= 120000 else None
+
 def agree(a, b):                 # пусто с любой стороны = не противоречит
     return a is None or b is None or a == b
 
