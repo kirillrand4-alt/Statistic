@@ -126,6 +126,26 @@
 </article>
 
 <article>
+  <header>Выгрузка по всем сайтам (за весь период)</header>
+  <form method="get" action="{{ base_path }}/api/export-all" class="grid">
+    <label>Уровень
+      <select name="level">
+        <option value="totals">Итоги по дням</option>
+        <option value="page" selected>По страницам</option>
+        <option value="query">По запросам</option>
+      </select>
+    </label>
+    <label>Формат
+      <select name="format"><option value="xlsx">Excel</option><option value="csv">CSV</option></select>
+    </label>
+    <label>&nbsp;<button type="submit">Скачать всё</button></label>
+  </form>
+  <small>Один файл по всем включённым сайтам (колонки «Источник» и «Сайт») за всю
+  собранную историю. «По страницам/запросам» — суммарно за период; «По запросам»
+  может получиться очень большим.</small>
+</article>
+
+<article>
   <header>Конфигурация</header>
   <table>
     <tbody>

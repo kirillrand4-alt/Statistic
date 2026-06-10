@@ -32,3 +32,21 @@ def export(
     filename, buf, media = build_export(db, site, dr, level=level, project=project, fmt=fmt)
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
     return StreamingResponse(buf, media_type=media, headers=headers)
+
+
+@router.get("/export-all")
+def export_all(
+    level: str = "page",
+    format: str = "xlsx",
+    start: str | None = None,
+    end: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """All enabled sites at once; defaults to the whole collected period."""
+    from app.services.bulk_export import build_bulk_export, overall_range
+
+    dr = parse_date_range(start, end) if (start or end) else overall_range(db)
+    fmt = "csv" if format == "csv" else "xlsx"
+    filename, buf, media = build_bulk_export(db, dr, level=level, fmt=fmt)
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(buf, media_type=media, headers=headers)

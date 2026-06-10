@@ -29,6 +29,19 @@ def test_export_csv(db, site, project):
     assert len(df) > 0
 
 
+def test_bulk_export_all_sites(db, site, project):
+    from app.services.bulk_export import build_bulk_export, overall_range
+
+    collect_site(db, site, _range())
+    dr = overall_range(db)
+    filename, buf, media = build_bulk_export(db, dr, level="page", fmt="xlsx")
+    assert filename.startswith("all_sites_page_")
+    df = pd.ExcelFile(io.BytesIO(buf.getvalue())).parse(0)
+    assert "Источник" in df.columns and "Сайт" in df.columns and "URL" in df.columns
+    assert (df["Сайт"] == site.property_uri).any()
+    assert len(df) > 0
+
+
 def test_export_xlsx_sheets(db, site, project):
     dr = _range()
     collect_site(db, site, dr)
