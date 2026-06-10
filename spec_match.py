@@ -22,8 +22,19 @@ def num(x):
 def yn(x): return str(x).strip().lower() in ("да","yes","есть","1","true")
 
 def series_num(text, ser_re=SER_ATLAS):
-    m = ser_re.search(str(text).replace("_"," ").replace("-"," "))
-    return (m.group(1).lower(), float(m.group(2).replace(",","."))) if m else None
+    s = str(text).replace("_"," ").replace("-"," ")
+    m = ser_re.search(s)
+    if not m: return None
+    fam = m.group(1).lower(); n = float(m.group(2).replace(",","."))
+    # "+" / "plus" сразу после номера серии = другая модель (GA11 != GA11+)
+    tail = s[m.end():m.end()+4].lower()
+    if tail.lstrip().startswith("+") or tail.lstrip().startswith("plus") or s[m.start():m.end()].endswith("+"):
+        fam = fam + "+"
+    # вариант "GA11+ ..." где + прилип к числу
+    around = s[max(0,m.start()-1):m.end()+2]
+    if "+" in around.replace(fam.rstrip("+"),"",1):
+        fam = fam.rstrip("+") + "+"
+    return (fam, n)
 
 def text_flags(text):
     """FF (осушитель) / VSD (частотник) / ресивер — вшиты в артикул.
@@ -72,6 +83,8 @@ def agree(a, b):                 # пусто с любой стороны = н�
 
 def agree_num(a, b, tol=0.06):
     return a is None or b is None or abs(a-b) <= tol*max(a, b)
+
+FLOW_TOL = 0.04   # допуск производительности (строго: GA11=1560 vs GA11+=1820 не путать)
 
 def match(o, cands):
     """o, cands: dict с ключами sn,kw,bar,oil,vsd,ff,rv. Возврат: список подходящих."""
