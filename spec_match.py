@@ -38,14 +38,16 @@ def series_num(text, ser_re=SER_ATLAS):
 
 def text_flags(text):
     """FF (осушитель) / VSD (частотник) / ресивер — вшиты в артикул.
-    rv: None = ресивер не упомянут; 1 = упомянут без объёма; N = объём в литрах."""
+    rv: None = ресивер не упомянут; 1 = упомянут без объёма; N = объём в литрах.
+    FF часто приклеен к давлению («G 11 10FF», «ga18plus-8-5ff») — \\b между цифрой
+    и буквой не срабатывает, ловим отдельно; (?<![a-z]) отсекает англ. 'off'/'staff'."""
     tl = " " + str(text).lower().replace("_","-") + " "
-    ff  = 1 if re.search(r'\bff\b', tl) else None
+    ff  = 1 if re.search(r'(?<![a-z])ff\b|\dff\b', tl) else None
     vsd = 1 if ("vsd" in tl or "частот" in tl) else None
     rv = None
-    m = re.search(r'(?:ресивер\w*|resiver\w*|receiver\w*|\btm\b)[- ]?(\d{2,3})?', tl)
+    m = re.search(r'(?:ресивер\w*|resiver\w*|receiver\w*|\btm)[- ]?(\d{2,3})?\b', tl)
     if m: rv = num(m.group(1)) or 1
-    m2 = re.search(r'[- ](270|500|900)\b', tl)
+    m2 = re.search(r'[- (/](270|500|900)\b', tl)        # «P/500», «(270 л)», «-270»
     if m2: rv = float(m2.group(1))
     return ff, vsd, rv
 
@@ -109,11 +111,12 @@ def agree_num(a, b, tol=0.06):
 FLOW_TOL = 0.04   # допуск производительности (строго: GA11=1560 vs GA11+=1820 не путать)
 
 def match(o, cands):
-    """o, cands: dict с ключами sn,kw,bar,oil,vsd,ff,rv. Возврат: список подходящих."""
+    """o, cands: dict с ключами sn,kw,bar,fl,oil,vsd,ff,rv. Возврат: список подходящих."""
     out = []
     for c in cands:
         if o["sn"] != c["sn"]: continue
         if not (agree_num(o["kw"], c["kw"]) and agree_num(o["bar"], c["bar"], 0.01)): continue
+        if not agree_num(o.get("fl"), c.get("fl"), FLOW_TOL): continue   # производительность 4%
         if not agree(o["oil"], c["oil"]): continue
         if o.get("vsd",0) != c.get("vsd",0): continue   # жёстко: из текста
         if o.get("ff",0)  != c.get("ff",0):  continue   # жёстко: из текста
