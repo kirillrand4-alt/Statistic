@@ -108,6 +108,15 @@ def load_comp():
         # флаги из НАЗВАНИЯ: слаги врут (aero клонирует FF-слаг под P-карточки);
         # слаг — только если названия нет (sitemap-only)
         ff,vsd,rv = text_flags(nm) if nm else text_flags(slug(u))
+        # ресивер из specs (rutector: «Объем ресивера, литров»=270, «Наличие ресивера»=Есть);
+        # объём точнее флага: текст-объём > specs-объём > текст-флаг > specs-флаг
+        srv=None
+        for k,v in d.items():
+            if "ресивер" in k.lower():
+                n=num(v)
+                if n and n>=10: srv=n; break
+                if str(v).strip().lower() in ("да","есть","yes") and srv is None: srv=1
+        if rv is None or (rv==1 and srv and srv>1): rv = srv if srv is not None else rv
         cands.append(dict(sn=sn, kw=kw, bar=bar or bar_from_text(text), fl=fl, oil=oil,
                           ff=ff, vsd=vsd, rv=rv, name=nm or slug(u), url=u, site=dm(u),
                           price=price.get(u), status=status.get(u,"")))

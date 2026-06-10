@@ -13,7 +13,7 @@ import re
 
 SER_ATLAS = re.compile(
     r'\b(xahs|xrhs|xrvs|xrys|xrxs|xats|xavs|xas|gx|ga|zr|zt|ze|za|le|lf|lt|sf|aq|gv|g)'
-    r'\s*[- ]?\s*(\d+[.,]?\d*)', re.I)
+    r'\s*[- ]?\s*(\d+[.,]?\d*)(l\b)?', re.I)
 
 def num(x):
     m = re.search(r'\d+[.,]?\d*', str(x))
@@ -26,14 +26,19 @@ def series_num(text, ser_re=SER_ATLAS):
     m = ser_re.search(s)
     if not m: return None
     fam = m.group(1).lower(); n = float(m.group(2).replace(",","."))
+    if m.group(3): fam += "l"          # суффикс L = low pressure (G15L != G15, GA37L != GA37)
     # "+" / "plus" сразу после номера серии = другая модель (GA11 != GA11+)
     tail = s[m.end():m.end()+4].lower()
     if tail.lstrip().startswith("+") or tail.lstrip().startswith("plus") or s[m.start():m.end()].endswith("+"):
         fam = fam + "+"
     # вариант "GA11+ ..." где + прилип к числу
     around = s[max(0,m.start()-1):m.end()+2]
-    if "+" in around.replace(fam.rstrip("+"),"",1):
+    if "+" in around.replace(fam.rstrip("+l"),"",1):
         fam = fam.rstrip("+") + "+"
+    # v-p-k пишет плюс ПОСЛЕ давления: «GA 18 10 plus» = GA18+ 10 бар. Отдельное слово
+    # plus/плюс в остатке = плюс-серия (символ «+» НЕ ловим: «VSD+13FF» — плюс у VSD)
+    if not fam.endswith("+") and re.search(r'\bplus\b|\bплюс\b', s[m.end():], re.I):
+        fam = fam + "+"
     return (fam, n)
 
 def text_flags(text):
@@ -47,7 +52,7 @@ def text_flags(text):
     rv = None
     m = re.search(r'(?:ресивер\w*|resiver\w*|receiver\w*|\btm)[- ]?(\d{2,3})?\b', tl)
     if m: rv = num(m.group(1)) or 1
-    m2 = re.search(r'[- (/](270|500|900)\b', tl)        # «P/500», «(270 л)», «-270»
+    m2 = re.search(r'[- (/](270|500|900)(?:\s*[лl])?\b', tl)   # «P/500», «(270 л)», «270l»
     if m2: rv = float(m2.group(1))
     return ff, vsd, rv
 
