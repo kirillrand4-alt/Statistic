@@ -10,6 +10,7 @@ from collections import defaultdict
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from matcher import signature, domain, find_brand
+from scrape_files import SCRAPE_FILES
 
 # Детектор «дробь в названии разная» (класс 5.5↔55, который URL не различает).
 # Фильтруем Excel-битьё названий (1.46031 = сожранное 1,9/1,0) — там матч по URL верный.
@@ -23,12 +24,8 @@ def _corrupt(name): return bool(_CORRUPT.search(str(name)))
 SRC = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/03d65e4a-_______________________.xlsx"
 PROKO_CSV = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/e7171060-products_export_20260608.csv"
 SITEMAP = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/63b1d773-all_sitemap_urls_1.xlsx"
-CHECKED = ["/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/c7c60579-prices_checked_20260608.csv",
-           "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/7fee0300-all_prices_20260609_102140.csv",
-           "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/4b460a4b-prices_checked_20260609.csv",
-           "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/f85cae40-all_prices_20260609_143339.csv",
-           "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/e0e2167c-prices_checked_20260609_1.csv",
-           "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/night_run/all_prices_20260610_014032.csv"]
+# все прогоны парсера (прайс+статусы) — единый список в scrape_files.py (туда же добавляются новые)
+CHECKED = SCRAPE_FILES
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
                "pnevmo-sklad.ru","v-p-k.ru","rutector.ru"]
 DOM_FIX = {"rostov.pnevmo-sklad.ru":"pnevmo-sklad.ru",
