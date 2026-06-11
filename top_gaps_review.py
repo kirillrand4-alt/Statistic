@@ -8,7 +8,6 @@ from urllib.parse import urlparse, unquote
 from build_review import load_all, cluster_all, COMPETITORS, STATUS, _pick_min, _show_key, _best_name
 from atlas_need_specs import is_product_url
 from spec_match import is_compressor
-from series_ref import snyataya_seriya
 from card_check import check_card
 
 OUT="/home/user/Statistic/Top_gaps_review.xlsx"
@@ -25,7 +24,7 @@ def _is_comp_cluster(info, sites):
     return False
 
 HDR=["№","Статус","Отпечаток","Название","У нас","Конк-тов","Ваша цена"]\
-    +COMPETITORS+["min конк.","снято у (сайтов)","Серия снята (подтв.)","Проверить карточку"]
+    +COMPETITORS+["min конк.","снято у (сайтов)","Проверить карточку"]
 
 def add_sheet(wb, info, data, brand, title):
     bd=data.get(brand, {})
@@ -93,18 +92,13 @@ def add_sheet(wb, info, data, brand, title):
         if comp_prices: ws.cell(r,14,min(comp_prices)).number_format="# ##0"
         if sny:
             sc.fill=snyfill; ws.cell(r,15,sny)
-        sn_ser=snyataya_seriya(brand, name)
-        if sn_ser:
-            c16=ws.cell(r,16, f"снята: {sn_ser[0]}")
-            if sn_ser[1]: c16.hyperlink=sn_ser[1]
-            c16.font=Font(color="C00000", underline="single")
         if has_pk:
             chk=check_card(pk_url, [u for c in COMPETITORS if c in sites for u in sites[c]])
             if chk:
-                c17=ws.cell(r,17, chk[0])
-                if chk[1]: c17.hyperlink=chk[1]
-                c17.font=Font(color="C55A11", underline="single")
-    widths=[5,16,34,42,6,8,12]+[12]*len(COMPETITORS)+[11,14,18,26]
+                c16=ws.cell(r,16, chk[0])
+                if chk[1]: c16.hyperlink=chk[1]
+                c16.font=Font(color="C55A11", underline="single")
+    widths=[5,16,34,42,6,8,12]+[12]*len(COMPETITORS)+[11,14,26]
     for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
     ws.freeze_panes="E2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{n+1}"
     g=sum(1 for k in gap); s=sum(1 for k in pk+gap
