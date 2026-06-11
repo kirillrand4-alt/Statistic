@@ -7,3 +7,19 @@ ins { color: #398712; text-decoration: none; font-weight: 600; }
 del { color: #d93526; text-decoration: none; font-weight: 600; }
 nav strong { font-size: 1.1rem; }
 footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--pico-muted-border-color); }
+
+/* Searchable site (domain) selector */
+.site-search { position: relative; }
+.site-search-list {
+  position: absolute; z-index: 50; left: 0; right: 0; margin: .15rem 0 0;
+  max-height: 16rem; overflow-y: auto; list-style: none; padding: .25rem;
+  background: var(--pico-background-color);
+  border: 1px solid var(--pico-form-element-border-color); border-radius: var(--pico-border-radius);
+  box-shadow: 0 6px 20px rgba(0,0,0,.15);
+}
+.site-search-list li {
+  padding: .4rem .6rem; border-radius: var(--pico-border-radius); cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.site-search-list li.active, .site-search-list li:hover { background: var(--pico-primary-focus); }
+.site-search-list li.sel { font-weight: 600; }
