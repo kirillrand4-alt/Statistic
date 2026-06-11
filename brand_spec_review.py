@@ -186,9 +186,10 @@ def build_brand(brand, title, ours, cands):
     st=_styles()
     wb=openpyxl.Workbook(); wb.remove(wb.active)
     # 1-2: матчи
+    chkfill=PatternFill("solid", fgColor="FCE4D6")   # сматчился, но спека под вопросом
     for tname, rows in (("спек-матч", clean), ("неоднозначные", ambig)):
         ws=wb.create_sheet(tname)
-        HDR=["№","Наш товар","Ваша цена"]+COMPETITORS+["min конк.","Δ к min, %","Почему сцепилось","ВЕРДИКТ"]
+        HDR=["№","Наш товар","Ваша цена"]+COMPETITORS+["min конк.","Δ к min, %","Почему сцепилось","Проверить карточку","ВЕРДИКТ"]
         _hdr(ws, HDR, st)
         rows=sorted(rows, key=lambda t:(-len(t[1]), t[0]["name"]))
         r=1
@@ -219,7 +220,13 @@ def build_brand(brand, title, ours, cands):
                 ws.cell(r,10,mn).number_format="# ##0"
                 if o["price"]: ws.cell(r,11, round((o["price"]-mn)/mn*100,1))
             ws.cell(r,12, why(o, first))
-        widths=[5,46,12]+[13]*6+[11,10,46,22]
+            iss=card_issue(o, by_sn.get(o["sn"], []))   # сматчился, но спека не подтверждена
+            if iss:
+                label,ov,v1,nd,ratio,src=iss
+                cc=ws.cell(r,13, f"{label}: у нас {ov:g} vs {v1:g} ({nd} сайт.)")
+                cc.hyperlink=src["url"]; cc.font=st["orange"]
+                ws.cell(r,2).fill=chkfill
+        widths=[5,46,12]+[13]*6+[11,10,46,30,22]
         for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
         ws.freeze_panes="C2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
     # 3: GAP

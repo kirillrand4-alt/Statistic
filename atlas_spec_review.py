@@ -173,10 +173,11 @@ def build():
     warn=PatternFill("solid", fgColor="FFE699")     # жёлтый: на сайте >1 разной карточки
     nomatch=PatternFill("solid", fgColor="F2F2F2")
     center=Alignment(horizontal="center", vertical="center", wrap_text=True)
+    chkfill=PatternFill("solid", fgColor="FCE4D6")   # сматчился, но спека под вопросом
     for title, rows in (("спек-матч", clean), ("неоднозначные", ambig)):
         ws=wb.create_sheet(title)
         HDR=["№","Наш товар","Ваша цена"]+COMPETITORS\
-            +["min конк.","Δ к min, %","Почему сцепилось","ВЕРДИКТ (ок / ошибка: ...)"]
+            +["min конк.","Δ к min, %","Почему сцепилось","Проверить карточку","ВЕРДИКТ (ок / ошибка: ...)"]
         ws.append(HDR)
         for ci in range(1,len(HDR)+1):
             cell=ws.cell(1,ci); cell.font=bold; cell.fill=hfill; cell.alignment=center
@@ -214,7 +215,13 @@ def build():
                 ws.cell(r,10,mn).number_format="# ##0"
                 if o["price"]: ws.cell(r,11, round((o["price"]-mn)/mn*100,1))
             ws.cell(r,12, why(o, first))
-        widths=[5,46,12]+[13]*len(COMPETITORS)+[11,10,46,24]
+            iss=card_issue(o, by_sn.get(o["sn"], []))   # сматчился, но спека не подтверждена
+            if iss:
+                label,ov,v1,nd,ratio,src=iss
+                cc=ws.cell(r,13, f"{label}: у нас {ov:g} vs {v1:g} ({nd} сайт.)")
+                cc.hyperlink=src["url"]; cc.font=Font(color="C55A11", underline="single")
+                ws.cell(r,2).fill=chkfill
+        widths=[5,46,12]+[13]*len(COMPETITORS)+[11,10,46,30,24]
         for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
         ws.freeze_panes="C2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
 
