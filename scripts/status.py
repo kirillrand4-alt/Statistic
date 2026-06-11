@@ -60,22 +60,26 @@ def main() -> None:
         for st in ("ok", "error", "pending"):
             n = db.execute(select(func.count()).select_from(CollectionRun).where(CollectionRun.status == st)).scalar_one()
             print(f"  {st:<10} {n}")
-        print("  последние 10:")
-        runs = db.execute(select(CollectionRun).order_by(CollectionRun.started_at.desc()).limit(10)).scalars().all()
+        print("  последние 6:")
+        runs = db.execute(select(CollectionRun).order_by(CollectionRun.started_at.desc()).limit(6)).scalars().all()
         for r in runs:
-            err = f" — {r.error_text[:60]}" if r.error_text else ""
+            err = f" — {r.error_text[:50]}" if r.error_text else ""
             print(f"    site {r.site_id:<3} {r.job_type:<9} {str(r.target_date):<12} {r.status:<7} {r.rows_written:>7} rows{err}")
 
-        print("\n=== Снимки индекса по сайтам ===")
-        rows = db.execute(
-            select(IndexedUrlSnapshot.site_id, func.count(func.distinct(IndexedUrlSnapshot.captured_on)),
-                   func.min(IndexedUrlSnapshot.captured_on), func.max(IndexedUrlSnapshot.captured_on))
-            .group_by(IndexedUrlSnapshot.site_id)
-        ).all()
-        if not rows:
+        print("\n=== Снимки индекса ===")
+        sites_n, dates_n, lo, hi, total = db.execute(
+            select(
+                func.count(func.distinct(IndexedUrlSnapshot.site_id)),
+                func.count(func.distinct(IndexedUrlSnapshot.captured_on)),
+                func.min(IndexedUrlSnapshot.captured_on),
+                func.max(IndexedUrlSnapshot.captured_on),
+                func.count(),
+            )
+        ).one()
+        if total:
+            print(f"  сайтов: {sites_n} · дат(снимков): {dates_n} ({lo}..{hi}) · всего URL: {total}")
+        else:
             print("  снимков пока нет")
-        for sid, days, lo, hi in rows:
-            print(f"  site {sid:<3} снимков: {days:<3} ({lo}..{hi})")
     finally:
         db.close()
 
