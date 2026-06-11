@@ -27,6 +27,13 @@ TOTAL_COLS = ["date", "clicks", "impressions", "position"]
 AGG_OUT = ["clicks", "impressions", "ctr", "position"]
 
 
+def _idlist(site_id) -> list[int]:
+    """Accept a single site_id or a list of them (for merging same-domain properties)."""
+    if isinstance(site_id, (list, tuple, set)):
+        return list(site_id)
+    return [site_id]
+
+
 def project_page_id_map(db: Session, site_id: int, project: Project) -> dict[str, int]:
     norms = [u.normalized_url for u in project.urls]
     if not norms:
@@ -50,7 +57,7 @@ def load_page_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.DataFr
         )
         .join(Page, Page.id == PageMetricDaily.page_id)
         .where(
-            PageMetricDaily.site_id == site_id,
+            PageMetricDaily.site_id.in_(_idlist(site_id)),
             PageMetricDaily.date >= dr.start,
             PageMetricDaily.date <= dr.end,
         )
@@ -73,7 +80,7 @@ def load_query_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.DataF
         .join(Query, Query.id == QueryMetricDaily.query_id)
         .join(Page, Page.id == QueryMetricDaily.page_id, isouter=True)
         .where(
-            QueryMetricDaily.site_id == site_id,
+            QueryMetricDaily.site_id.in_(_idlist(site_id)),
             QueryMetricDaily.date >= dr.start,
             QueryMetricDaily.date <= dr.end,
         )
@@ -90,7 +97,7 @@ def load_site_totals_df(db, site_id, dr: DateRange) -> pd.DataFrame:
         SiteTotalDaily.impressions,
         SiteTotalDaily.position,
     ).where(
-        SiteTotalDaily.site_id == site_id,
+        SiteTotalDaily.site_id.in_(_idlist(site_id)),
         SiteTotalDaily.date >= dr.start,
         SiteTotalDaily.date <= dr.end,
     )
@@ -108,7 +115,7 @@ def load_device_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.Data
         )
         .join(Page, Page.id == DeviceMetricDaily.page_id)
         .where(
-            DeviceMetricDaily.site_id == site_id,
+            DeviceMetricDaily.site_id.in_(_idlist(site_id)),
             DeviceMetricDaily.date >= dr.start,
             DeviceMetricDaily.date <= dr.end,
         )

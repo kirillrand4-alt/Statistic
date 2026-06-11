@@ -18,7 +18,7 @@ from app.services import totals as totals_svc
 from app.services.ctr import ctr_for_project
 from app.services.loaders import project_page_id_map
 from app.services.top_keyword import top_keywords_for_project
-from app.utils import normalize_url
+from app.utils import domain_of, normalize_url
 from app.web import templates
 
 router = APIRouter(tags=["pages"], include_in_schema=False)
@@ -46,10 +46,21 @@ def _resolve_site(db: Session, site_id: int | None) -> Site | None:
     return db.execute(select(Site).order_by(Site.id).limit(1)).scalar_one_or_none()
 
 
+def _same_domain_ids(db: Session, site: Site) -> list[int]:
+    """site_ids of the SAME source sharing the bare domain — e.g. a GSC domain
+    property (sc-domain:) and its https:// URL-prefix property of one site."""
+    d = domain_of(site.property_uri)
+    rows = db.execute(
+        select(Site.id, Site.property_uri).where(Site.source_id == site.source_id)
+    ).all()
+    ids = [sid for sid, uri in rows if d and domain_of(uri) == d]
+    return ids or [site.id]
+
+
 @router.get("/")
 def dashboard(request: Request, site_id: int | None = None, start: str | None = None,
               end: str | None = None, msg: str | None = None, clean: int = 0,
-              ratio: float = 10.0, min_impr: int = 100, devices: int = 0,
+              ratio: float = 10.0, min_impr: int = 100, devices: int = 0, merge: int = 0,
               db: Session = Depends(get_db)):
     sites = _sites(db)
     site = _resolve_site(db, site_id)
@@ -62,7 +73,7 @@ def dashboard(request: Request, site_id: int | None = None, start: str | None = 
         "projects": db.execute(select(Project).order_by(Project.id)).scalars().all(),
         "range": dr,
         "clean": bool(clean), "ratio": ratio, "min_impr": min_impr,
-        "devices": bool(devices),
+        "devices": bool(devices), "merge": bool(merge), "merged": None,
         "totals": None,
         "daily": [],
         "top_pages": [],
@@ -72,21 +83,40 @@ def dashboard(request: Request, site_id: int | None = None, start: str | None = 
         "gsc_site_url": get_settings().gsc_site_url,
     }
     if site is not None:
-        ctx["daily"] = totals_svc.site_daily(db, site.id, dr)
+        ids = site.id
+        if merge:
+            mids = _same_domain_ids(db, site)
+            if len(mids) > 1:
+                ids = mids
+                ctx["merged"] = {"count": len(mids), "domain": domain_of(site.property_uri)}
+        ctx["daily"] = totals_svc.site_daily(db, ids, dr)
         if devices:
-            ctx["top_pages"] = totals_svc.per_page_with_devices(db, site.id, dr)[:20]
+            ctx["top_pages"] = totals_svc.per_page_with_devices(db, ids, dr)[:20]
         else:
-            ctx["top_pages"] = totals_svc.per_page_totals(db, site.id, dr)[:20]
+            ctx["top_pages"] = totals_svc.per_page_totals(db, ids, dr)[:20]
         if clean:
             from app.services.antifraud import clean_values_by_url
-            vals = clean_values_by_url(db, site.id, dr, ratio_threshold=ratio, min_impressions=min_impr).values()
+            if isinstance(ids, list):
+                # merge cleaned per-URL values across properties (max impressions wins)
+                merged: dict[str, dict] = {}
+                for sid in ids:
+                    for url, v in clean_values_by_url(
+                        db, sid, dr, ratio_threshold=ratio, min_impressions=min_impr
+                    ).items():
+                        cur = merged.get(url)
+                        if cur is None or v["impressions"] > cur["impressions"]:
+                            merged[url] = v
+                vals = list(merged.values())
+            else:
+                vals = list(clean_values_by_url(
+                    db, site.id, dr, ratio_threshold=ratio, min_impressions=min_impr).values())
             cl = sum(v["clicks"] for v in vals)
             im = sum(v["impressions"] for v in vals)
             pw = sum(v["position"] * v["impressions"] for v in vals)
             ctx["totals"] = {"clicks": cl, "impressions": im,
                              "ctr": (cl / im) if im else 0.0, "position": (pw / im) if im else 0.0}
         else:
-            ctx["totals"] = totals_svc.site_totals(db, site.id, dr)
+            ctx["totals"] = totals_svc.site_totals(db, ids, dr)
     return templates.TemplateResponse(request, "dashboard.html", ctx)
 
 

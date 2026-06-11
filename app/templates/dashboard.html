@@ -23,8 +23,11 @@
   <label>По <input type="date" name="end" value="{{ range.end }}"></label>
   <label><input type="checkbox" name="clean" value="1" {% if clean %}checked{% endif %} onchange="this.form.submit()"> Без ботов</label>
   <label><input type="checkbox" name="devices" value="1" {% if devices %}checked{% endif %} onchange="this.form.submit()"> Десктоп/моб отдельно</label>
+  <label><input type="checkbox" name="merge" value="1" {% if merge %}checked{% endif %} onchange="this.form.submit()"> Объединить домен</label>
   <label>&nbsp;<button type="submit">Показать</button></label>
 </form>
+{% if merged %}<p><mark>Объединено свойств одного домена «{{ merged.domain }}»: {{ merged.count }}. Берётся максимум на URL/день — данные из <code>https://</code> и <code>sc-domain:</code> не задваиваются.</mark></p>
+{% elif merge %}<p><small>Для «{{ site.property_uri }}» другого свойства того же домена в этом источнике не нашлось — объединять нечего.</small></p>{% endif %}
 {% if clean %}<p><mark>KPI ниже — «чистые» (вычтено «ботовое» устройство на страницах с перекосом ≥ {{ ratio }}×). График — сырой.</mark></p>{% endif %}
 
 {% if totals %}
