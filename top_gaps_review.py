@@ -100,15 +100,13 @@ def add_sheet(wb, info, data, brand, title):
     print(f"  {title:<10} строк {n} | GAP(нет у нас, ≥2 конк.) {g} | со снятыми {s}")
 
 def _keep(u, name):
-    """Только товарная страница-компрессор (категории/листинги/не-компрессоры — вон)."""
-    if not is_product_url(u): return False                   # v-p-k /catalog/, аренда, б/у, статьи
-    text=(name or "")+" "+_slug(u)
-    if not any(ch.isdigit() for ch in text): return False    # нет числа = бренд/категория
-    return is_compressor(text)
+    """Минимальный отсев: чистые категории без модели (нет цифр в имени и слаге, как
+    v-p-k/catalog/maslyanye-kompressory-.../ceccato/). Группы моделей (b-4900) остаются."""
+    return any(ch.isdigit() for ch in (name or "")+_slug(u))
 
 def build():
     info=load_all()
-    info={u:v for u,v in info.items() if _keep(u, v[0])}     # отсев не-товаров ДО кластеризации
+    info={u:v for u,v in info.items() if _keep(u, v[0])}
     data=cluster_all(info)
     wb=openpyxl.Workbook(); wb.remove(wb.active)
     for brand,title in BRANDS: add_sheet(wb, info, data, brand, title)
