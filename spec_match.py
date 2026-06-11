@@ -136,6 +136,30 @@ def agree_num(a, b, tol=0.06):
 
 FLOW_TOL = 0.04   # допуск производительности (строго: GA11=1560 vs GA11+=1820 не путать)
 
+CHECK_FIELDS=[("кВт","kw",0.06),("бар","bar",0.10),("произв","fl",0.04)]
+
+def card_issue(o, same, fields=CHECK_FIELDS):
+    """«Проверить карточку»: поле нашего товара расходится с конкурентами ТОЙ ЖЕ модели.
+    Проверяем ПО ПОЛЮ (не по факту матча): пиннуем остальные поля + FF/VSD; если наше
+    значение никто из вариантов не подтверждает, а на ДРУГОМ значении согласны ≥2 сайта —
+    флаг. Так не прячется ×10-ошибка, сматченная к карточке без этого поля (Atmos ST45 flow
+    680 vs 6600), и не флагуется верное значение, подтверждённое карточкой (ZR75 9 бар)."""
+    for label,key,tol in fields:
+        ov=o.get(key)
+        if not ov: continue
+        others=[(k2,t2) for (l2,k2,t2) in fields if k2!=key]
+        variant=[c for c in same if c.get(key)
+                 and (c.get("ff") or 0)==(o.get("ff") or 0) and (c.get("vsd") or 0)==(o.get("vsd") or 0)
+                 and all(o.get(k2) and c.get(k2) and abs(o[k2]-c[k2])<=t2*max(o[k2],c[k2]) for k2,t2 in others)]
+        if not variant: continue
+        if any(abs(c[key]-ov)<=tol*max(c[key],ov) for c in variant): continue   # наше значение подтверждено
+        for c1 in variant:
+            v1=c1[key]; doms={c2["site"] for c2 in variant if abs(c2[key]-v1)<=tol*max(c2[key],v1)}
+            if len(doms)>=2:
+                src=next(c2 for c2 in variant if abs(c2[key]-v1)<=tol*max(c2[key],v1))
+                return (label, ov, v1, len(doms), max(ov,v1)/min(ov,v1), src)
+    return None
+
 def match(o, cands):
     """o, cands: dict с ключами sn,kw,bar,fl,oil,vsd,ff,rv. Возврат: список подходящих.
     Масло НЕ сравниваем: серия+номер обязаны совпасть, а внутри одной модели масляность

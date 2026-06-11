@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 from collections import defaultdict
 from matcher import brand_of, domain
 from spec_match import (num, sane_kw, sane_bar, bar_value, bar_from_text, flow_value, bar_flow_pairs,
-                        series_num, text_flags, is_compressor, match, receiver_filter)
+                        series_num, text_flags, is_compressor, match, receiver_filter, card_issue)
 from atlas_need_specs import is_product_url, slug, dm, best_name
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
                "pnevmo-sklad.ru","v-p-k.ru","rutector.ru"]   # порядок колонок как в осн. отчётах
@@ -114,12 +114,15 @@ def load_comp():
                 if n and n>=10: srv=n; break
                 if str(v).strip().lower() in ("да","есть","yes") and srv is None: srv=1
         if rv is None or (rv==1 and srv and srv>1): rv = srv if srv is not None else rv
-        # сдвоенные карточки «8/10» давление -> кандидат на каждый вариант
-        for bar,fl in bar_flow_pairs(raw_bar, raw_flow, (fkey or "")+" "+str(raw_flow or "")):
+        # сдвоенные карточки «8/10» -> кандидат на вариант; цена на странице = за МЛАДШИЙ вариант
+        pairs=sorted(bar_flow_pairs(raw_bar, raw_flow, (fkey or "")+" "+str(raw_flow or "")),
+                     key=lambda bf:(bf[0] is None, bf[0] or 0))
+        for i,(bar,fl) in enumerate(pairs):
             if kw is None and fl is None: continue
+            cp=price.get(u) if (len(pairs)==1 or i==0) else None
             cands.append(dict(sn=sn, kw=kw, bar=bar or bar_from_text(text), fl=fl, oil=oil,
                               ff=ff, vsd=vsd, rv=rv, name=nm or slug(u), url=u, site=dm(u),
-                              price=price.get(u), status=status.get(u,"")))
+                              price=cp, status=status.get(u,"")))
     return cands
 
 def why(o, c):
@@ -257,25 +260,8 @@ def build():
     ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
     print(f"GAP-моделей (нет у нас, ≥2 сайта): {len(gap)}")
 
-    # ЛИСТ 4: Проверить карточку — у конкурентов ТА ЖЕ модель (серия+номер + совпали ДРУГИЕ
-    # поля + FF/VSD), но по одному полю ≥2 сайта согласны между собой, а наше значение иное.
-    # Пиннинг других полей обязателен: у GA22 куча вариантов по давлению/потоку.
-    FIELDS=[("кВт","kw",0.06),("бар","bar",0.10),("произв","fl",0.04)]
-    def find_issue(o, same):
-        for label,key,tol in FIELDS:
-            ov=o.get(key)
-            if not ov: continue
-            others=[(k2,t2) for (l2,k2,t2) in FIELDS if k2!=key]
-            variant=[c for c in same if c.get(key)
-                     and (c["ff"] or 0)==(o.get("ff") or 0) and (c["vsd"] or 0)==(o.get("vsd") or 0)
-                     and all(o.get(k2) and c.get(k2) and abs(o[k2]-c[k2])<=t2*max(o[k2],c[k2])
-                             for k2,t2 in others)]
-            for c1 in variant:
-                v1=c1[key]; doms={c2["site"] for c2 in variant if abs(c2[key]-v1)<=tol*max(c2[key],v1)}
-                if len(doms)>=2 and abs(ov-v1)>tol*max(ov,v1):
-                    src=next(c2 for c2 in variant if abs(c2[key]-v1)<=tol*max(c2[key],v1))
-                    return (f"{label}: у нас {ov:g}, у конкур. {v1:g} ({len(doms)} сайт.)", src)
-        return None
+    # ЛИСТ 4: Проверить карточку — наша спека против конкурентов ТОЙ ЖЕ модели (по полю:
+    # card_issue само-валидирует — не прячет ×10-ошибку при матче к карточке без поля).
     orange=Font(color="C55A11", underline="single")
     ws=wb.create_sheet("Проверить карточку")
     HDR=["№","Наш товар","Ваша цена","Что не так (спека)","Подтверждение (конкурент)"]
@@ -284,16 +270,16 @@ def build():
         cell=ws.cell(1,ci); cell.font=bold; cell.fill=hfill; cell.alignment=center
     r=1
     for o in sorted(ours, key=lambda o:o["name"]):
-        if id(o) in matched: continue          # сматчился -> спека верна, не подозреваем
-        issue=find_issue(o, by_sn.get(o["sn"], []))
-        if not issue: continue
+        iss=card_issue(o, by_sn.get(o["sn"], []))
+        if not iss: continue
+        label,ov,v1,nd,ratio,src=iss
         r+=1
         ws.cell(r,1,r-1); ws.cell(r,2,o["name"])
         c3=ws.cell(r,3, o["price"] if o["price"] else "нет цены")
         if o["price"]: c3.number_format="# ##0"
         c3.hyperlink=o["url"]; c3.font=blue
-        ws.cell(r,4, issue[0]).font=orange
-        lk=ws.cell(r,5, f"[{issue[1]['site']}] {issue[1]['name'][:50]}"); lk.hyperlink=issue[1]["url"]; lk.font=blue
+        ws.cell(r,4, f"{label}: у нас {ov:g}, у конкур. {v1:g} ({nd} сайт.)").font=orange
+        lk=ws.cell(r,5, f"[{src['site']}] {src['name'][:50]}"); lk.hyperlink=src["url"]; lk.font=blue
     widths=[5,46,12,40,52]
     for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
     ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"

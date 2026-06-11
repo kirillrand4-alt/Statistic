@@ -6,27 +6,10 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from collections import defaultdict
-from brand_spec_review import load_ours_all, load_comp_all, FIELDS
-from spec_match import match, receiver_filter
+from brand_spec_review import load_ours_all, load_comp_all
+from spec_match import card_issue
 
 OUT="/home/user/Statistic/Proverit_kartochku_ALL.xlsx"
-
-def find_issue(o, same):
-    for label,key,tol in FIELDS:
-        ov=o.get(key)
-        if not ov: continue
-        others=[(k2,t2) for (l2,k2,t2) in FIELDS if k2!=key]
-        variant=[c for c in same if c.get(key)
-                 and (c["ff"] or 0)==(o.get("ff") or 0) and (c["vsd"] or 0)==(o.get("vsd") or 0)
-                 and all(o.get(k2) and c.get(k2) and abs(o[k2]-c[k2])<=t2*max(o[k2],c[k2])
-                         for k2,t2 in others)]
-        for c1 in variant:
-            v1=c1[key]; doms={c2["site"] for c2 in variant if abs(c2[key]-v1)<=tol*max(c2[key],v1)}
-            if len(doms)>=2 and abs(ov-v1)>tol*max(ov,v1):
-                src=next(c2 for c2 in variant if abs(c2[key]-v1)<=tol*max(c2[key],v1))
-                ratio=max(ov,v1)/min(ov,v1)
-                return (label, ov, v1, len(doms), ratio, src)
-    return None
 
 def build():
     ours_all=load_ours_all(); cands_all=load_comp_all()
@@ -35,8 +18,7 @@ def build():
         by=defaultdict(list)
         for c in cands_all[b]: by[c["sn"]].append(c)
         for o in ours_all[b]:
-            if receiver_filter(o.get("rv"), match(o, by.get(o["sn"], []))): continue  # сматчился
-            iss=find_issue(o, by.get(o["sn"], []))
+            iss=card_issue(o, by.get(o["sn"], []))   # по полю: подтверждено -> ок; иначе консенсус ≠ нашего
             if iss: rows.append((b, o, iss))
     rows.sort(key=lambda t:-t[2][4])   # по кратности убыв.
 
