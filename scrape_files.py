@@ -23,6 +23,7 @@ SCRAPE_FILES = [
     U + "e0a44202-all_prices_20260611_020527.csv",   # ночной (кумулятивный): +900 pnevmo-sklad полных
     U + "bda24f53-all_prices_20260611_034735_hdr.csv", # pnevmo-sklad «снятые»+осушители (был без шапки -> _hdr)
     U + "e073f158-all_prices_20260611_041506_hdr.csv",  # pnevmo-sklad хвост (898 строк, был без шапки -> _hdr)
+    U + "c7c522c7-all_prices_20260611_100824.csv",       # pnevmo-sklad: недостающие строки (3191)
 ]
 
 # прогоны ОБНОВЛЁННОГО парсера (фиксы проверены с 06:01 10.06, см. PARSER_NOTES).

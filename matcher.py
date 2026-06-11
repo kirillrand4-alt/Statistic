@@ -35,6 +35,8 @@ BRAND_ALIASES = {
     "aztec":"aztec","chkz":"chkz","hori":"hori","mig":"mig","mmz":"mmz","spr":"spr",
     "ir":"ir","ingersoll":"ir","rand":"ir",
     "ac":"atlas",   # «AC» = Atlas Copco (у нас: «AC GA22 VSD+», «AC ZR 110»; v-p-k: aq-…-ac-ff)
+    # кириллические имена производителей (Битрикс-выгрузка пишет кириллицей)
+    "зиф":"zif","ркз":"mig","бежецк":"aso","чкз":"chkz","минский":"mmz","ремеза":"remeza",
     # конкурентские бренды, которых нет у prokompressor (на рассмотрение)
     "xeleron":"xeleron","gmp":"gmp","kaishan":"kaishan","denair":"denair","vortex":"vortex",
     "brestor":"brestor","baldor":"baldor","alup":"alup",

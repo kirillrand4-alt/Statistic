@@ -1,0 +1,339 @@
+"""Раскатка спек-матча на ВСЕ бренды. Per-brand xlsx, 5 листов:
+  спек-матч / неоднозначные / GAP (нет у нас) / Проверить карточку / Снятые у конкурентов.
+Atlas — спец-regex серий (SER_ATLAS); остальные — дженерик «слово+число» (дефис/точка
+внутри слова склеиваются: K-MAX=KMAX; стоп-слова и бренд-токены пропускаются).
+Исполнения одной физ-спеки (AC/WC/Pack/фаза) = один товар (жёлтая ячейка, цена min)."""
+import csv, sys, json, re, os, zipfile
+csv.field_size_limit(sys.maxsize)
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+from collections import defaultdict, Counter
+from matcher import brand_of, BRAND_ALIASES, brand_from_text
+from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value,
+                        series_num, text_flags, is_compressor, match, receiver_filter)
+from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
+from scrape_files import U
+
+SPECS_CSV = U + "specs2/specs_compact.csv"
+PROKO_CSV = U + "e7171060-products_export_20260608.csv"
+OUTDIR = "/home/user/Statistic/brand_reports"
+ZIP    = "/home/user/Statistic/Brands_spec_match.zip"
+COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
+               "pnevmo-sklad.ru","v-p-k.ru","rutector.ru"]
+
+# --- дженерик-серия: первое «слово+число» после чистки -----------------------------------
+_STOPW = {"компрессор","компрессора","компрессоры","kompressor","винтовой","vintovoy","vintovoj",
+    "поршневой","porshnevoy","porshnevoj","спиральный","безмасляный","bezmaslyanyy","дизельный",
+    "dizelnyy","электрический","elektricheskiy","передвижной","peredvizhnoy","масляный",
+    "ременный","remennyy","прямой","privod","привод","серия","серии","model","модель","тип",
+    "ip","квт","kvt","kw","бар","bar","атм","atm","гц","hz","фаз","ph","шт","мм","кг","до","от",
+    "для","с","на","и","в","quot","plus","vsd","ff","pack","silenced","unsilenced","trolley",
+    "block","receiver","ресивер","resiver","tm","ас","wc","ac"}
+def gen_series(text, brand):
+    s=" "+str(text).lower().replace("_"," ")+" "
+    s=re.sub(r"(?<=[a-zа-я])[\-.](?=[a-zа-я])","",s)     # k-max -> kmax, dr.sonic -> drsonic
+    s=s.replace("-"," ").replace("/"," ")
+    btoks={brand}|{a for a,c in BRAND_ALIASES.items() if c==brand}
+    for m in re.finditer(r"\b([a-zа-я]{2,12})\s*(\d+(?:[.,]\d+)?)", s):
+        w=m.group(1)
+        if w in _STOPW or w in btoks: continue
+        return (w, float(m.group(2).replace(",",".")))
+    return None
+
+def ser_of(text, brand):
+    return series_num(text) if brand=="atlas" else gen_series(text, brand)
+
+def oil_of(v):
+    s=str(v).strip().lower()
+    if not s: return None
+    if "безмасл" in s or s in ("да","yes"): return "безмасл"
+    if "масл" in s or s in ("нет","no"):    return "масл"
+    return None
+
+# --- наши товары по брендам ---------------------------------------------------------------
+def load_ours_all():
+    rows={}
+    for r in csv.DictReader(open(SPECS_CSV, encoding="utf-8-sig", errors="replace"), delimiter=";"):
+        code=(r.get("IE_CODE") or "").strip()
+        if not code: continue
+        cur=rows.setdefault(code, {})
+        for k,v in r.items():
+            if v and not cur.get(k): cur[k]=v.strip()
+    price={}
+    for row in csv.reader(open(PROKO_CSV, encoding="utf-8-sig", errors="replace"), delimiter=";"):
+        if len(row)<3 or "prokompressor" not in row[1]: continue
+        sl=row[1].rstrip("/").split("/")[-1].lower()
+        try: p=float(str(row[2]).replace(",",".").replace(" ","")) or None
+        except: p=None
+        price[sl]=(row[0].strip().replace("&quot;",'"'), row[1].strip(), p)
+    ours=defaultdict(list)
+    for code,r in rows.items():
+        man=(r.get("IP_PROP22553") or "").strip()
+        b=brand_from_text(man) or BRAND_ALIASES.get(man.lower().split()[0] if man else "", None)
+        if not b: continue
+        name=r.get("IE_NAME","")
+        if not is_compressor(name+" "+code): continue
+        sn=ser_of(name+" "+code, b)
+        if not sn: continue
+        ff,vsd,rv = text_flags(name+" "+code)
+        if rv is None:
+            if num(r.get("IP_PROP22564")): rv=num(r.get("IP_PROP22564"))
+            elif str(r.get("IP_PROP22574","")).strip().lower() in ("да","есть"): rv=1
+        fl = flow_value(r.get("IP_PROP22571"), "л/мин") or flow_value(r.get("IP_PROP22658"), "м3/мин")
+        nm,url,p = price.get(code.lower(), (name, f"https://prokompressor.ru/catalog/{code}/", None))
+        ours[b].append(dict(sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
+                            bar=bar_value(r.get("IP_PROP22573")) or bar_from_text(name+" "+code),
+                            fl=fl, oil=oil_of(r.get("IP_PROP22583")), ff=ff, vsd=vsd, rv=rv,
+                            name=nm or name, url=url, price=p))
+    return ours
+
+# --- конкуренты по брендам ----------------------------------------------------------------
+def load_comp_all():
+    names, specs, _ = load_universe()
+    price={}; status={}
+    import scrape_files
+    for f in scrape_files.SCRAPE_FILES:
+        try: fh=open(f, encoding="utf-8-sig", errors="replace")
+        except FileNotFoundError: continue
+        for r in csv.DictReader(fh):
+            u=(r.get("product_url") or "").strip()
+            if not u: continue
+            try:
+                v=float(str(r.get("price","")).replace(",",".").replace(" ",""))
+                if v>0: price[u]=v
+            except: pass
+            st=(r.get("series_status") or "").lower()
+            if "снят" in st and "v-p-k.ru/catalog" not in u: status[u]="снято"
+    cands=defaultdict(list)
+    for u,nm in names.items():
+        if dm(u) not in COMPETITORS or not is_product_url(u): continue
+        b=brand_of(u, nm)
+        if not b: continue
+        text=(nm or "")+" "+slug(u)
+        if not any(ch.isdigit() for ch in text) or not is_compressor(text): continue
+        sn=ser_of(text, b)
+        if not sn: continue
+        d=specs.get(u, {})
+        kw=bar=fl=None; oil=None
+        for k,v in d.items():
+            kl=k.lower()
+            if kw is None and "мощ" in kl and "шум" not in kl and "звук" not in kl: kw=sane_kw(num(v))
+            if bar is None and "давлен" in kl: bar=bar_value(v)
+            if fl is None and "произв" in kl: fl=flow_value(v, kl+" "+str(v))
+            if oil is None and "безмасл" in kl: oil=oil_of(v)
+        if kw is None and fl is None: continue
+        ff,vsd,rv = text_flags(nm) if nm else text_flags(slug(u))
+        srv=None
+        for k,v in d.items():
+            if "ресивер" in k.lower():
+                n=num(v)
+                if n and n>=10: srv=n; break
+                if str(v).strip().lower() in ("да","есть","yes") and srv is None: srv=1
+        if rv is None or (rv==1 and srv and srv>1): rv = srv if srv is not None else rv
+        cands[b].append(dict(sn=sn, kw=kw, bar=bar or bar_from_text(text), fl=fl, oil=oil,
+                             ff=ff, vsd=vsd, rv=rv, name=nm or slug(u), url=u, site=dm(u),
+                             price=price.get(u), status=status.get(u,"")))
+    return cands
+
+# --- стили --------------------------------------------------------------------------------
+def _styles():
+    return dict(blue=Font(color="0563C1", underline="single"),
+        strike=Font(color="C00000", underline="single", strike=True),
+        bold=Font(bold=True, color="FFFFFF"), hfill=PatternFill("solid", fgColor="305496"),
+        warn=PatternFill("solid", fgColor="FFE699"), nomatch=PatternFill("solid", fgColor="F2F2F2"),
+        orange=Font(color="C55A11", underline="single"),
+        center=Alignment(horizontal="center", vertical="center", wrap_text=True))
+
+def _hdr(ws, HDR, st):
+    ws.append(HDR)
+    for ci in range(1,len(HDR)+1):
+        c=ws.cell(1,ci); c.font=st["bold"]; c.fill=st["hfill"]; c.alignment=st["center"]
+
+FIELDS=[("кВт","kw",0.06),("бар","bar",0.10),("произв","fl",0.04)]
+
+def why(o, c):
+    f=lambda v: ("%g"%v) if v is not None else "—"
+    parts=[f"{str(o['sn'][0]).upper()}{o['sn'][1]:g}", f"кВт {f(o['kw'])}≈{f(c['kw'])}",
+           f"бар {f(o['bar'])}≈{f(c['bar'])}", f"произв {f(o['fl'])}≈{f(c['fl'])}"]
+    if o.get("ff"): parts.append("FF")
+    if o.get("vsd"): parts.append("VSD")
+    if o.get("rv") is not None: parts.append(f"ресивер {f(o['rv'])}≈{f(c.get('rv'))}")
+    return " · ".join(parts)
+
+def build_brand(brand, title, ours, cands):
+    by_sn=defaultdict(list)
+    for c in cands: by_sn[c["sn"]].append(c)
+    clean=[]; ambig=[]; n0=0
+    for o in ours:
+        m=receiver_filter(o.get("rv"), match(o, by_sn.get(o["sn"], [])))
+        per=defaultdict(dict); nexec=defaultdict(lambda: defaultdict(int))
+        for c in m:
+            k=(c["sn"],c["kw"],c["bar"],c["fl"],c["ff"] or 0,c["vsd"] or 0,c["rv"])
+            nexec[c["site"]][k]+=1; cur=per[c["site"]].get(k)
+            if cur is None or (c["price"] and (not cur["price"] or c["price"]<cur["price"])):
+                per[c["site"]][k]=c
+        if not per: n0+=1; continue
+        (ambig if any(len(v)>1 for v in per.values()) else clean).append((o, per, nexec))
+    matched={id(o) for o,_,_ in clean+ambig}
+
+    st=_styles()
+    wb=openpyxl.Workbook(); wb.remove(wb.active)
+    # 1-2: матчи
+    for tname, rows in (("спек-матч", clean), ("неоднозначные", ambig)):
+        ws=wb.create_sheet(tname)
+        HDR=["№","Наш товар","Ваша цена"]+COMPETITORS+["min конк.","Δ к min, %","Почему сцепилось","ВЕРДИКТ"]
+        _hdr(ws, HDR, st)
+        rows=sorted(rows, key=lambda t:(-len(t[1]), t[0]["name"]))
+        r=1
+        for o,per,nexec in rows:
+            r+=1
+            ws.cell(r,1,r-1); ws.cell(r,2,o["name"])
+            c3=ws.cell(r,3, o["price"] if o["price"] else "нет цены")
+            if o["price"]: c3.number_format="# ##0"
+            c3.hyperlink=o["url"]; c3.font=st["blue"]
+            comp_prices=[]; first=None
+            for ci,site in enumerate(COMPETITORS):
+                cell=ws.cell(r,4+ci); cards=list(per.get(site,{}).values())
+                if not cards: cell.fill=st["nomatch"]; continue
+                priced=[c for c in cards if c["price"] and c["status"]!="снято"]
+                show=min(priced, key=lambda c:c["price"]) if priced else cards[0]
+                first=first or show
+                if show["price"]:
+                    cell.value=show["price"]; cell.number_format="# ##0"; cell.hyperlink=show["url"]
+                    if show["status"]=="снято": cell.font=st["strike"]
+                    else: cell.font=st["blue"]; comp_prices.append(show["price"])
+                else:
+                    cell.value="снято" if show["status"]=="снято" else "По запросу"
+                    cell.hyperlink=show["url"]
+                    cell.font=st["strike"] if show["status"]=="снято" else st["blue"]
+                if len(cards)>1 or any(n>1 for n in nexec.get(site,{}).values()): cell.fill=st["warn"]
+            if comp_prices:
+                mn=min(comp_prices)
+                ws.cell(r,10,mn).number_format="# ##0"
+                if o["price"]: ws.cell(r,11, round((o["price"]-mn)/mn*100,1))
+            ws.cell(r,12, why(o, first))
+        widths=[5,46,12]+[13]*6+[11,10,46,22]
+        for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
+        ws.freeze_panes="C2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
+    # 3: GAP
+    our_sn={o["sn"] for o in ours}
+    groups=defaultdict(lambda: defaultdict(list))
+    for c in cands:
+        if c["sn"] in our_sn: continue
+        gk=(c["sn"], round(c["kw"]) if c["kw"] else None, round(c["bar"]) if c["bar"] else None,
+            c["ff"] or 0, c["vsd"] or 0)
+        groups[gk][c["site"]].append(c)
+    gap=[(gk,s) for gk,s in groups.items() if len(s)>=2]
+    gap.sort(key=lambda t:-len(t[1]))
+    ws=wb.create_sheet("GAP — нет у нас")
+    HDR=["№","Модель (у конкурентов, нас нет)","Серия","кВт","бар","Сайтов"]+COMPETITORS+["min конк."]
+    _hdr(ws, HDR, st); r=1
+    for gk,sites in gap:
+        r+=1; allc=[c for cs in sites.values() for c in cs]
+        ws.cell(r,1,r-1); ws.cell(r,2, max(allc,key=lambda c:len(c["name"]))["name"])
+        ws.cell(r,3, f"{str(gk[0][0]).upper()}{gk[0][1]:g}"); ws.cell(r,4,gk[1] or ""); ws.cell(r,5,gk[2] or "")
+        ws.cell(r,6,len(sites)); prices=[]
+        for ci,site in enumerate(COMPETITORS):
+            cell=ws.cell(r,7+ci); cs=sites.get(site)
+            if not cs: cell.fill=st["nomatch"]; continue
+            priced=[c for c in cs if c["price"] and c["status"]!="снято"]
+            show=min(priced,key=lambda c:c["price"]) if priced else cs[0]
+            if show["price"]:
+                cell.value=show["price"]; cell.number_format="# ##0"; cell.hyperlink=show["url"]
+                cell.font=st["strike"] if show["status"]=="снято" else st["blue"]
+                if show["status"]!="снято": prices.append(show["price"])
+            else:
+                cell.value="снято" if show["status"]=="снято" else "По запросу"
+                cell.hyperlink=show["url"]; cell.font=st["strike"] if show["status"]=="снято" else st["blue"]
+            if len(cs)>1: cell.fill=st["warn"]
+        if prices: ws.cell(r,13,min(prices)).number_format="# ##0"
+    widths=[5,52,10,7,7,8]+[13]*6+[11]
+    for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
+    ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
+    n_gap=len(gap)
+    # 4: Проверить карточку (только несматченные; пиннинг остальных полей + FF/VSD)
+    def find_issue(o, same):
+        for label,key,tol in FIELDS:
+            ov=o.get(key)
+            if not ov: continue
+            others=[(k2,t2) for (l2,k2,t2) in FIELDS if k2!=key]
+            variant=[c for c in same if c.get(key)
+                     and (c["ff"] or 0)==(o.get("ff") or 0) and (c["vsd"] or 0)==(o.get("vsd") or 0)
+                     and all(o.get(k2) and c.get(k2) and abs(o[k2]-c[k2])<=t2*max(o[k2],c[k2])
+                             for k2,t2 in others)]
+            for c1 in variant:
+                v1=c1[key]; doms={c2["site"] for c2 in variant if abs(c2[key]-v1)<=tol*max(c2[key],v1)}
+                if len(doms)>=2 and abs(ov-v1)>tol*max(ov,v1):
+                    src=next(c2 for c2 in variant if abs(c2[key]-v1)<=tol*max(c2[key],v1))
+                    return (f"{label}: у нас {ov:g}, у конкур. {v1:g} ({len(doms)} сайт.)", src)
+        return None
+    ws=wb.create_sheet("Проверить карточку")
+    _hdr(ws, ["№","Наш товар","Ваша цена","Что не так (спека)","Подтверждение (конкурент)"], st)
+    r=1
+    for o in sorted(ours, key=lambda o:o["name"]):
+        if id(o) in matched: continue
+        issue=find_issue(o, by_sn.get(o["sn"], []))
+        if not issue: continue
+        r+=1
+        ws.cell(r,1,r-1); ws.cell(r,2,o["name"])
+        c3=ws.cell(r,3, o["price"] if o["price"] else "нет цены")
+        if o["price"]: c3.number_format="# ##0"
+        c3.hyperlink=o["url"]; c3.font=st["blue"]
+        ws.cell(r,4, issue[0]).font=st["orange"]
+        lk=ws.cell(r,5, f"[{issue[1]['site']}] {issue[1]['name'][:50]}")
+        lk.hyperlink=issue[1]["url"]; lk.font=st["blue"]
+    widths=[5,46,12,40,52]
+    for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
+    ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(5)}{r}"
+    n_chk=r-1
+    # 5: Снятые у конкурентов (карточки компрессоров со статусом «снято»)
+    ws=wb.create_sheet("Снятые у конкурентов")
+    _hdr(ws, ["№","Карточка конкурента (снято)","Сайт","Цена (была)","Серия","У нас (тот же ряд)","Наша цена"], st)
+    sny=[c for c in cands if c["status"]=="снято"]
+    sny.sort(key=lambda c:(str(c["sn"][0]), c["sn"][1], c["site"]))
+    our_by_sn=defaultdict(list)
+    for o in ours: our_by_sn[o["sn"]].append(o)
+    r=1
+    for c in sny:
+        r+=1
+        ws.cell(r,1,r-1)
+        nm=ws.cell(r,2,c["name"][:70]); nm.hyperlink=c["url"]; nm.font=st["strike"]
+        ws.cell(r,3,c["site"])
+        if c["price"]: pc=ws.cell(r,4,c["price"]); pc.number_format="# ##0"; pc.font=st["strike"]
+        ws.cell(r,5, f"{str(c['sn'][0]).upper()}{c['sn'][1]:g}")
+        oo=[o for o in our_by_sn.get(c["sn"],[]) if match(o,[c])]
+        if oo:
+            o=oo[0]; l=ws.cell(r,6,o["name"][:50]); l.hyperlink=o["url"]; l.font=st["blue"]
+            if o["price"]: ws.cell(r,7,o["price"]).number_format="# ##0"
+        elif c["sn"] in our_sn:
+            ws.cell(r,6,"серия есть у нас")
+    widths=[5,60,18,12,10,50,12]
+    for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
+    ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(7)}{r}"
+    path=os.path.join(OUTDIR, f"{title}_spec_review.xlsx")
+    wb.save(path)
+    return dict(clean=len(clean), ambig=len(ambig), no=n0, gap=n_gap, chk=n_chk, sny=len(sny), path=path)
+
+def build_all(only=None, min_ours=5, min_cands=5):
+    os.makedirs(OUTDIR, exist_ok=True)
+    ours_all=load_ours_all(); cands_all=load_comp_all()
+    res={}
+    brands=sorted(set(ours_all)&set(cands_all))
+    for b in brands:
+        if only and b not in only: continue
+        if len(ours_all[b])<min_ours or len(cands_all[b])<min_cands: continue
+        title=b.capitalize() if b!="ir" else "IngersollRand"
+        r=build_brand(b, title, ours_all[b], cands_all[b])
+        res[b]=r
+        print(f"{b:<14} матч {r['clean']:>4} | неодн {r['ambig']:>3} | без {r['no']:>4} | "
+              f"GAP {r['gap']:>4} | карточки {r['chk']:>3} | снятые {r['sny']:>4}")
+    return res
+
+if __name__=="__main__":
+    import sys as _s
+    only=set(_s.argv[1:]) or None
+    res=build_all(only)
+    with zipfile.ZipFile(ZIP, "w", zipfile.ZIP_DEFLATED) as z:
+        for b,r in res.items(): z.write(r["path"], os.path.basename(r["path"]))
+    print(f"-> {ZIP} ({len(res)} брендов)")
