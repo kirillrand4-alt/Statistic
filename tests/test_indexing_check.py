@@ -61,6 +61,48 @@ def test_indexing_check_route(client):
     assert "✓ да" in r.text and "✗ нет" in r.text
 
 
+def _seed_site_with_snapshot() -> int:
+    s = SessionLocal()
+    gsc = ensure_sources(s)["gsc"]
+    site = Site(source_id=gsc.id, property_uri="sc-domain:example.com", display_name="demo")
+    s.add(site)
+    s.commit()
+    sid = site.id
+    indexing.capture_indexed_urls(s, site)  # DEFAULT_PAGES incl. /about
+    s.close()
+    return sid
+
+
+def test_indexing_export_not_indexed_txt(client):
+    sid = _seed_site_with_snapshot()
+    r = client.post("/ui/indexing/check/export", data={
+        "site_id": sid,
+        "urls_text": "https://example.com/about\nhttps://example.com/ghost-1\nhttps://example.com/ghost-2",
+        "export": "out:txt",
+    })
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+    assert "attachment" in r.headers["content-disposition"]
+    assert ".txt" in r.headers["content-disposition"]
+    lines = [ln for ln in r.text.splitlines() if ln]
+    assert set(lines) == {"https://example.com/ghost-1", "https://example.com/ghost-2"}
+    assert "https://example.com/about" not in lines  # indexed -> excluded
+
+
+def test_indexing_export_all_csv(client):
+    sid = _seed_site_with_snapshot()
+    r = client.post("/ui/indexing/check/export", data={
+        "site_id": sid,
+        "urls_text": "https://example.com/about\nhttps://example.com/ghost",
+        "export": "all:csv",
+    })
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert "url,in_index,title" in r.text
+    assert "https://example.com/about,1" in r.text
+    assert "https://example.com/ghost,0" in r.text
+
+
 def test_indexing_check_route_no_snapshot(client):
     s = SessionLocal()
     gsc = ensure_sources(s)["gsc"]

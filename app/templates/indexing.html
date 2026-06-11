@@ -47,6 +47,15 @@
 {% if check %}
 <article>
   <header>В индексе <ins>{{ check.in_count }}</ins> из {{ check.total }} · нет в индексе <del>{{ check.out_count }}</del> · по снимку {{ check.captured_on }}</header>
+  <form method="post" action="{{ base_path }}/ui/indexing/check/export">
+    <input type="hidden" name="site_id" value="{{ site.id }}">
+    <textarea name="urls_text" hidden>{{ check.input_text }}</textarea>
+    <div class="grid">
+      <button type="submit" name="export" value="out:txt">⬇ Не в индексе — список .txt ({{ check.out_count|numfmt }})</button>
+      <button type="submit" name="export" value="out:csv" class="secondary">⬇ Не в индексе — .csv</button>
+      <button type="submit" name="export" value="all:csv" class="secondary outline">⬇ Все результаты — .csv</button>
+    </div>
+  </form>
   <figure><table class="sortable">
     <thead><tr><th>URL</th><th>В индексе?</th><th>Заголовок в индексе</th></tr></thead>
     <tbody>

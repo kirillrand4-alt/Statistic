@@ -6,7 +6,7 @@ from datetime import date
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -470,10 +470,57 @@ async def ui_indexing_check(request: Request, site_id: int = Form(...),
         raw += urls_text
     urls = [line.strip() for line in raw.replace(",", "\n").splitlines() if line.strip()]
     check = indexing.check_urls(db, site, urls)
+    if check:
+        check["input_text"] = "\n".join(r["input"] for r in check["rows"])
     msg = None if check else "Сначала создайте снимок страниц в индексе (кнопка выше) — потом проверяйте список."
     return templates.TemplateResponse(
         request, "indexing.html", _indexing_ctx(db, request, site_id, msg=msg, check=check)
     )
+
+
+@router.post("/ui/indexing/check/export")
+async def ui_indexing_check_export(site_id: int = Form(...), urls_text: str | None = Form(None),
+                                   export: str = Form("out:txt"), db: Session = Depends(get_db)):
+    """Re-run the check and return matching URLs as a download. `export` = "<only>:<fmt>"
+    where only ∈ {out,in,all} and fmt ∈ {txt,csv}."""
+    import csv
+    import io
+
+    from app.services import indexing
+
+    site = db.get(Site, site_id)
+    if site is None:
+        raise HTTPException(404, "site not found")
+    only, _, fmt = export.partition(":")
+    urls = [line.strip() for line in (urls_text or "").replace(",", "\n").splitlines() if line.strip()]
+    check = indexing.check_urls(db, site, urls)
+    if not check:
+        return RedirectResponse(
+            url=f"{BP}/indexing?site_id={site_id}&msg={quote('Нет снимка для проверки — создайте снимок.')}",
+            status_code=303,
+        )
+    if only == "in":
+        rows = [r for r in check["rows"] if r["in_index"]]
+    elif only == "all":
+        rows = check["rows"]
+    else:
+        only, rows = "out", [r for r in check["rows"] if not r["in_index"]]
+    tag = {"in": "in_index", "all": "index_check", "out": "not_indexed"}[only]
+
+    if fmt == "csv":
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["url", "in_index", "title"])
+        for r in rows:
+            w.writerow([r["input"], int(r["in_index"]), r["title"] or ""])
+        body, media, ext = buf.getvalue(), "text/csv; charset=utf-8", "csv"
+    else:
+        body = "".join(r["input"] + "\n" for r in rows)
+        body, media, ext = body, "text/plain; charset=utf-8", "txt"
+
+    fname = f"{tag}_site{site_id}_{check['captured_on']}.{ext}"
+    return Response(content=body, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 @router.post("/ui/indexing/capture")
