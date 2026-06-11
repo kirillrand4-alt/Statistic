@@ -147,14 +147,19 @@ def build():
     clean=[]; ambig=[]; n0=0
     for o in ours:
         m=receiver_filter(o.get("rv"), match(o, by_sn.get(o["sn"], [])))
-        per_site=defaultdict(dict)                  # site -> {ckey: best-card}
+        # группируем кандидатов по ФИЗИЧЕСКОМУ ключу (исполнение/охлаждение/фаза НЕ различаем —
+        # их у нас в каталоге нет; AC/WC/Pack одной спеки = один сопоставимый товар, берём дешевле).
+        # считаем кол-во исполнений на сайте: ячейку с >1 пометим жёлтым (цена — минимальная).
+        per_site=defaultdict(dict); nexec=defaultdict(lambda: defaultdict(int))
         for c in m:
-            k=_ckey(c); cur=per_site[c["site"]].get(k)
+            k=(c["sn"],c["kw"],c["bar"],c["fl"],c["ff"] or 0,c["vsd"] or 0,c["rv"])  # без имени
+            nexec[c["site"]][k]+=1; cur=per_site[c["site"]].get(k)
             if cur is None or (c["price"] and (not cur["price"] or c["price"]<cur["price"])):
                 per_site[c["site"]][k]=c
         if not per_site: n0+=1; continue
-        (ambig if any(len(v)>1 for v in per_site.values()) else clean).append((o, per_site))
-    matched={id(o) for o,_ in clean+ambig}   # сматчилось -> спека уже сошлась с конкурентом
+        # неоднозначно = на сайте >1 РАЗНОЙ физ-модели (разные спеки), а не просто исполнения
+        (ambig if any(len(v)>1 for v in per_site.values()) else clean).append((o, per_site, nexec))
+    matched={id(o) for o,_,_ in clean+ambig}   # сматчилось -> спека уже сошлась с конкурентом
     print(f"однозначно (на каждом сайте 1 карточка): {len(clean)} | "
           f"неоднозначные (где-то 2+ разных): {len(ambig)} | без матча: {n0}")
 
@@ -174,7 +179,7 @@ def build():
             cell=ws.cell(1,ci); cell.font=bold; cell.fill=hfill; cell.alignment=center
         rows=sorted(rows, key=lambda t:(-len(t[1]), t[0]["name"]))   # больше сайтов — выше
         r=1
-        for o,per_site in rows:
+        for o,per_site,nexec in rows:
             r+=1
             ws.cell(r,1,r-1); ws.cell(r,2,o["name"])
             c3=ws.cell(r,3, o["price"] if o["price"] else "нет цены")
@@ -188,6 +193,7 @@ def build():
                 priced=[c for c in cards if c["price"] and c["status"]!="снято"]
                 show=min(priced, key=lambda c:c["price"]) if priced else cards[0]
                 first=first or show
+                multi_exec=any(n>1 for n in nexec.get(site,{}).values())   # слиты исполнения
                 if show["price"]:
                     cell.value=show["price"]; cell.number_format="# ##0"
                     cell.hyperlink=show["url"]
@@ -198,7 +204,8 @@ def build():
                     cell.value="снято" if show["status"]=="снято" else "По запросу"
                     cell.hyperlink=show["url"]
                     cell.font=strike if show["status"]=="снято" else blue
-                if len(cards)>1: cell.fill=warn
+                # жёлтый: >1 разной физ-модели ИЛИ слиты исполнения (цена — минимальная)
+                if len(cards)>1 or multi_exec: cell.fill=warn
             if comp_prices:
                 mn=min(comp_prices)
                 ws.cell(r,10,mn).number_format="# ##0"
