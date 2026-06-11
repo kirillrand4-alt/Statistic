@@ -1,7 +1,9 @@
 __pycache__/
 *.pyc
 # генерируемые файлы-обзоры и списки (пересобираются скриптами)
-*_review.xlsx
+*.xlsx
+*.zip
+brand_reports/
 *.txt
 !requirements.txt
 night_run/
