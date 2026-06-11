@@ -15,6 +15,7 @@ from atlas_need_specs import is_product_url, slug, dm, best_name
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
                "pnevmo-sklad.ru","v-p-k.ru","rutector.ru"]   # порядок колонок как в осн. отчётах
 from scrape_files import SCRAPE_FILES, U
+from series_ref import snyataya_seriya
 
 SPECS_CSV = U + "specs2/specs_compact.csv"
 PROKO_CSV = U + "e7171060-products_export_20260608.csv"
@@ -167,7 +168,7 @@ def build():
     for title, rows in (("спек-матч", clean), ("неоднозначные", ambig)):
         ws=wb.create_sheet(title)
         HDR=["№","Наш товар","Ваша цена"]+COMPETITORS\
-            +["min конк.","Δ к min, %","Почему сцепилось","ВЕРДИКТ (ок / ошибка: ...)"]
+            +["min конк.","Δ к min, %","Почему сцепилось","Серия снята (подтв.)","ВЕРДИКТ (ок / ошибка: ...)"]
         ws.append(HDR)
         for ci in range(1,len(HDR)+1):
             cell=ws.cell(1,ci); cell.font=bold; cell.fill=hfill; cell.alignment=center
@@ -203,7 +204,12 @@ def build():
                 ws.cell(r,10,mn).number_format="# ##0"
                 if o["price"]: ws.cell(r,11, round((o["price"]-mn)/mn*100,1))
             ws.cell(r,12, why(o, first))
-        widths=[5,46,12]+[13]*len(COMPETITORS)+[11,10,46,24]
+            sn_ser=snyataya_seriya("atlas", o["name"])
+            if sn_ser:
+                c13=ws.cell(r,13, f"снята: {sn_ser[0]}")
+                if sn_ser[1]: c13.hyperlink=sn_ser[1]
+                c13.font=Font(color="C00000", underline="single")
+        widths=[5,46,12]+[13]*len(COMPETITORS)+[11,10,46,18,24]
         for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
         ws.freeze_panes="C2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
     wb.save(OUT); print(f"-> {OUT}")

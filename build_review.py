@@ -11,6 +11,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from matcher import signature, domain, find_brand
 from scrape_files import SCRAPE_FILES
+from series_ref import snyataya_seriya
 
 # Детектор «дробь в названии разная» (класс 5.5↔55, который URL не различает).
 # Фильтруем Excel-битьё названий (1.46031 = сожранное 1,9/1,0) — там матч по URL верный.
@@ -109,7 +110,7 @@ def cluster_all(info):
     return data
 
 HDR=["№","Отпечаток","Название","У нас","Конк-тов","Ваша цена"]\
-    +COMPETITORS+["min конк.","Δ к min, %","ВЕРДИКТ (ок / ошибка: ...)"]
+    +COMPETITORS+["min конк.","Δ к min, %","Серия снята (подтв.)","ВЕРДИКТ (ок / ошибка: ...)"]
 
 def _pick_min(d):
     return min(d, key=lambda k:(d[k] is None, d[k]))
@@ -195,7 +196,12 @@ def add_sheet(wb, info, data, brand, sheet_name):
             mn=min(comp_prices)
             wsx.cell(r,13,mn).number_format="# ##0"
             if pk_price: wsx.cell(r,14, round((pk_price-mn)/mn*100,1))
-    widths=[5,40,44,7,9,12]+[13]*len(COMPETITORS)+[11,10,24]
+        sn_ser=snyataya_seriya(brand, name)
+        if sn_ser:
+            sc=wsx.cell(r,15, f"снята: {sn_ser[0]}")
+            if sn_ser[1]: sc.hyperlink=sn_ser[1]
+            sc.font=Font(color="C00000", underline="single")
+    widths=[5,40,44,7,9,12]+[13]*len(COMPETITORS)+[11,10,18,24]
     for i,w in enumerate(widths,1): wsx.column_dimensions[get_column_letter(i)].width=w
     wsx.freeze_panes="D2"; wsx.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{n+1}"
     return n
