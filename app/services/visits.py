@@ -4,6 +4,8 @@ from __future__ import annotations
 import csv
 import gzip
 import io
+import shutil
+import tempfile
 import zipfile
 from datetime import date, datetime
 
@@ -122,20 +124,36 @@ def import_fileobj(db: Session, site_id: int, fileobj, name: str) -> int:
         with gzip.open(fileobj, "rt", encoding="utf-8", errors="ignore") as fh:
             return import_tsv(db, site_id, fh)
     if low.endswith(".zip"):
-        total = 0
-        with zipfile.ZipFile(fileobj) as z:
-            for entry in z.namelist():
-                if entry.endswith("/"):
-                    continue
-                with z.open(entry) as raw:
-                    try:
-                        total += import_tsv(
-                            db, site_id, io.TextIOWrapper(raw, encoding="utf-8", errors="ignore")
-                        )
-                    except ValueError:
-                        continue  # not a visits TSV — skip this archive member
-        return total
+        # zip needs random access (its index is at the end). A Starlette upload is
+        # a SpooledTemporaryFile, which on Python < 3.11 has no .seekable(); copy
+        # such streams to a real temp file on disk before handing them to zipfile.
+        try:
+            seekable = fileobj.seekable()
+        except AttributeError:
+            seekable = False
+        if seekable:
+            return _import_zip(db, site_id, fileobj)
+        with tempfile.TemporaryFile() as tmp:
+            shutil.copyfileobj(fileobj, tmp)
+            tmp.seek(0)
+            return _import_zip(db, site_id, tmp)
     return import_tsv(db, site_id, io.TextIOWrapper(fileobj, encoding="utf-8", errors="ignore"))
+
+
+def _import_zip(db: Session, site_id: int, zf) -> int:
+    total = 0
+    with zipfile.ZipFile(zf) as z:
+        for entry in z.namelist():
+            if entry.endswith("/"):
+                continue
+            with z.open(entry) as raw:
+                try:
+                    total += import_tsv(
+                        db, site_id, io.TextIOWrapper(raw, encoding="utf-8", errors="ignore")
+                    )
+                except ValueError:
+                    continue  # not a visits TSV — skip this archive member
+    return total
 
 
 def summary(db: Session, site_id: int, dr: DateRange) -> dict:
