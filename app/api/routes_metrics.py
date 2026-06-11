@@ -79,6 +79,7 @@ def project_compare(
     clean: int = 0,
     ratio: float = 10.0,
     min_impr: int = 100,
+    device: str = "all",
     format: str = "json",
     db: Session = Depends(get_db),
 ):
@@ -88,7 +89,7 @@ def project_compare(
     period_a = parse_date_range(a_start, a_end)
     period_b = resolve_period_b(period_a, b_start, b_end)
     result = compare_project(db, project, metric, period_a, period_b,
-                             exclude_bots=bool(clean), ratio=ratio, min_impr=min_impr)
+                             exclude_bots=bool(clean), ratio=ratio, min_impr=min_impr, device=device)
     if format in ("csv", "xlsx"):
         filename, buf, media = build_compare_export(result, project, fmt=format)
         headers = {"Content-Disposition": f'attachment; filename="{filename}"'}

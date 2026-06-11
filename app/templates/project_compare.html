@@ -24,12 +24,19 @@
     <label>&nbsp;<button type="submit">Сравнить</button></label>
   </div>
   <div class="grid">
-    <label><input type="checkbox" name="clean" value="1" {% if clean %}checked{% endif %}> Вычитать ботов (десктоп/моб ≥ N×)</label>
+    <label>Устройство
+      <select name="device">
+        <option value="all" {% if device=='all' %}selected{% endif %}>Все</option>
+        <option value="desktop" {% if device=='desktop' %}selected{% endif %}>Десктоп</option>
+        <option value="mobile" {% if device=='mobile' %}selected{% endif %}>Мобильные</option>
+      </select>
+    </label>
+    <label><input type="checkbox" name="clean" value="1" {% if clean %}checked{% endif %}> Вычитать ботов (≥ N×)</label>
     <label>Порог N× <input type="number" name="ratio" value="{{ ratio }}" min="2" step="1"></label>
     <label>Шум (≤ показов) <input type="number" name="min_impr" value="{{ min_impr }}" min="0"></label>
-    <label>&nbsp;</label>
   </div>
 </form>
+{% if device != 'all' %}<p><mark>Показаны данные только по устройству: <strong>{{ 'десктоп' if device=='desktop' else 'мобильные' }}</strong> (там, где собраны device-данные).</mark></p>{% endif %}
 
 {% if clean %}<p><mark>Показаны «чистые» данные: на страницах с перекосом устройств ≥ {{ ratio }}× вычтено «ботовое» устройство (шум ≤ {{ min_impr }} показов не трогается).</mark></p>{% endif %}
 

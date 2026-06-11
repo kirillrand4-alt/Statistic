@@ -191,6 +191,33 @@ def test_multi_compare_project(db, site, project):
     assert len(res["rows"]) == len(project.urls)
 
 
+def test_multi_compare_device_filter(db, site, project):
+    from datetime import date, timedelta
+
+    from app.db.models import DeviceMetricDaily, Page
+    from app.providers.base import DateRange
+    from app.services.multi_compare import compare_project
+
+    pu = project.urls[0]
+    today = date.today()
+    d_a = today - timedelta(days=2)
+    pg = Page(site_id=site.id, url=pu.url, normalized_url=pu.normalized_url)
+    db.add(pg)
+    db.commit()
+    db.add_all([
+        DeviceMetricDaily(site_id=site.id, page_id=pg.id, date=d_a, device="desktop", clicks=80, impressions=800),
+        DeviceMetricDaily(site_id=site.id, page_id=pg.id, date=d_a, device="mobile", clicks=20, impressions=200),
+    ])
+    db.commit()
+
+    pa = DateRange(start=today - timedelta(days=5), end=today - timedelta(days=1))
+    pb = DateRange(start=today - timedelta(days=12), end=today - timedelta(days=6))
+    res = compare_project(db, project, "clicks", pa, pb, device="mobile")
+    assert res["device"] == "mobile"
+    row = next(r for r in res["rows"] if r["url"] == pu.url)
+    assert row["engines"]["gsc"]["a"] == 20  # mobile-only clicks
+
+
 def test_multi_compare_exclude_bots(db, site, project):
     from datetime import date, timedelta
 

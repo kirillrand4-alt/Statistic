@@ -352,7 +352,7 @@ def project_compare_page(request: Request, project_id: int, metric: str = "click
                          a_start: str | None = None, a_end: str | None = None,
                          b_start: str | None = None, b_end: str | None = None,
                          clean: int = 0, ratio: float = 10.0, min_impr: int = 100,
-                         db: Session = Depends(get_db)):
+                         device: str = "all", db: Session = Depends(get_db)):
     from app.services.multi_compare import ENGINE_LABELS, ENGINES, compare_project
 
     project = db.get(Project, project_id)
@@ -361,7 +361,7 @@ def project_compare_page(request: Request, project_id: int, metric: str = "click
     period_a = parse_date_range(a_start, a_end)
     period_b = resolve_period_b(period_a, b_start, b_end)
     result = compare_project(db, project, metric, period_a, period_b,
-                             exclude_bots=bool(clean), ratio=ratio, min_impr=min_impr)
+                             exclude_bots=bool(clean), ratio=ratio, min_impr=min_impr, device=device)
     return templates.TemplateResponse(
         request,
         "project_compare.html",
@@ -370,6 +370,7 @@ def project_compare_page(request: Request, project_id: int, metric: str = "click
             "project": project,
             "metric": result["metric"],
             "clean": bool(clean), "ratio": ratio, "min_impr": min_impr,
+            "device": result["device"],
             "period_a": period_a,
             "period_b": period_b,
             "result": result,

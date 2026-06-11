@@ -16,7 +16,12 @@ from sqlalchemy.orm import Session
 from app.db.models import Site, Source
 from app.providers.base import DateRange
 from app.services.export import CSV_MEDIA, XLSX_MEDIA
-from app.services.loaders import agg_metrics, load_page_metrics_df, project_page_id_map
+from app.services.loaders import (
+    agg_metrics,
+    load_device_metrics_df,
+    load_page_metrics_df,
+    project_page_id_map,
+)
 from app.utils import domain_of, normalize_url
 
 ENGINES = ("gsc", "yandex_webmaster")
@@ -44,9 +49,21 @@ def sites_for_project(db: Session, project) -> dict[str, Site]:
 
 
 def _values_by_url(db, site_id: int, project, dr: DateRange, exclude_bots: bool = False,
-                   ratio: float = 10.0, min_impr: int = 100) -> dict[str, dict]:
+                   ratio: float = 10.0, min_impr: int = 100, device: str = "all") -> dict[str, dict]:
     page_map = project_page_id_map(db, site_id, project)
     page_ids = list(page_map.values())
+    if device in ("desktop", "mobile"):
+        df = load_device_metrics_df(db, site_id, dr, page_ids=page_ids)
+        if not df.empty:
+            df = df[df["device"] == device]
+        out: dict[str, dict] = {}
+        if not df.empty:
+            for _, r in agg_metrics(df, ["url"]).iterrows():
+                out[normalize_url(r["url"])] = {
+                    "clicks": float(r["clicks"]), "impressions": float(r["impressions"]),
+                    "ctr": float(r["ctr"]), "position": float(r["position"]),
+                }
+        return out
     if exclude_bots:
         from app.services.antifraud import clean_values_by_url
 
@@ -93,15 +110,17 @@ def _diff(metric: str, a: float, b: float) -> dict:
 
 
 def compare_project(db, project, metric: str, period_a: DateRange, period_b: DateRange,
-                    exclude_bots: bool = False, ratio: float = 10.0, min_impr: int = 100) -> dict:
+                    exclude_bots: bool = False, ratio: float = 10.0, min_impr: int = 100,
+                    device: str = "all") -> dict:
     metric = metric if metric in METRICS else "clicks"
+    device = device if device in ("all", "desktop", "mobile") else "all"
     sites = sites_for_project(db, project)
 
     engines: dict[str, dict] = {}
     per_url: dict[str, tuple[dict, dict]] = {}
     for code, site in sites.items():
-        a_vals = _values_by_url(db, site.id, project, period_a, exclude_bots, ratio, min_impr)
-        b_vals = _values_by_url(db, site.id, project, period_b, exclude_bots, ratio, min_impr)
+        a_vals = _values_by_url(db, site.id, project, period_a, exclude_bots, ratio, min_impr, device)
+        b_vals = _values_by_url(db, site.id, project, period_b, exclude_bots, ratio, min_impr, device)
         per_url[code] = (a_vals, b_vals)
         tot_a, tot_b = _totals(a_vals), _totals(b_vals)
         engines[code] = {
@@ -123,6 +142,7 @@ def compare_project(db, project, metric: str, period_a: DateRange, period_b: Dat
     return {
         "metric": metric,
         "exclude_bots": exclude_bots,
+        "device": device,
         "period_a": {"start": period_a.start.isoformat(), "end": period_a.end.isoformat()},
         "period_b": {"start": period_b.start.isoformat(), "end": period_b.end.isoformat()},
         "engines": engines,
@@ -158,7 +178,9 @@ def build_compare_export(result: dict, project, fmt: str = "xlsx"):
 
     safe = "".join(c if (c.isascii() and c.isalnum()) else "_" for c in project.name)[:30].strip("_")
     a, b = result["period_a"], result["period_b"]
-    base = f"compare2_{safe or 'project'}_{metric}_{a['start']}_{a['end']}_vs_{b['start']}_{b['end']}"
+    dev = result.get("device", "all")
+    suffix = f"_{dev}" if dev != "all" else ""
+    base = f"compare2_{safe or 'project'}_{metric}{suffix}_{a['start']}_{a['end']}_vs_{b['start']}_{b['end']}"
 
     buf = io.BytesIO()
     if fmt == "csv":
