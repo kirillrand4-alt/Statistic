@@ -102,6 +102,24 @@ cd /opt/seostat && .venv/bin/python scripts/run_collect_once.py --days 30
 ```
 Дальше ежедневный автосбор делает APScheduler (час — `COLLECT_CRON_HOUR`).
 
+### Метрика — визиты и хиты (Logs API)
+
+Полная закачка с нуля по всем доменам, ротируя 3 запроса по случайным доменам,
+отрезками по 3 дня (создаёт → ждёт → качает → чистит у Яндекса; окно, не готовое
+за 40 мин, отменяется и пропускается — доберётся позже). Нужен тот же токен Яндекса
+со scope `metrika:read`.
+```bash
+cd /opt/seostat && .venv/bin/python scripts/metrika_logs.py --list      # счётчики
+# весь период заново (визиты + хиты), в фоне:
+nohup .venv/bin/python scripts/metrika_logs.py --sync-all --force \
+      --from 2025-06-01 --to 2026-06-10 > /tmp/metrika.log 2>&1 &
+tail -f /tmp/metrika.log
+.venv/bin/python scripts/metrika_logs.py --site 7 --coverage             # покрытие/дыры
+```
+Счётчик к домену подбирается сам; если не угадал — задайте `--targets "7:12345,8:67890"`.
+Пропущенные окна добираются по дням: тот же запуск с `--chunk 1` без `--force`.
+
+
 ## Обновление версии
 ```bash
 cd /opt/seostat && git pull && .venv/bin/pip install -r requirements.txt
