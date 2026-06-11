@@ -53,8 +53,10 @@ def _sqlite_pragmas(dbapi_connection, connection_record):
 def init_db() -> None:
     """Create all tables. Imports models for side effects (registration)."""
     from app.db import models  # noqa: F401
+    from app.db.migrate import ensure_schema
 
     Base.metadata.create_all(bind=engine)
+    ensure_schema(engine)
 
 
 def get_db() -> Iterator[Session]:

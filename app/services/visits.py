@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import gzip
 import io
+import json
 import shutil
 import tempfile
 import zipfile
@@ -12,10 +13,12 @@ from datetime import date, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Visit
+from app.db.models import Hit, Visit
 from app.providers.base import DateRange
 
-# Metrica Logs API field -> our column
+# --- Visits (Logs API source=visits, ym:s:*) ---------------------------------
+# Logs API field -> dedicated Visit column. Everything requested but not listed
+# here is preserved in the JSON ``extra`` column.
 FIELD_MAP = {
     "ym:s:visitID": "visit_id",
     "ym:s:counterID": "counter_id",
@@ -38,8 +41,66 @@ FIELD_MAP = {
     "ym:s:ipAddress": "ip",
     "ym:s:watchIDs": "watch_ids",
 }
-_SHORT = {k.split(":")[-1]: v for k, v in FIELD_MAP.items()}
-_INT_COLS = {"visit_id", "counter_id", "page_views", "duration", "bounce"}
+_VISIT_INT = {"visit_id", "counter_id", "page_views", "duration", "bounce"}
+
+# Full set of visit fields to REQUEST from the Logs API (a superset of the typed
+# columns above; the rest is stored as JSON in ``extra``). Curated to fields that
+# are valid for any counter — one invalid field makes the whole request fail.
+VISIT_FIELDS = [
+    "ym:s:visitID", "ym:s:counterID", "ym:s:watchIDs", "ym:s:date", "ym:s:dateTime",
+    "ym:s:isNewUser", "ym:s:startURL", "ym:s:endURL", "ym:s:pageViews",
+    "ym:s:visitDuration", "ym:s:bounce", "ym:s:ipAddress", "ym:s:regionCountry",
+    "ym:s:regionCity", "ym:s:clientID", "ym:s:lastTrafficSource", "ym:s:lastAdvEngine",
+    "ym:s:lastReferalSource", "ym:s:lastSearchEngine", "ym:s:lastSearchEngineRoot",
+    "ym:s:lastSocialNetwork", "ym:s:lastSocialNetworkProfile", "ym:s:referer",
+    "ym:s:lastUTMCampaign", "ym:s:lastUTMContent", "ym:s:lastUTMMedium",
+    "ym:s:lastUTMSource", "ym:s:lastUTMTerm", "ym:s:browser", "ym:s:browserCountry",
+    "ym:s:operatingSystem", "ym:s:operatingSystemRoot", "ym:s:deviceCategory",
+    "ym:s:mobilePhone", "ym:s:mobilePhoneModel", "ym:s:screenWidth", "ym:s:screenHeight",
+    "ym:s:screenColors", "ym:s:goalsID",
+]
+
+# --- Hits / pageviews (Logs API source=hits, ym:pv:*) ------------------------
+HIT_FIELD_MAP = {
+    "ym:pv:watchID": "watch_id",
+    "ym:pv:counterID": "counter_id",
+    "ym:pv:date": "date",
+    "ym:pv:dateTime": "date_time",
+    "ym:pv:URL": "url",
+    "ym:pv:referer": "referer",
+    "ym:pv:title": "title",
+    "ym:pv:clientID": "client_id",
+    "ym:pv:lastTrafficSource": "traffic_source",
+    "ym:pv:lastSearchEngine": "search_engine",
+    "ym:pv:lastAdvEngine": "adv_engine",
+    "ym:pv:lastSocialNetwork": "social_network",
+    "ym:pv:deviceCategory": "device",
+    "ym:pv:operatingSystem": "os",
+    "ym:pv:browser": "browser",
+    "ym:pv:regionCountry": "region_country",
+    "ym:pv:regionCity": "region_city",
+    "ym:pv:ipAddress": "ip",
+    "ym:pv:UTMSource": "utm_source",
+    "ym:pv:UTMMedium": "utm_medium",
+    "ym:pv:UTMCampaign": "utm_campaign",
+    "ym:pv:UTMContent": "utm_content",
+    "ym:pv:UTMTerm": "utm_term",
+    "ym:pv:isPageView": "is_page_view",
+    "ym:pv:download": "is_download",
+    "ym:pv:link": "is_link",
+    "ym:pv:notBounce": "not_bounce",
+}
+_HIT_INT = {"watch_id", "counter_id", "is_page_view", "is_download", "is_link", "not_bounce"}
+
+HIT_FIELDS = [
+    "ym:pv:watchID", "ym:pv:counterID", "ym:pv:date", "ym:pv:dateTime", "ym:pv:URL",
+    "ym:pv:referer", "ym:pv:title", "ym:pv:clientID", "ym:pv:ipAddress",
+    "ym:pv:regionCountry", "ym:pv:regionCity", "ym:pv:lastTrafficSource",
+    "ym:pv:lastSearchEngine", "ym:pv:lastAdvEngine", "ym:pv:lastSocialNetwork",
+    "ym:pv:browser", "ym:pv:operatingSystem", "ym:pv:deviceCategory",
+    "ym:pv:UTMSource", "ym:pv:UTMMedium", "ym:pv:UTMCampaign", "ym:pv:UTMContent",
+    "ym:pv:UTMTerm", "ym:pv:isPageView", "ym:pv:download", "ym:pv:link", "ym:pv:notBounce",
+]
 
 
 def _toint(v):
@@ -56,7 +117,15 @@ def _todate(v):
         return None
 
 
-def _insert_ignore(db: Session, rows: list[dict]) -> int:
+def _insert_rows(db: Session, model, rows: list[dict], conflict_cols: list[str],
+                 update: bool) -> int:
+    """Bulk insert ``rows`` into ``model``; on conflict either ignore or update.
+
+    ``update=True`` (re-download / refresh) overwrites every non-key column with
+    the freshly downloaded value; ``update=False`` (gap-fill) keeps existing rows.
+    """
+    if not rows:
+        return 0
     dialect = db.get_bind().dialect.name
     if dialect == "sqlite":
         from sqlalchemy.dialects.sqlite import insert
@@ -64,50 +133,94 @@ def _insert_ignore(db: Session, rows: list[dict]) -> int:
         from sqlalchemy.dialects.postgresql import insert
     else:  # pragma: no cover
         raise RuntimeError(f"Unsupported dialect {dialect!r}")
-    stmt = insert(Visit).values(rows).on_conflict_do_nothing(index_elements=["site_id", "visit_id"])
+    stmt = insert(model).values(rows)
+    if update:
+        keys = set(conflict_cols)
+        upd = {c: getattr(stmt.excluded, c) for c in rows[0] if c not in keys}
+        stmt = stmt.on_conflict_do_update(index_elements=conflict_cols, set_=upd)
+    else:
+        stmt = stmt.on_conflict_do_nothing(index_elements=conflict_cols)
     db.execute(stmt)
     return len(rows)
 
 
-def import_tsv(db: Session, site_id: int, lines) -> int:
-    """Parse a Metrica visits TSV (header of ym:s:* fields) into the Visit table."""
+def _import_rows(db: Session, site_id: int, lines, *, model, field_map: dict,
+                 int_cols: set[str], key_col: str, what: str, update: bool) -> int:
+    """Parse a Logs API TSV (tab-separated, header of ym:*:* fields) into ``model``.
+
+    Mapped fields go to dedicated columns; every other requested field is kept in
+    the JSON ``extra`` column, so no data is lost.
+    """
     reader = csv.reader(lines, delimiter="\t")
     try:
         header = next(reader)
     except StopIteration:
         return 0
-    cols = []
+    short_map = {k.split(":")[-1]: v for k, v in field_map.items()}
+    plan = []  # (index, target_column_or_None, short_name_for_extra)
+    has_key = False
     for i, name in enumerate(header):
-        col = FIELD_MAP.get(name) or _SHORT.get(name.split(":")[-1])
-        if col:
-            cols.append((i, col))
-    if not any(c == "visit_id" for _, c in cols):
-        raise ValueError("В файле не найден столбец ym:s:visitID — это не выгрузка визитов Метрики.")
+        short = name.split(":")[-1]
+        col = field_map.get(name) or short_map.get(short)
+        plan.append((i, col, short))
+        if col == key_col:
+            has_key = True
+    if not has_key:
+        raise ValueError(
+            f"В файле нет столбца идентификатора {what} — это не та выгрузка Метрики."
+        )
+
+    all_cols = [c.name for c in model.__table__.columns if c.name != "id"]
+    template = {c: None for c in all_cols}
+    for c in int_cols:
+        template[c] = 0
+    conflict = ["site_id", key_col]
 
     written, payload = 0, []
     for row in reader:
-        rec = {"site_id": site_id}
-        for i, col in cols:
-            if i < len(row):
-                rec[col] = row[i]
-        if not rec.get("visit_id"):
+        rec = dict(template)
+        rec["site_id"] = site_id
+        extra: dict[str, str] = {}
+        for i, col, short in plan:
+            if i >= len(row):
+                continue
+            val = row[i]
+            if col:
+                rec[col] = val
+            elif val not in ("", None):
+                extra[short] = val
+        if not rec.get(key_col):
             continue
-        for c in _INT_COLS:
+        for c in int_cols:
             rec[c] = _toint(rec.get(c))
-        rec["date"] = _todate(rec.get("date"))
-        for c in ("date_time", "client_id", "traffic_source", "search_engine", "adv_engine",
-                  "referer", "start_url", "end_url", "device", "os", "browser",
-                  "region_city", "ip", "watch_ids"):
-            if c in rec and rec[c] == "":
+        if "date" in template:
+            rec["date"] = _todate(rec.get("date"))
+        for c in all_cols:
+            if c not in int_cols and c != "date" and rec.get(c) == "":
                 rec[c] = None
+        rec["extra"] = json.dumps(extra, ensure_ascii=False) if extra else None
         payload.append(rec)
         if len(payload) >= 1000:
-            written += _insert_ignore(db, payload)
+            written += _insert_rows(db, model, payload, conflict, update)
             payload = []
     if payload:
-        written += _insert_ignore(db, payload)
+        written += _insert_rows(db, model, payload, conflict, update)
     db.commit()
     return written
+
+
+def import_tsv(db: Session, site_id: int, lines, update: bool = False) -> int:
+    """Import a Metrica *visits* TSV (ym:s:* fields) into the Visit table."""
+    return _import_rows(db, site_id, lines, model=Visit, field_map=FIELD_MAP,
+                        int_cols=_VISIT_INT, key_col="visit_id",
+                        what="визита (ym:s:visitID)", update=update)
+
+
+def import_hits(db: Session, site_id: int, lines, update: bool = False) -> int:
+    """Import a Metrica *hits* TSV (ym:pv:* fields) into the Hit table."""
+    return _import_rows(db, site_id, lines, model=Hit, field_map=HIT_FIELD_MAP,
+                        int_cols=_HIT_INT, key_col="watch_id",
+                        what="хита (ym:pv:watchID)", update=update)
 
 
 def import_fileobj(db: Session, site_id: int, fileobj, name: str) -> int:

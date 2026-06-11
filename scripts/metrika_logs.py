@@ -1,29 +1,40 @@
-"""Yandex Metrica visits: import a folder (tsv/gz/zip) and auto-fill the gaps.
+"""Yandex Metrica Logs API downloader: visits + hits, all fields, all domains.
 
-List counters:
+List counters (id + domain):
     python scripts/metrika_logs.py --list
 
-Full sync (recommended): import every file in a folder (.tsv/.csv/.txt, .gz,
-.zip), then detect missing days and download ONLY those via the Logs API
-(create -> wait -> download parts -> clean at Yandex -> next):
-    python scripts/metrika_logs.py --counter 12345 --site 7 --import-dir /opt/seostat/uploads
+Rotated multi-domain sync (the main mode): downloads visits AND hits for every
+site that has a counter, keeping --parallel requests in flight at once, each on
+a different random domain, each a --chunk-day window. A window still not ready
+after --timeout-min minutes is cancelled and skipped (it stays a gap; re-run
+with --chunk 1 to backfill). Counter per domain is auto-detected (from existing
+visits, else by matching the domain in --list); override with --targets.
+    python scripts/metrika_logs.py --sync-all --force --from 2025-06-01 --to 2026-06-10
+    python scripts/metrika_logs.py --sync-all                 # only-missing, last 365d
+    python scripts/metrika_logs.py --sync-all --no-hits --parallel 3 --chunk 3
 
-Without --from/--to the range is auto: earliest visit date in the DB .. yesterday.
-Days already present in the DB are skipped (use --force to re-download).
+Single counter/site (visits or hits):
+    python scripts/metrika_logs.py --counter 12345 --site 7 --from 2026-05-01 --to 2026-06-01 --source hits
 
-Show coverage / gaps for a site:
+Import a folder of files (.tsv/.csv/.txt, .gz, .zip):
+    python scripts/metrika_logs.py --site 7 --import-dir /opt/seostat/uploads
+
+Coverage / gaps for a site (visits and hits):
     python scripts/metrika_logs.py --site 7 --coverage
 
 Reuses the stored Yandex token (the same y0_ token, must have metrika:read).
 Run detached for long ranges:
-    nohup .venv/bin/python scripts/metrika_logs.py --counter 12345 --site 7 --import-dir /opt/seostat/uploads > /tmp/metrika.log 2>&1 &
+    nohup .venv/bin/python scripts/metrika_logs.py --sync-all --force --from 2025-06-01 --to 2026-06-10 > /tmp/metrika.log 2>&1 &
 """
 from __future__ import annotations
 
 import argparse
 import os
+import random
 import sys
+import tempfile
 import time
+from collections import deque
 from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,10 +44,29 @@ import httpx  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.credentials import get_cred  # noqa: E402
 from app.db.base import SessionLocal, init_db  # noqa: E402
-from app.services.visits import FIELD_MAP, import_fileobj, import_tsv  # noqa: E402
+from app.db.models import Hit, Visit  # noqa: E402
+from app.services.visits import (  # noqa: E402
+    HIT_FIELDS,
+    VISIT_FIELDS,
+    import_fileobj,
+    import_hits,
+    import_tsv,
+)
+from app.utils import domain_of  # noqa: E402
 
 API = "https://api-metrika.yandex.net"
-FIELDS = ",".join(FIELD_MAP.keys())
+_SOURCE_FIELDS = {"visits": VISIT_FIELDS, "hits": HIT_FIELDS}
+_MODEL = {"visits": Visit, "hits": Hit}
+
+
+def _fields_for(source: str) -> str:
+    return ",".join(_SOURCE_FIELDS.get(source, VISIT_FIELDS))
+
+
+def _import_part(db, site_id: int, source: str, lines, update: bool) -> int:
+    if source == "hits":
+        return import_hits(db, site_id, lines, update=update)
+    return import_tsv(db, site_id, lines, update=update)
 
 
 def _token() -> str:
@@ -52,12 +82,17 @@ def _headers():
     return {"Authorization": f"OAuth {_token()}"}
 
 
-def list_counters() -> None:
+def _fetch_counters() -> list[dict]:
     r = httpx.get(f"{API}/management/v1/counters", headers=_headers(),
-                  params={"per_page": 200}, timeout=60)
+                  params={"per_page": 500}, timeout=60)
     if r.status_code != 200:
-        print("HTTP", r.status_code, r.text[:300]); return
-    for c in r.json().get("counters", []):
+        print("HTTP", r.status_code, r.text[:300])
+        return []
+    return r.json().get("counters", [])
+
+
+def list_counters() -> None:
+    for c in _fetch_counters():
         print(f"  id={c.get('id'):<10} {str(c.get('site')):<40} {c.get('name')}")
 
 
@@ -104,16 +139,14 @@ def import_dir(site_id: int, path: str) -> int:
         db.close()
 
 
-def _covered_dates(db, site_id: int, d1: date, d2: date) -> set[date]:
-    """Dates that already have at least one visit for this site."""
+def _covered_dates(db, site_id: int, d1: date, d2: date, model=Visit) -> set[date]:
+    """Dates that already have at least one row (visit/hit) for this site."""
     from sqlalchemy import func, select
 
-    from app.db.models import Visit
-
     rows = db.execute(
-        select(Visit.date).where(
-            Visit.site_id == site_id, Visit.date >= d1, Visit.date <= d2
-        ).group_by(Visit.date).having(func.count() > 0)
+        select(model.date).where(
+            model.site_id == site_id, model.date >= d1, model.date <= d2
+        ).group_by(model.date).having(func.count() > 0)
     ).all()
     return {r[0] for r in rows if r[0] is not None}
 
@@ -122,31 +155,76 @@ def coverage(site_id: int) -> None:
     """Print which dates have visits and where the gaps are."""
     from sqlalchemy import func, select
 
-    from app.db.models import Visit
-
     init_db()
     db = SessionLocal()
     try:
-        lo, hi, total = db.execute(
-            select(func.min(Visit.date), func.max(Visit.date), func.count()).where(Visit.site_id == site_id)
-        ).one()
-        if not total:
-            print(f"site {site_id}: визитов нет")
-            return
-        have = _covered_dates(db, site_id, lo, hi)
-        missing = []
-        cur = lo
-        while cur <= hi:
-            if cur not in have:
-                missing.append(cur)
-            cur += timedelta(days=1)
-        print(f"site {site_id}: {total} визитов, период {lo}..{hi}, дней с данными: {len(have)}, дыр: {len(missing)}")
-        if missing:
-            head = ", ".join(str(d) for d in missing[:15])
-            more = f" … и ещё {len(missing) - 15}" if len(missing) > 15 else ""
-            print(f"  пропущенные дни: {head}{more}")
+        for label, model in (("визитов", Visit), ("хитов", Hit)):
+            lo, hi, total = db.execute(
+                select(func.min(model.date), func.max(model.date), func.count())
+                .where(model.site_id == site_id)
+            ).one()
+            if not total:
+                print(f"site {site_id}: {label} нет")
+                continue
+            have = _covered_dates(db, site_id, lo, hi, model)
+            missing, cur = [], lo
+            while cur <= hi:
+                if cur not in have:
+                    missing.append(cur)
+                cur += timedelta(days=1)
+            print(f"site {site_id}: {total} {label}, период {lo}..{hi}, "
+                  f"дней с данными: {len(have)}, дыр: {len(missing)}")
+            if missing:
+                head = ", ".join(str(d) for d in missing[:15])
+                more = f" … и ещё {len(missing) - 15}" if len(missing) > 15 else ""
+                print(f"  пропущенные дни: {head}{more}")
     finally:
         db.close()
+
+
+def _create_logrequest(counter: int, source: str, c1: date, c2: date) -> int | None:
+    """Create a Logs API request; return its id, or None on failure (prints why)."""
+    r = httpx.post(
+        f"{API}/management/v1/counter/{counter}/logrequests",
+        headers=_headers(),
+        params={"date1": c1.isoformat(), "date2": c2.isoformat(),
+                "fields": _fields_for(source), "source": source},
+        timeout=60,
+    )
+    if r.status_code not in (200, 201):
+        print(f"   create FAILED {r.status_code}: {r.text[:200]}")
+        return None
+    return r.json()["log_request"]["request_id"]
+
+
+def _cancel_logrequest(base: str, req_id: int) -> None:
+    try:
+        httpx.post(f"{base}/{req_id}/cancel", headers=_headers(), timeout=60)
+    except Exception:  # noqa: BLE001  (best effort — frees the counter's slot)
+        pass
+
+
+def _collect_request(db, base: str, req_id: int, site_id: int, source: str,
+                     update: bool) -> int:
+    """Download all parts of a processed request (streamed to disk), import, clean."""
+    info = httpx.get(f"{base}/{req_id}", headers=_headers(), timeout=60).json()["log_request"]
+    total = 0
+    for p in info.get("parts", []):
+        n = p.get("part_number", 0)
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8", newline="",
+                                         suffix=".tsv") as tf:
+            with httpx.stream("GET", f"{base}/{req_id}/part/{n}/download",
+                              headers=_headers(), timeout=600) as r:
+                if r.status_code != 200:
+                    print(f"   part {n} download FAILED {r.status_code}")
+                    continue
+                for textchunk in r.iter_text():
+                    tf.write(textchunk)
+            tf.flush()
+            tf.seek(0)
+            total += _import_part(db, site_id, source, tf, update)
+    httpx.post(f"{base}/{req_id}/clean", headers=_headers(), timeout=60)
+    return total
 
 
 def download(counter: int, site_id: int, d1: date, d2: date, chunk: int, source: str,
@@ -155,51 +233,179 @@ def download(counter: int, site_id: int, d1: date, d2: date, chunk: int, source:
     db = SessionLocal()
     base = f"{API}/management/v1/counter/{counter}/logrequest"
     total = 0
-    have = set() if force else _covered_dates(db, site_id, d1, d2)
+    have = set() if force else _covered_dates(db, site_id, d1, d2, _MODEL.get(source, Visit))
     try:
         for c1, c2 in _chunks(d1, d2, chunk):
             days = {c1 + timedelta(days=i) for i in range((c2 - c1).days + 1)}
             if not force and days <= have:
                 print(f"[{c1}..{c2}] уже в базе, пропускаю", flush=True)
                 continue
-            print(f"[{c1}..{c2}] создаю запрос...", flush=True)
-            r = httpx.post(
-                f"{API}/management/v1/counter/{counter}/logrequests",
-                headers=_headers(),
-                params={"date1": c1.isoformat(), "date2": c2.isoformat(), "fields": FIELDS, "source": source},
-                timeout=60,
-            )
-            if r.status_code not in (200, 201):
-                print(f"   create FAILED {r.status_code}: {r.text[:200]}")
+            print(f"[{c1}..{c2}] {source}: создаю запрос...", flush=True)
+            req_id = _create_logrequest(counter, source, c1, c2)
+            if req_id is None:
                 continue
-            req_id = r.json()["log_request"]["request_id"]
-
             status = "created"
             for _ in range(120):  # up to ~40 min
                 time.sleep(20)
-                s = httpx.get(f"{base}/{req_id}", headers=_headers(), timeout=60).json()["log_request"]
-                status = s.get("status")
-                if status in ("processed", "processed_with_errors"):
-                    break
-                if status in ("canceled", "processing_failed"):
+                status = httpx.get(f"{base}/{req_id}", headers=_headers(), timeout=60).json()["log_request"].get("status")
+                if status in ("processed", "processed_with_errors", "canceled", "processing_failed"):
                     break
             if status not in ("processed", "processed_with_errors"):
                 print(f"   не готово (status={status}), пропускаю")
                 continue
+            n = _collect_request(db, base, req_id, site_id, source, force)
+            total += n
+            print(f"   +{n} строк, очищено (request {req_id})")
+        print(f"Готово. Импортировано строк: {total}")
+    finally:
+        db.close()
 
-            parts = httpx.get(f"{base}/{req_id}", headers=_headers(), timeout=60).json()["log_request"].get("parts", [])
-            for p in parts:
-                n = p.get("part_number", 0)
-                dl = httpx.get(f"{base}/{req_id}/part/{n}/download", headers=_headers(), timeout=300)
-                if dl.status_code == 200:
-                    written = import_tsv(db, site_id, dl.text.splitlines())
-                    total += written
-                    print(f"   part {n}: +{written} визитов")
-                else:
-                    print(f"   part {n} download FAILED {dl.status_code}")
-            httpx.post(f"{base}/{req_id}/clean", headers=_headers(), timeout=60)
-            print(f"   очищено у Яндекса (request {req_id})")
-        print(f"Готово. Импортировано визитов: {total}")
+
+def resolve_targets(explicit: str | None = None, only_site: int | None = None):
+    """Map sites (domains) -> Metrica counter. Returns (targets, skipped_labels).
+
+    Counter is taken from (1) explicit ``site:counter`` pairs, (2) the most common
+    counter_id among the site's existing visits, (3) a domain match against the
+    account's counter list. Sites with no resolvable counter are skipped.
+    """
+    from sqlalchemy import func, select
+
+    from app.db.models import Site
+
+    init_db()
+    db = SessionLocal()
+    explicit_map = {}
+    if explicit:
+        for pair in explicit.split(","):
+            if ":" in pair:
+                sid, cid = pair.split(":", 1)
+                explicit_map[int(sid.strip())] = int(cid.strip())
+    targets, skipped, counters = [], [], None
+    try:
+        sites = db.execute(select(Site).where(Site.enabled.is_(True))).scalars().all()
+        if only_site:
+            sites = [s for s in sites if s.id == only_site]
+        for s in sites:
+            label = s.display_name or s.property_uri or f"site{s.id}"
+            counter = explicit_map.get(s.id)
+            if counter is None:
+                counter = db.execute(
+                    select(Visit.counter_id)
+                    .where(Visit.site_id == s.id, Visit.counter_id.isnot(None))
+                    .group_by(Visit.counter_id).order_by(func.count().desc()).limit(1)
+                ).scalar_one_or_none()
+            if counter is None:
+                if counters is None:
+                    counters = _fetch_counters()
+                host = domain_of(s.property_uri)
+                for c in counters:
+                    if host and domain_of(str(c.get("site") or "")) == host:
+                        counter = c.get("id")
+                        break
+            if counter:
+                targets.append((s.id, int(counter), label))
+            else:
+                skipped.append(label)
+        return targets, skipped
+    finally:
+        db.close()
+
+
+def sync_rotate(targets, d1: date, d2: date, chunk: int = 3, parallel: int = 3,
+                sources=("visits", "hits"), force: bool = True,
+                timeout_min: int = 40, poll_sec: int = 20) -> None:
+    """Download missing windows across many domains, ``parallel`` at a time.
+
+    Keeps up to ``parallel`` Logs API requests in flight, each on a *different*
+    randomly chosen domain, each a ``chunk``-day window. When a request is ready
+    it's downloaded, imported and cleaned, and that domain's next window starts.
+    A request still not ready after ``timeout_min`` minutes is cancelled and its
+    window skipped (it stays a gap — re-run later with --chunk 1 to backfill).
+    """
+    init_db()
+    db = SessionLocal()
+    chunks = list(_chunks(d1, d2, chunk))
+    queues: dict[str, deque] = {}
+    meta: dict[str, tuple[int, int]] = {}  # label -> (site_id, counter)
+    skipped = []
+    try:
+        for site_id, counter, label in targets:
+            items = deque()
+            for source in sources:
+                have = set() if force else _covered_dates(db, site_id, d1, d2, _MODEL[source])
+                for c1, c2 in chunks:
+                    days = {c1 + timedelta(days=i) for i in range((c2 - c1).days + 1)}
+                    if force or not (days <= have):
+                        items.append((source, c1, c2, 0))  # 0 = create attempts
+            if items:
+                queues[label] = items
+                meta[label] = (site_id, counter)
+        if not queues:
+            print("Нечего качать — за период всё уже покрыто.")
+            return
+        total_items = sum(len(q) for q in queues.values())
+        print(f"К закачке: {total_items} запросов по {len(queues)} доменам · "
+              f"{parallel} потока · отрезок {chunk} дн. · период {d1}..{d2} · "
+              f"таймаут {timeout_min} мин.", flush=True)
+
+        inflight: dict[int, dict] = {}
+        done = imported = 0
+        while queues or inflight:
+            busy = {v["label"] for v in inflight.values()}
+            free = [lbl for lbl in queues if lbl not in busy]
+            random.shuffle(free)
+            while len(inflight) < parallel and free:
+                lbl = free.pop()
+                site_id, counter = meta[lbl]
+                source, c1, c2, attempts = queues[lbl].popleft()
+                if not queues[lbl]:
+                    del queues[lbl]
+                base = f"{API}/management/v1/counter/{counter}/logrequest"
+                req_id = _create_logrequest(counter, source, c1, c2)
+                if req_id is None:
+                    if attempts < 2:  # transient (e.g. rate limit) — requeue at the back
+                        queues.setdefault(lbl, deque()).append((source, c1, c2, attempts + 1))
+                    else:
+                        skipped.append((lbl, source, c1, c2, "create failed"))
+                    continue
+                inflight[req_id] = dict(label=lbl, site_id=site_id, source=source,
+                                        c1=c1, c2=c2, base=base, started=time.monotonic())
+                print(f"[{lbl}] {source} {c1}..{c2}: запрос {req_id} "
+                      f"(в работе {len(inflight)}/{parallel})", flush=True)
+            if not inflight:
+                continue
+            time.sleep(poll_sec)
+            for req_id, it in list(inflight.items()):
+                try:
+                    status = httpx.get(f"{it['base']}/{req_id}", headers=_headers(),
+                                       timeout=60).json()["log_request"].get("status")
+                except Exception:  # noqa: BLE001
+                    status = None
+                age_min = (time.monotonic() - it["started"]) / 60.0
+                if status in ("processed", "processed_with_errors"):
+                    n = _collect_request(db, it["base"], req_id, it["site_id"], it["source"], force)
+                    imported += n
+                    done += 1
+                    del inflight[req_id]
+                    print(f"[{it['label']}] {it['source']} {it['c1']}..{it['c2']}: "
+                          f"+{n} строк, очищено · готово {done}/{total_items}, всего +{imported}",
+                          flush=True)
+                elif status in ("canceled", "processing_failed"):
+                    del inflight[req_id]
+                    skipped.append((it["label"], it["source"], it["c1"], it["c2"], status))
+                    print(f"[{it['label']}] {it['source']} {it['c1']}..{it['c2']}: {status} — пропускаю")
+                elif age_min >= timeout_min:
+                    _cancel_logrequest(it["base"], req_id)
+                    del inflight[req_id]
+                    skipped.append((it["label"], it["source"], it["c1"], it["c2"], "timeout"))
+                    print(f"[{it['label']}] {it['source']} {it['c1']}..{it['c2']}: "
+                          f">{timeout_min} мин — отменил и пропустил окно")
+        print(f"\nГотово. Импортировано строк: {imported}. Пропущено окон: {len(skipped)}.")
+        for lbl, source, c1, c2, why in skipped[:40]:
+            print(f"  ПРОПУЩЕНО [{lbl}] {source} {c1}..{c2} ({why})")
+        if skipped:
+            print("Пропущенные окна остались дырами — доберите позже по дням: "
+                  "тот же запуск с --chunk 1 (без --force) добёрет только их.")
     finally:
         db.close()
 
@@ -226,11 +432,17 @@ def main() -> None:
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--coverage", action="store_true")
     ap.add_argument("--import-dir", dest="import_dir")
+    ap.add_argument("--sync-all", dest="sync_all", action="store_true",
+                    help="качать по всем доменам, ротируя запросы в N потоков")
+    ap.add_argument("--targets", help='явная карта "site:counter,site:counter" (иначе авто)')
+    ap.add_argument("--parallel", type=int, default=3, help="одновременных запросов (доменов)")
+    ap.add_argument("--no-hits", dest="no_hits", action="store_true", help="только визиты, без хитов")
+    ap.add_argument("--timeout-min", dest="timeout_min", type=int, default=40)
     ap.add_argument("--counter", type=int)
     ap.add_argument("--site", type=int)
     ap.add_argument("--from", dest="d1")
     ap.add_argument("--to", dest="d2")
-    ap.add_argument("--chunk", type=int, default=1)
+    ap.add_argument("--chunk", type=int, default=None)
     ap.add_argument("--source", default="visits")
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
@@ -245,11 +457,29 @@ def main() -> None:
         if not a.site:
             print("Для --coverage нужен --site."); return
         coverage(a.site)
-        if not a.counter:
+        if not (a.counter or a.sync_all):
             return
+
+    if a.sync_all:
+        sources = ("visits",) if a.no_hits else ("visits", "hits")
+        chunk = a.chunk or 3
+        targets, missed = resolve_targets(a.targets, a.site)
+        if missed:
+            print(f"Без счётчика (пропускаю): {', '.join(missed)}")
+        if not targets:
+            print("Не нашёл ни одного домена со счётчиком. "
+                  "Задайте карту через --targets \"site:counter,...\" (id из --list).")
+            return
+        print("Домены → счётчики: " + ", ".join(f"{lbl}={c}" for _, c, lbl in targets))
+        d2 = date.fromisoformat(a.d2) if a.d2 else date.today() - timedelta(days=1)
+        d1 = date.fromisoformat(a.d1) if a.d1 else d2 - timedelta(days=365)
+        sync_rotate(targets, d1, d2, chunk=chunk, parallel=a.parallel,
+                    sources=sources, force=a.force, timeout_min=a.timeout_min)
+        return
+
     if not (a.counter and a.site):
         if not a.import_dir:
-            print("Нужны --counter и --site (или --list / --coverage / --import-dir).")
+            print("Нужны --counter и --site (или --list / --coverage / --import-dir / --sync-all).")
         return
 
     if a.d1 and a.d2:
@@ -261,7 +491,7 @@ def main() -> None:
             return
         d1, d2 = rng
         print(f"Авто-диапазон: {d1}..{d2} (от самой ранней даты в базе до вчера)")
-    download(a.counter, a.site, d1, d2, a.chunk, a.source, force=a.force)
+    download(a.counter, a.site, d1, d2, a.chunk or 1, a.source, force=a.force)
 
 
 if __name__ == "__main__":

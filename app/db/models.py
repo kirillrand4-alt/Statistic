@@ -260,6 +260,54 @@ class Visit(Base):
     region_city: Mapped[str | None] = mapped_column(String(128), nullable=True)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     watch_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # All other Logs API fields that don't have a dedicated column, as a JSON object.
+    extra: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Hit(Base):
+    """A Yandex Metrica hit / pageview (Logs API ``source=hits``).
+
+    One row per hit (``ym:pv:watchID``). Far more numerous than visits, so this
+    table is opt-in (populated only when hits are downloaded). Frequently queried
+    columns are typed; everything else lands in ``extra`` (JSON).
+    """
+
+    __tablename__ = "hit"
+    __table_args__ = (
+        UniqueConstraint("site_id", "watch_id", name="uq_hit"),
+        Index("ix_hit_site_date", "site_id", "date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("site.id"), index=True)
+    watch_id: Mapped[int] = mapped_column(BigInteger)
+    counter_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    date: Mapped[date_type | None] = mapped_column(Date, nullable=True)
+    date_time: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    referer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    traffic_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    search_engine: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    adv_engine: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    social_network: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    device: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    os: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    browser: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    region_country: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    region_city: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    utm_source: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    utm_medium: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    utm_campaign: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    utm_content: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    utm_term: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    is_page_view: Mapped[int] = mapped_column(Integer, default=0)
+    is_download: Mapped[int] = mapped_column(Integer, default=0)
+    is_link: Mapped[int] = mapped_column(Integer, default=0)
+    not_bounce: Mapped[int] = mapped_column(Integer, default=0)
+    extra: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class AppSetting(Base):
