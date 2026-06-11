@@ -64,10 +64,11 @@ def add_sheet(wb, info, data, brand, title):
         if not has_pk: uc.fill=gapfill
         cc=ws.cell(r,6,nc)
         if not has_pk and nc>=4: cc.font=Font(bold=True)
-        if has_pk and pk_price:
-            c7=ws.cell(r,7,pk_price); c7.number_format="# ##0"
+        if has_pk:                                   # наш товар — ссылка ВСЕГДА, даже без цены
+            c7=ws.cell(r,7, pk_price if pk_price else "нет цены")
+            if pk_price: c7.number_format="# ##0"
             l=ws.cell(r,8,"открыть"); l.hyperlink=pk_url; l.font=blue
-        elif not has_pk:
+        else:
             ws.cell(r,7,"—").fill=gapfill
         comp_prices=[]
         for ci,comp in enumerate(COMPETITORS):
