@@ -6,7 +6,7 @@ import csv, sys, re
 csv.field_size_limit(sys.maxsize)
 from collections import Counter
 from spec_match import is_compressor
-from atlas_need_specs import load_universe, is_product_url, slug, dm, COMPETITORS
+from atlas_need_specs import load_universe, is_product_url, slug, dm, COMPETITORS, dedup_urls
 
 DIR="/home/user/Statistic/"
 CATS = [  # (имя файла, регэксп по имени+слагу, анти-регэксп)
@@ -35,9 +35,9 @@ def build():
     for cat,_,_ in CATS:
         path=DIR+cat+"_need_scan.txt"
         with open(path,"w",encoding="utf-8") as fh:
-            fh.write("\n".join(sorted(set(out[cat])))+"\n")
+            fh.write("\n".join(dedup_urls(out[cat]))+"\n")
         sites=", ".join(f"{s} {c}" for (cc,s),c in by.most_common() if cc==cat)
-        print(f"{cat:<12} {len(set(out[cat])):>5}  ({sites})")
+        print(f"{cat:<12} {len(dedup_urls(out[cat])):>5}  ({sites})")
     print("-> *_need_scan.txt")
 
 if __name__=="__main__":

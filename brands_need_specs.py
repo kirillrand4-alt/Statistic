@@ -8,7 +8,7 @@ from collections import Counter
 from matcher import brand_of
 from spec_match import is_compressor
 from atlas_need_specs import (load_universe, is_product_url, slug, dm, COMPETITORS,
-                              has_kw, has_bar, has_flow)
+                              has_kw, has_bar, has_flow, dedup_urls)
 
 OUT      = "/home/user/Statistic/all_brands_need_specs.txt"
 OUT_STAN = "/home/user/Statistic/kompressornye_stancii_need_specs.txt"
@@ -38,11 +38,11 @@ def build():
             nodata[b]+=1; continue
         need.append((b,u)); by_brand[b]+=1; by_site[dm(u)]+=1
 
-    urls=sorted({u for _,u in need})
+    urls=dedup_urls(u for _,u in need)
     with open(OUT, "w", encoding="utf-8") as fh:
         fh.write("\n".join(urls)+"\n")
     with open(OUT_STAN, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(sorted(set(stan)))+"\n")
+        fh.write("\n".join(dedup_urls(stan))+"\n")
     tot_c=sum(complete.values()); tot_n=sum(nodata.values())
     print(f"компрессоры конкурентов с брендом: всего {tot_c+tot_n+len(urls)+len(stan)} | "
           f"полные {tot_c} | сайт не публикует {tot_n} | НАДО ЧЕКНУТЬ {len(urls)} | станций {len(stan)}")

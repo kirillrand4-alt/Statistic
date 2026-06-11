@@ -24,6 +24,21 @@ def slug(u):  # последний сегмент пути (без домена:
     p=unquote(urlparse(str(u)).path).rstrip("/")
     return p.split("/")[-1] if p else ""
 
+def canon_key(u):
+    """Ключ одного товара: www/региональные субдомены (novosibirsk./rostov.) и хвостовой
+    слеш не различаем — одна страница на разных хостах = один товар."""
+    p=urlparse(str(u).lower())
+    host=re.sub(r"^(www|novosibirsk|rostov)\.","",p.netloc)
+    return host+p.path.rstrip("/")
+
+def dedup_urls(urls):
+    """Уникальные товары по canon_key; из вариантов берём короткий (обычно www/основной)."""
+    best={}
+    for u in urls:
+        k=canon_key(u)
+        if k not in best or len(u)<len(best[k]): best[k]=u
+    return sorted(best.values())
+
 def is_product_url(u):
     """Отсев НЕ-товарных страниц (аренда / категории-листинги / статьи / проекты / б-у),
     которые проходят по бренду+числу."""
