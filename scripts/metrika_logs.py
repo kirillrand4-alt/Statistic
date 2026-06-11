@@ -1,15 +1,22 @@
-"""Download Yandex Metrica visits via the Logs API in short chunks and import.
+"""Yandex Metrica visits: import a folder (tsv/gz/zip) and auto-fill the gaps.
 
 List counters:
     python scripts/metrika_logs.py --list
 
-Download visits for a counter into a site (chunked: create -> wait -> download
-parts -> clean -> next):
-    python scripts/metrika_logs.py --counter 12345 --site 7 --from 2026-05-01 --to 2026-06-01 --chunk 1
+Full sync (recommended): import every file in a folder (.tsv/.csv/.txt, .gz,
+.zip), then detect missing days and download ONLY those via the Logs API
+(create -> wait -> download parts -> clean at Yandex -> next):
+    python scripts/metrika_logs.py --counter 12345 --site 7 --import-dir /opt/seostat/uploads
+
+Without --from/--to the range is auto: earliest visit date in the DB .. yesterday.
+Days already present in the DB are skipped (use --force to re-download).
+
+Show coverage / gaps for a site:
+    python scripts/metrika_logs.py --site 7 --coverage
 
 Reuses the stored Yandex token (the same y0_ token, must have metrika:read).
 Run detached for long ranges:
-    nohup .venv/bin/python scripts/metrika_logs.py --counter 12345 --site 7 --from 2025-06-01 --to 2026-06-01 > /tmp/metrika.log 2>&1 &
+    nohup .venv/bin/python scripts/metrika_logs.py --counter 12345 --site 7 --import-dir /opt/seostat/uploads > /tmp/metrika.log 2>&1 &
 """
 from __future__ import annotations
 
@@ -62,13 +69,117 @@ def _chunks(d1: date, d2: date, days: int):
         cur = end + timedelta(days=1)
 
 
-def download(counter: int, site_id: int, d1: date, d2: date, chunk: int, source: str) -> None:
+def import_dir(site_id: int, path: str) -> int:
+    """Import every visits file in a folder: .tsv/.csv/.txt, .gz, .zip."""
+    import gzip
+    import io
+    import zipfile
+
+    init_db()
+    db = SessionLocal()
+    total = 0
+
+    def _one(name: str, fh) -> None:
+        nonlocal total
+        try:
+            n = import_tsv(db, site_id, fh)
+            total += n
+            print(f"  {name}: +{n} визитов", flush=True)
+        except ValueError as exc:
+            print(f"  {name}: пропуск — {exc}", flush=True)
+
+    try:
+        if os.path.isdir(path):
+            files = sorted(
+                os.path.join(r, f) for r, _, fs in os.walk(path) for f in fs
+            )
+        else:
+            files = [path]
+        if not files:
+            print(f"В {path} файлов не найдено.")
+            return 0
+        for fp in files:
+            low, base_name = fp.lower(), os.path.basename(fp)
+            if low.endswith(".gz"):
+                with gzip.open(fp, "rt", encoding="utf-8", errors="ignore") as fh:
+                    _one(base_name, fh)
+            elif low.endswith(".zip"):
+                with zipfile.ZipFile(fp) as z:
+                    for entry in z.namelist():
+                        if entry.endswith("/"):
+                            continue
+                        with z.open(entry) as raw:
+                            _one(f"{base_name}:{entry}",
+                                 io.TextIOWrapper(raw, encoding="utf-8", errors="ignore"))
+            elif low.endswith((".tsv", ".csv", ".txt")):
+                with open(fp, encoding="utf-8", errors="ignore") as fh:
+                    _one(base_name, fh)
+            else:
+                print(f"  {base_name}: пропуск (не tsv/csv/txt/gz/zip)")
+        print(f"Импортировано из {path}: {total} визитов")
+        return total
+    finally:
+        db.close()
+
+
+def _covered_dates(db, site_id: int, d1: date, d2: date) -> set[date]:
+    """Dates that already have at least one visit for this site."""
+    from sqlalchemy import func, select
+
+    from app.db.models import Visit
+
+    rows = db.execute(
+        select(Visit.date).where(
+            Visit.site_id == site_id, Visit.date >= d1, Visit.date <= d2
+        ).group_by(Visit.date).having(func.count() > 0)
+    ).all()
+    return {r[0] for r in rows if r[0] is not None}
+
+
+def coverage(site_id: int) -> None:
+    """Print which dates have visits and where the gaps are."""
+    from sqlalchemy import func, select
+
+    from app.db.models import Visit
+
+    init_db()
+    db = SessionLocal()
+    try:
+        lo, hi, total = db.execute(
+            select(func.min(Visit.date), func.max(Visit.date), func.count()).where(Visit.site_id == site_id)
+        ).one()
+        if not total:
+            print(f"site {site_id}: визитов нет")
+            return
+        have = _covered_dates(db, site_id, lo, hi)
+        missing = []
+        cur = lo
+        while cur <= hi:
+            if cur not in have:
+                missing.append(cur)
+            cur += timedelta(days=1)
+        print(f"site {site_id}: {total} визитов, период {lo}..{hi}, дней с данными: {len(have)}, дыр: {len(missing)}")
+        if missing:
+            head = ", ".join(str(d) for d in missing[:15])
+            more = f" … и ещё {len(missing) - 15}" if len(missing) > 15 else ""
+            print(f"  пропущенные дни: {head}{more}")
+    finally:
+        db.close()
+
+
+def download(counter: int, site_id: int, d1: date, d2: date, chunk: int, source: str,
+             force: bool = False) -> None:
     init_db()
     db = SessionLocal()
     base = f"{API}/management/v1/counter/{counter}/logrequest"
     total = 0
+    have = set() if force else _covered_dates(db, site_id, d1, d2)
     try:
         for c1, c2 in _chunks(d1, d2, chunk):
+            days = {c1 + timedelta(days=i) for i in range((c2 - c1).days + 1)}
+            if not force and days <= have:
+                print(f"[{c1}..{c2}] уже в базе, пропускаю", flush=True)
+                continue
             print(f"[{c1}..{c2}] создаю запрос...", flush=True)
             r = httpx.post(
                 f"{API}/management/v1/counter/{counter}/logrequests",
@@ -111,22 +222,64 @@ def download(counter: int, site_id: int, d1: date, d2: date, chunk: int, source:
         db.close()
 
 
+def _auto_range(site_id: int) -> tuple[date, date] | None:
+    """Default sync range: earliest visit date in the DB .. yesterday."""
+    from sqlalchemy import func, select
+
+    from app.db.models import Visit
+
+    init_db()
+    db = SessionLocal()
+    try:
+        lo = db.execute(select(func.min(Visit.date)).where(Visit.site_id == site_id)).scalar_one()
+    finally:
+        db.close()
+    if lo is None:
+        return None
+    return lo, date.today() - timedelta(days=1)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--coverage", action="store_true")
+    ap.add_argument("--import-dir", dest="import_dir")
     ap.add_argument("--counter", type=int)
     ap.add_argument("--site", type=int)
     ap.add_argument("--from", dest="d1")
     ap.add_argument("--to", dest="d2")
     ap.add_argument("--chunk", type=int, default=1)
     ap.add_argument("--source", default="visits")
+    ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
+
     if a.list:
         list_counters(); return
-    if not (a.counter and a.site and a.d1 and a.d2):
-        print("Нужны --counter, --site, --from, --to (или --list).")
+    if a.import_dir:
+        if not a.site:
+            print("Для --import-dir нужен --site."); return
+        import_dir(a.site, a.import_dir)
+    if a.coverage:
+        if not a.site:
+            print("Для --coverage нужен --site."); return
+        coverage(a.site)
+        if not a.counter:
+            return
+    if not (a.counter and a.site):
+        if not a.import_dir:
+            print("Нужны --counter и --site (или --list / --coverage / --import-dir).")
         return
-    download(a.counter, a.site, date.fromisoformat(a.d1), date.fromisoformat(a.d2), a.chunk, a.source)
+
+    if a.d1 and a.d2:
+        d1, d2 = date.fromisoformat(a.d1), date.fromisoformat(a.d2)
+    else:
+        rng = _auto_range(a.site)
+        if rng is None:
+            print("В базе нет визитов этого сайта — задайте --from и --to явно.")
+            return
+        d1, d2 = rng
+        print(f"Авто-диапазон: {d1}..{d2} (от самой ранней даты в базе до вчера)")
+    download(a.counter, a.site, d1, d2, a.chunk, a.source, force=a.force)
 
 
 if __name__ == "__main__":
