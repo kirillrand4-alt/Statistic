@@ -80,11 +80,10 @@ nginx -t && systemctl reload nginx
 > Загрузка визитов — это большие файлы. Снипеты уже содержат
 > `client_max_body_size 1024M` (без него nginx отдаёт **413 Request Entity Too
 > Large** на архивах). Если конфиг уже подключён со старым лимитом, поднимите его
-> на живом файле и перезагрузите nginx:
+> на живом файле одной командой (сам найдёт нужный конфиг, сделает бэкап,
+> проверит `nginx -t` и перезагрузит, при ошибке откатит):
 > ```bash
-> # подставьте файл из `grep -Rl parsercompressor /etc/nginx/`
-> sed -i 's/client_max_body_size [0-9]\+M;/client_max_body_size 1024M;/' <файл>
-> nginx -t && systemctl reload nginx
+> bash deploy/raise_upload_limit.sh
 > ```
 > Совсем большие архивы (сотни МБ) надёжнее заливать по SFTP в
 > `/opt/seostat/uploads` и разбирать через `scripts/metrika_logs.py --import-dir`.
