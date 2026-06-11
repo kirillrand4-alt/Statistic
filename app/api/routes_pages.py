@@ -495,11 +495,12 @@ async def ui_metrika_upload(site_id: int = Form(...), file: UploadFile = File(..
     if db.get(Site, site_id) is None:
         raise HTTPException(404, "site not found")
     try:
-        text = (await file.read()).decode("utf-8", errors="ignore")
-        n = visits.import_tsv(db, site_id, text.splitlines())
+        n = visits.import_fileobj(db, site_id, file.file, file.filename or "upload")
         msg = f"Загружено визитов: {n}"
     except Exception as exc:  # noqa: BLE001
         msg = f"Ошибка: {exc}"
+    finally:
+        await file.close()
     return RedirectResponse(url=f"{BP}/metrika?site_id={site_id}&msg={quote(msg)}", status_code=303)
 
 

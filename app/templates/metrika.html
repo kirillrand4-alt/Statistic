@@ -17,7 +17,7 @@
 </form>
 
 <article>
-  <header>Загрузить визиты (файл выгрузки Logs API / с Google Диска)</header>
+  <header>Загрузить визиты (выгрузка Logs API / с Google Диска — TSV или архив)</header>
   <form method="post" action="{{ base_path }}/ui/metrika/upload" enctype="multipart/form-data">
     <div class="grid">
       <label>Привязать к сайту
@@ -25,14 +25,17 @@
           {% for s in sites %}<option value="{{ s.id }}" {% if site and s.id==site.id %}selected{% endif %}>{{ s.source.code|srclabel }} · {{ s.display_name or s.property_uri }}</option>{% endfor %}
         </select>
       </label>
-      <label>Файл (TSV)
-        <input type="file" name="file" accept=".tsv,.csv,.txt" required>
+      <label>Файл (TSV / .gz / .zip)
+        <input type="file" name="file" accept=".tsv,.csv,.txt,.gz,.zip" required>
       </label>
       <label>&nbsp;<button type="submit">Загрузить и разобрать</button></label>
     </div>
   </form>
   <small>Файл должен содержать столбец <code>ym:s:visitID</code> и другие поля визитов
-  (как отдаёт Logs API Метрики). Дубликаты по visitID не задваиваются.</small>
+  (как отдаёт Logs API Метрики). Принимаются <code>.tsv/.csv/.txt</code> и архивы
+  <code>.gz</code>, <code>.zip</code> (внутри zip разбираются все файлы). Дубликаты
+  по visitID не задваиваются. Очень большие архивы (сотни МБ) надёжнее класть в
+  <code>/opt/seostat/uploads</code> по SFTP и запускать <code>--import-dir</code>.</small>
 </article>
 
 {% if summary %}

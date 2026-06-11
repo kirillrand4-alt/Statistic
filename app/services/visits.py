@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import csv
+import gzip
+import io
+import zipfile
 from datetime import date, datetime
 
 from sqlalchemy import func, select
@@ -103,6 +106,36 @@ def import_tsv(db: Session, site_id: int, lines) -> int:
         written += _insert_ignore(db, payload)
     db.commit()
     return written
+
+
+def import_fileobj(db: Session, site_id: int, fileobj, name: str) -> int:
+    """Import one visits file from a binary file object, dispatching by extension.
+
+    Handles ``.gz``, ``.zip`` (every member, non-visit members skipped) and plain
+    ``.tsv/.csv/.txt`` (or unknown, treated as text). The object is read as a
+    stream, so large uploads/archives don't need to fit in memory. A plain file
+    without a visitID column raises ``ValueError``; inside a .zip such members are
+    skipped so one stray file doesn't abort the whole archive.
+    """
+    low = (name or "").lower()
+    if low.endswith(".gz"):
+        with gzip.open(fileobj, "rt", encoding="utf-8", errors="ignore") as fh:
+            return import_tsv(db, site_id, fh)
+    if low.endswith(".zip"):
+        total = 0
+        with zipfile.ZipFile(fileobj) as z:
+            for entry in z.namelist():
+                if entry.endswith("/"):
+                    continue
+                with z.open(entry) as raw:
+                    try:
+                        total += import_tsv(
+                            db, site_id, io.TextIOWrapper(raw, encoding="utf-8", errors="ignore")
+                        )
+                    except ValueError:
+                        continue  # not a visits TSV — skip this archive member
+        return total
+    return import_tsv(db, site_id, io.TextIOWrapper(fileobj, encoding="utf-8", errors="ignore"))
 
 
 def summary(db: Session, site_id: int, dr: DateRange) -> dict:

@@ -33,7 +33,7 @@ import httpx  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.credentials import get_cred  # noqa: E402
 from app.db.base import SessionLocal, init_db  # noqa: E402
-from app.services.visits import FIELD_MAP, import_tsv  # noqa: E402
+from app.services.visits import FIELD_MAP, import_fileobj, import_tsv  # noqa: E402
 
 API = "https://api-metrika.yandex.net"
 FIELDS = ",".join(FIELD_MAP.keys())
@@ -71,23 +71,9 @@ def _chunks(d1: date, d2: date, days: int):
 
 def import_dir(site_id: int, path: str) -> int:
     """Import every visits file in a folder: .tsv/.csv/.txt, .gz, .zip."""
-    import gzip
-    import io
-    import zipfile
-
     init_db()
     db = SessionLocal()
     total = 0
-
-    def _one(name: str, fh) -> None:
-        nonlocal total
-        try:
-            n = import_tsv(db, site_id, fh)
-            total += n
-            print(f"  {name}: +{n} визитов", flush=True)
-        except ValueError as exc:
-            print(f"  {name}: пропуск — {exc}", flush=True)
-
     try:
         if os.path.isdir(path):
             files = sorted(
@@ -99,23 +85,19 @@ def import_dir(site_id: int, path: str) -> int:
             print(f"В {path} файлов не найдено.")
             return 0
         for fp in files:
-            low, base_name = fp.lower(), os.path.basename(fp)
-            if low.endswith(".gz"):
-                with gzip.open(fp, "rt", encoding="utf-8", errors="ignore") as fh:
-                    _one(base_name, fh)
-            elif low.endswith(".zip"):
-                with zipfile.ZipFile(fp) as z:
-                    for entry in z.namelist():
-                        if entry.endswith("/"):
-                            continue
-                        with z.open(entry) as raw:
-                            _one(f"{base_name}:{entry}",
-                                 io.TextIOWrapper(raw, encoding="utf-8", errors="ignore"))
-            elif low.endswith((".tsv", ".csv", ".txt")):
-                with open(fp, encoding="utf-8", errors="ignore") as fh:
-                    _one(base_name, fh)
-            else:
+            base_name = os.path.basename(fp)
+            if not fp.lower().endswith((".tsv", ".csv", ".txt", ".gz", ".zip")):
                 print(f"  {base_name}: пропуск (не tsv/csv/txt/gz/zip)")
+                continue
+            try:
+                with open(fp, "rb") as fh:
+                    n = import_fileobj(db, site_id, fh, base_name)
+                total += n
+                print(f"  {base_name}: +{n} визитов", flush=True)
+            except ValueError as exc:
+                print(f"  {base_name}: пропуск — {exc}", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  {base_name}: ОШИБКА — {exc}", flush=True)
         print(f"Импортировано из {path}: {total} визитов")
         return total
     finally:

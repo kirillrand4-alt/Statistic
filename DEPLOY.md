@@ -77,6 +77,18 @@ nginx -t && systemctl reload nginx
 ```
 Откройте `https://parsercompressor.online/stat/`.
 
+> Загрузка визитов — это большие файлы. Снипеты уже содержат
+> `client_max_body_size 1024M` (без него nginx отдаёт **413 Request Entity Too
+> Large** на архивах). Если конфиг уже подключён со старым лимитом, поднимите его
+> на живом файле и перезагрузите nginx:
+> ```bash
+> # подставьте файл из `grep -Rl parsercompressor /etc/nginx/`
+> sed -i 's/client_max_body_size [0-9]\+M;/client_max_body_size 1024M;/' <файл>
+> nginx -t && systemctl reload nginx
+> ```
+> Совсем большие архивы (сотни МБ) надёжнее заливать по SFTP в
+> `/opt/seostat/uploads` и разбирать через `scripts/metrika_logs.py --import-dir`.
+
 ### Альтернатива — поддомен (проще и безопаснее)
 Вместо правки существующего конфига можно поднять `stat.parsercompressor.online`
 (см. `deploy/nginx-subdomain.conf`): добавьте A-запись DNS на `161.104.48.72`,
