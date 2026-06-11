@@ -11,6 +11,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from matcher import signature, domain, find_brand
 from scrape_files import SCRAPE_FILES
+from atlas_need_specs import is_product_url   # отсев не-товарных (v-p-k /catalog/, аренда, б/у, статьи)
 
 # Детектор «дробь в названии разная» (класс 5.5↔55, который URL не различает).
 # Фильтруем Excel-битьё названий (1.46031 = сожранное 1,9/1,0) — там матч по URL верный.
@@ -92,6 +93,10 @@ def load_all():
                         else: info[u]=[(row.get("name") or u).strip(), [p]]
         except FileNotFoundError:
             pass
+    # отсев не-товарных страниц конкурентов (v-p-k /catalog/=категория со статусом «снято»
+    # на уровне серии, аренда, б/у, статьи). Наш prokompressor /catalog/ — это товары, не трогаем.
+    drop=[u for u in info if "prokompressor.ru" not in u and not is_product_url(u)]
+    for u in drop: info.pop(u, None); STATUS.pop(u, None)
     return info
 
 def cluster_all(info):

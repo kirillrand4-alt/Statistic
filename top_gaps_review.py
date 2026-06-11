@@ -6,6 +6,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from urllib.parse import urlparse, unquote
 from build_review import load_all, cluster_all, COMPETITORS, STATUS, _pick_min, _show_key, _best_name
+from atlas_need_specs import is_product_url
 from spec_match import is_compressor
 
 OUT="/home/user/Statistic/Top_gaps_review.xlsx"
@@ -98,8 +99,17 @@ def add_sheet(wb, info, data, brand, title):
         if any(STATUS.get(u)=="снято" for c in COMPETITORS if c in bd[k] for u in bd[k][c]))
     print(f"  {title:<10} строк {n} | GAP(нет у нас, ≥2 конк.) {g} | со снятыми {s}")
 
+def _keep(u, name):
+    """Только товарная страница-компрессор (категории/листинги/не-компрессоры — вон)."""
+    if not is_product_url(u): return False                   # v-p-k /catalog/, аренда, б/у, статьи
+    text=(name or "")+" "+_slug(u)
+    if not any(ch.isdigit() for ch in text): return False    # нет числа = бренд/категория
+    return is_compressor(text)
+
 def build():
-    info=load_all(); data=cluster_all(info)
+    info=load_all()
+    info={u:v for u,v in info.items() if _keep(u, v[0])}     # отсев не-товаров ДО кластеризации
+    data=cluster_all(info)
     wb=openpyxl.Workbook(); wb.remove(wb.active)
     for brand,title in BRANDS: add_sheet(wb, info, data, brand, title)
     wb.save(OUT); print(f"-> {OUT}")
