@@ -1,0 +1,178 @@
+"""Metrica hits/visits import (extra + upsert), counter resolution and the
+rotated multi-domain downloader (scripts/metrika_logs.sync_rotate) with a mocked
+Logs API."""
+from __future__ import annotations
+
+from datetime import date
+
+import pytest
+from sqlalchemy import func, select
+
+import scripts.metrika_logs as M
+from app.bootstrap import ensure_sources
+from app.db.base import SessionLocal
+from app.db.models import Hit, Site, Visit
+from app.services import visits as V
+
+VHDR = "ym:s:visitID\tym:s:date\tym:s:deviceCategory\tym:s:pageViews\tym:s:lastUTMSource"
+HHDR = "ym:pv:watchID\tym:pv:date\tym:pv:URL\tym:pv:deviceCategory\tym:pv:isPageView"
+
+
+def _mksite(db, host: str) -> int:
+    src = ensure_sources(db)["yandex_webmaster"]
+    s = Site(source_id=src.id, property_uri=f"https://{host}/", display_name=host)
+    db.add(s)
+    db.commit()
+    return s.id
+
+
+def _lines(*rows: str):
+    return iter(rows)
+
+
+def test_import_hits_and_extra(db):
+    sid = _mksite(db, "a.ru")
+    n = V.import_hits(db, sid, _lines(HHDR, "10\t2026-06-01\thttp://a.ru/x\tdesktop\t1"))
+    assert n == 1
+    row = db.execute(select(Hit).where(Hit.watch_id == 10)).scalar_one()
+    assert row.url == "http://a.ru/x" and row.device == "desktop" and row.is_page_view == 1
+
+
+def test_visit_extra_and_upsert(db):
+    sid = _mksite(db, "a.ru")
+    # unmapped ym:s:lastUTMSource is preserved in the JSON extra column
+    V.import_tsv(db, sid, _lines(VHDR, "100\t2026-06-01\tdesktop\t2\tgoogle"))
+    assert '"lastUTMSource": "google"' in db.execute(
+        select(Visit.extra).where(Visit.visit_id == 100)
+    ).scalar_one()
+
+    # update=True overwrites existing row (no duplicate)
+    V.import_tsv(db, sid, _lines(VHDR, "100\t2026-06-01\tmobile\t9\tyandex"), update=True)
+    db.expire_all()
+    dev, pv = db.execute(
+        select(Visit.device, Visit.page_views).where(Visit.visit_id == 100)
+    ).one()
+    assert dev == "mobile" and pv == 9
+    assert db.execute(select(func.count()).where(Visit.visit_id == 100)).scalar_one() == 1
+
+    # update=False keeps the existing row untouched
+    V.import_tsv(db, sid, _lines(VHDR, "100\t2026-06-01\tdesktop\t1\tbing"))
+    db.expire_all()
+    assert db.execute(select(Visit.device).where(Visit.visit_id == 100)).scalar_one() == "mobile"
+
+
+def test_resolve_targets(db, monkeypatch):
+    a, b, c = _mksite(db, "a.ru"), _mksite(db, "b.ru"), _mksite(db, "c.ru")
+    # a.ru learns its counter from an existing visit; b/c from the counter list
+    db.add(Visit(site_id=a, visit_id=1, counter_id=111, date=date(2026, 6, 1)))
+    db.commit()
+    monkeypatch.setattr(M, "_fetch_counters", lambda: [
+        {"id": 222, "site": "b.ru"}, {"id": 333, "site": "www.c.ru"}, {"id": 9, "site": "x.ru"},
+    ])
+    targets, missed = M.resolve_targets()
+    assert {(lbl, cid) for _, cid, lbl in targets} == {("a.ru", 111), ("b.ru", 222), ("c.ru", 333)}
+    assert missed == []
+
+
+# --- mocked Logs API for sync_rotate ----------------------------------------
+class _Resp:
+    def __init__(self, data, code=200):
+        self._d, self.status_code, self.text = data, code, ""
+
+    def json(self):
+        return self._d
+
+
+class _Stream:
+    def __init__(self, text):
+        self._t, self.status_code = text, 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def iter_text(self):
+        yield self._t
+
+
+def _counter(url):
+    return int(url.split("/counter/")[1].split("/")[0])
+
+
+def _rid(url):
+    return int(url.split("/logrequest/")[1].split("/")[0])
+
+
+class FakeHTTP:
+    """Minimal stand-in for the Logs API: create -> status -> download -> clean."""
+
+    def __init__(self, status="processed"):
+        self.status = status
+        self.reqs: dict[int, dict] = {}
+        self.nid = 0
+        self.created, self.cleaned, self.cancelled = [], [], []
+        self.max_open = 0
+
+    def post(self, url, headers=None, params=None, timeout=None):
+        if url.endswith("/logrequests"):
+            self.nid += 1
+            self.reqs[self.nid] = {"source": params["source"], "date1": params["date1"]}
+            self.created.append((self.nid, _counter(url), params["source"]))
+            self.max_open = max(self.max_open, len(self.reqs) - len(self.cleaned) - len(self.cancelled))
+            return _Resp({"log_request": {"request_id": self.nid}})
+        if url.endswith("/clean"):
+            self.cleaned.append(_rid(url))
+        elif url.endswith("/cancel"):
+            self.cancelled.append(_rid(url))
+        return _Resp({})
+
+    def get(self, url, headers=None, timeout=None):
+        return _Resp({"log_request": {"status": self.status, "parts": [{"part_number": 0}]}})
+
+    def stream(self, method, url, headers=None, timeout=None):
+        r = self.reqs[_rid(url)]
+        if r["source"] == "hits":
+            t = f"ym:pv:watchID\tym:pv:date\tym:pv:URL\n{_rid(url)*10+1}\t{r['date1']}\thttp://x\n"
+        else:
+            t = f"ym:s:visitID\tym:s:date\tym:s:deviceCategory\n{_rid(url)*10+1}\t{r['date1']}\tdesktop\n"
+        return _Stream(t)
+
+
+def test_sync_rotate_happy(db, monkeypatch):
+    targets = [(_mksite(db, h), cid, h) for h, cid in [("a.ru", 111), ("b.ru", 222), ("c.ru", 333)]]
+    fake = FakeHTTP(status="processed")
+    monkeypatch.setattr(M, "httpx", fake)
+    monkeypatch.setattr(M, "_token", lambda: "t")
+
+    M.sync_rotate(targets, date(2026, 6, 1), date(2026, 6, 6), chunk=3, parallel=3,
+                  sources=("visits", "hits"), force=True, timeout_min=999, poll_sec=0)
+
+    # 3 domains x 2 windows x 2 sources = 12 requests, all cleaned, never >3 in flight
+    assert len(fake.created) == 12 and len(fake.cleaned) == 12 and not fake.cancelled
+    assert fake.max_open <= 3
+    assert {c for _, c, _ in fake.created} == {111, 222, 333}
+    s = SessionLocal()
+    try:
+        assert s.execute(select(func.count()).select_from(Visit)).scalar_one() == 6
+        assert s.execute(select(func.count()).select_from(Hit)).scalar_one() == 6
+    finally:
+        s.close()
+
+
+def test_sync_rotate_timeout_skips(db, monkeypatch):
+    sid = _mksite(db, "z.ru")
+    fake = FakeHTTP(status="created")  # never becomes ready
+    monkeypatch.setattr(M, "httpx", fake)
+    monkeypatch.setattr(M, "_token", lambda: "t")
+
+    M.sync_rotate([(sid, 555, "z.ru")], date(2026, 6, 1), date(2026, 6, 3), chunk=3,
+                  parallel=3, sources=("visits",), force=True, timeout_min=0, poll_sec=0)
+
+    assert len(fake.created) == 1 and len(fake.cancelled) == 1 and not fake.cleaned
+    s = SessionLocal()
+    try:
+        assert s.execute(select(func.count()).select_from(Visit)).scalar_one() == 0
+    finally:
+        s.close()
