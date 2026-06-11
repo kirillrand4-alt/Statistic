@@ -58,13 +58,27 @@ def last_segment_tokens(u):
 
 def find_brand(u):
     """Бренд ищем по всему пути (у части сайтов он отдельным сегментом)."""
-    for t in path_tokens(u):
-        if t in BRAND_ALIASES:
-            return BRAND_ALIASES[t]
+    toks = path_tokens(u)
+    for i, t in enumerate(toks):
+        b = BRAND_ALIASES.get(t)
+        if not b: continue
+        if t == "ac":      # «ac» = Atlas только если СЛЕДУЮЩИЙ токен — серия Atlas («ac ga22»);
+            nxt = toks[i+1] if i+1 < len(toks) else ""   # иначе это air-cooled (slt…ac…ip23 и пр.)
+            if not _is_atlas_series(nxt): continue
+        return b
     return None
 
-# бренд по НАЗВАНИЮ (фолбэк: часть сайтов, напр. v-p-k, не пишут бренд в URL)
-_NAME_BRANDS = sorted(set(BRAND_ALIASES) | {"atlas copco","ingersoll rand","cross air"},
+_ATLAS_SER = {"xahs","xrhs","xrvs","xrys","xrxs","xats","xavs","xas","ga","gx",
+              "zr","zt","ze","za","aq","gv","le","lf","lt","sf"}
+def _is_atlas_series(tok):
+    m = re.match(r"([a-z]+)\d*$", str(tok))
+    return bool(m) and m.group(1) in _ATLAS_SER
+
+# бренд по НАЗВАНИЮ (фолбэк: часть сайтов, напр. v-p-k, не пишут бренд в URL).
+# Исключаем короткие двусмысленные токены: «ac» в названии = воздушное охлаждение
+# («Olymtech ... (AC)»), а не Atlas Copco. В URL-слаге «ac» оставляем (find_brand).
+_UNSAFE_IN_TEXT = {"ac"}
+_NAME_BRANDS = sorted((set(BRAND_ALIASES) - _UNSAFE_IN_TEXT) | {"atlas copco","ingersoll rand","cross air"},
                       key=len, reverse=True)
 def brand_from_text(text):
     """Распознать бренд в произвольном тексте (название товара). Длинные имена раньше."""
