@@ -12,7 +12,9 @@
 import re
 
 SER_ATLAS = re.compile(
-    r'\b(xahs|xrhs|xrvs|xrys|xrxs|xats|xavs|xas|gx|ga|zr|zt|ze|za|le|lf|lt|sf|aq|gv|g)'
+    r'\b(xahs|xrhs|xrvs|xrys|xrxs|xats|xavs|xams|xaxs|'      # 4-букв. серии (длинные — раньше)
+    r'xrs|xah|xas|gx|ga|zr|zt|ze|za|lz|le|lf|lt|sf|aq|gv|'  # 3-2-букв.
+    r'xa|u|y|h|x|g)'                                         # 1-2-букв. (короткие — последними)
     r'\s*[- ]?\s*(\d+[.,]?\d*)(l\b)?', re.I)
 
 def num(x):
@@ -23,6 +25,7 @@ def yn(x): return str(x).strip().lower() in ("да","yes","есть","1","true")
 
 def series_num(text, ser_re=SER_ATLAS):
     s = str(text).replace("_"," ").replace("-"," ")
+    s = re.sub(r'(?i)(copco|копко)(?=[a-zа-яё])', r'\1 ', s)   # «COPCOG 200» -> «COPCO G 200»
     m = ser_re.search(s)
     if not m: return None
     fam = m.group(1).lower(); n = float(m.group(2).replace(",","."))
