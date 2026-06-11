@@ -15,8 +15,10 @@
   <label>По <input type="date" name="end" value="{{ range.end }}"></label>
   <label>Порог (раз) <input type="number" name="ratio" value="{{ ratio }}" min="2" step="1"></label>
   <label>Шум (≤ показов) <input type="number" name="min_impr" value="{{ min_impr }}" min="0"></label>
+  <label><input type="checkbox" name="merge" value="1" {% if merge %}checked{% endif %}> Объединить домен</label>
   <label>&nbsp;<button type="submit">Проверить</button></label>
 </form>
+{% if merged %}<p><mark>Объединено свойств домена «{{ merged.domain }}»: {{ merged.count }} (макс. на URL/день, без задвоения).</mark></p>{% endif %}
 
 {% if result %}
   {% set s = result.summary %}

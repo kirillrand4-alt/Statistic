@@ -16,7 +16,7 @@ from app.deps import get_db, parse_date_range, resolve_period_b
 from app.services import growth
 from app.services import totals as totals_svc
 from app.services.ctr import ctr_for_project
-from app.services.loaders import project_page_id_map
+from app.services.loaders import project_page_ids
 from app.services.top_keyword import top_keywords_for_project
 from app.utils import domain_of, normalize_url
 from app.web import templates
@@ -355,24 +355,32 @@ def gsc_oauth_callback(request: Request, code: str = "", state: str = "", error:
 
 @router.get("/projects/{project_id}")
 def project_page(request: Request, project_id: int, start: str | None = None,
-                 end: str | None = None, order_by: str = "clicks",
+                 end: str | None = None, order_by: str = "clicks", merge: int = 0,
                  db: Session = Depends(get_db)):
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(404, "project not found")
     dr = parse_date_range(start, end)
+    site = db.get(Site, project.site_id)
+    site_ids, merged = None, None
+    if merge and site is not None:
+        ids = _same_domain_ids(db, site)
+        if len(ids) > 1:
+            site_ids = ids
+            merged = {"count": len(ids), "domain": domain_of(site.property_uri)}
     return templates.TemplateResponse(
         request,
         "project_detail.html",
         {
             "request": request,
             "project": project,
-            "site": db.get(Site, project.site_id),
+            "site": site,
             "range": dr,
             "order_by": order_by,
-            "top_keywords": top_keywords_for_project(db, project, dr, order_by),
-            "ctr": ctr_for_project(db, project, dr),
-            "subset_totals": totals_svc.subset_totals(db, project, dr),
+            "merge": bool(merge), "merged": merged,
+            "top_keywords": top_keywords_for_project(db, project, dr, order_by, site_ids=site_ids),
+            "ctr": ctr_for_project(db, project, dr, site_ids=site_ids),
+            "subset_totals": totals_svc.subset_totals(db, project, dr, site_ids=site_ids),
         },
     )
 
@@ -382,7 +390,7 @@ def project_compare_page(request: Request, project_id: int, metric: str = "click
                          a_start: str | None = None, a_end: str | None = None,
                          b_start: str | None = None, b_end: str | None = None,
                          clean: int = 0, ratio: float = 10.0, min_impr: int = 100,
-                         device: str = "all", db: Session = Depends(get_db)):
+                         device: str = "all", merge: int = 0, db: Session = Depends(get_db)):
     from app.services.multi_compare import ENGINE_LABELS, ENGINES, compare_project
 
     project = db.get(Project, project_id)
@@ -391,7 +399,8 @@ def project_compare_page(request: Request, project_id: int, metric: str = "click
     period_a = parse_date_range(a_start, a_end)
     period_b = resolve_period_b(period_a, b_start, b_end)
     result = compare_project(db, project, metric, period_a, period_b,
-                             exclude_bots=bool(clean), ratio=ratio, min_impr=min_impr, device=device)
+                             exclude_bots=bool(clean), ratio=ratio, min_impr=min_impr,
+                             device=device, merge=bool(merge))
     return templates.TemplateResponse(
         request,
         "project_compare.html",
@@ -400,7 +409,7 @@ def project_compare_page(request: Request, project_id: int, metric: str = "click
             "project": project,
             "metric": result["metric"],
             "clean": bool(clean), "ratio": ratio, "min_impr": min_impr,
-            "device": result["device"],
+            "device": result["device"], "merge": bool(merge),
             "period_a": period_a,
             "period_b": period_b,
             "result": result,
@@ -415,20 +424,27 @@ def compare_page(request: Request, site_id: int | None = None, metric: str = "cl
                  a_start: str | None = None, a_end: str | None = None,
                  b_start: str | None = None, b_end: str | None = None,
                  min_impressions: int = 0, clean: int = 0, ratio: float = 10.0,
-                 min_impr: int = 100, db: Session = Depends(get_db)):
+                 min_impr: int = 100, merge: int = 0, db: Session = Depends(get_db)):
     sites = _sites(db)
     site = _resolve_site(db, site_id)
     result = None
+    merged = None
     period_a = parse_date_range(a_start, a_end)
     period_b = resolve_period_b(period_a, b_start, b_end)
     if site is not None and (a_start or b_start or site_id):
+        ids = site.id
+        if merge:
+            mids = _same_domain_ids(db, site)
+            if len(mids) > 1:
+                ids = mids
+                merged = {"count": len(mids), "domain": domain_of(site.property_uri)}
         page_ids = None
         if grouping in ("subset", "page", "query") and project_id:
             project = db.get(Project, project_id)
             if project is not None:
-                page_ids = list(project_page_id_map(db, project.site_id, project).values())
+                page_ids = project_page_ids(db, ids, project)
         result = growth.compare(
-            db, site.id, metric, period_a=period_a, period_b=period_b,
+            db, ids, metric, period_a=period_a, period_b=period_b,
             grouping=grouping, page_ids=page_ids, min_impressions=min_impressions,
             exclude_bots=bool(clean), ratio=ratio, min_impr=min_impr,
         )
@@ -445,6 +461,7 @@ def compare_page(request: Request, site_id: int | None = None, metric: str = "cl
             "project_id": project_id,
             "min_impressions": min_impressions,
             "clean": bool(clean), "ratio": ratio, "min_impr": min_impr,
+            "merge": bool(merge), "merged": merged,
             "period_a": period_a,
             "period_b": period_b,
             "result": result,
@@ -609,18 +626,27 @@ async def ui_metrika_upload(site_id: int = Form(...), file: UploadFile = File(..
 @router.get("/antifraud")
 def antifraud_page(request: Request, site_id: int | None = None, start: str | None = None,
                    end: str | None = None, ratio: float = 10.0, min_impr: int = 100,
-                   db: Session = Depends(get_db)):
+                   merge: int = 0, db: Session = Depends(get_db)):
     from app.services.antifraud import analyze
 
     sites = _sites(db)
     site = _resolve_site(db, site_id)
     dr = parse_date_range(start, end)
-    result = analyze(db, site.id, dr, ratio_threshold=ratio, min_impressions=min_impr) if site else None
+    result, merged = None, None
+    if site is not None:
+        ids = site.id
+        if merge:
+            mids = _same_domain_ids(db, site)
+            if len(mids) > 1:
+                ids = mids
+                merged = {"count": len(mids), "domain": domain_of(site.property_uri)}
+        result = analyze(db, ids, dr, ratio_threshold=ratio, min_impressions=min_impr)
     return templates.TemplateResponse(
         request,
         "antifraud.html",
         {
             "request": request, "sites": sites, "site": site, "range": dr,
             "ratio": ratio, "min_impr": min_impr, "result": result,
+            "merge": bool(merge), "merged": merged,
         },
     )

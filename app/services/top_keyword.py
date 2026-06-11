@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from app.providers.base import DateRange
-from app.services.loaders import agg_metrics, load_query_metrics_df, project_page_id_map
+from app.services.loaders import agg_metrics, load_query_metrics_df, project_page_ids
 from app.utils import normalize_url
 
 _SORT = {
@@ -12,11 +12,12 @@ _SORT = {
 }
 
 
-def top_keywords_for_project(db, project, dr: DateRange, order_by: str = "clicks") -> list[dict]:
+def top_keywords_for_project(db, project, dr: DateRange, order_by: str = "clicks",
+                             site_ids=None) -> list[dict]:
     if order_by not in _SORT:
         order_by = "clicks"
-    page_map = project_page_id_map(db, project.site_id, project)
-    df = load_query_metrics_df(db, project.site_id, dr, page_ids=list(page_map.values()))
+    ids = site_ids or project.site_id
+    df = load_query_metrics_df(db, ids, dr, page_ids=project_page_ids(db, ids, project))
 
     best_by_norm: dict[str, dict] = {}
     if not df.empty:

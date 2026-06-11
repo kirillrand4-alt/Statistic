@@ -34,16 +34,41 @@ def _idlist(site_id) -> list[int]:
     return [site_id]
 
 
+def _collapse_overlap(df: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
+    """Merge same-domain properties: keep one row per ``keys`` group — the most
+    complete (max impressions). A GSC domain property already includes its
+    https:// prefix property, so overlapping (URL, day) rows must not be summed.
+    Distinct rows (different URL/query/day, or http vs https) keep their own keys.
+    """
+    if df.empty:
+        return df
+    return df.sort_values("impressions").groupby(keys, as_index=False, dropna=False).last()
+
+
 def project_page_id_map(db: Session, site_id: int, project: Project) -> dict[str, int]:
     norms = [u.normalized_url for u in project.urls]
     if not norms:
         return {}
     rows = db.execute(
         select(Page.normalized_url, Page.id).where(
-            Page.site_id == site_id, Page.normalized_url.in_(norms)
+            Page.site_id.in_(_idlist(site_id)), Page.normalized_url.in_(norms)
         )
     ).all()
     return {n: pid for n, pid in rows}
+
+
+def project_page_ids(db: Session, site_id, project: Project) -> list[int]:
+    """All Page ids matching the project's URLs across one or several sites
+    (so a project resolves to its pages in every merged same-domain property)."""
+    norms = [u.normalized_url for u in project.urls]
+    if not norms:
+        return []
+    rows = db.execute(
+        select(Page.id).where(
+            Page.site_id.in_(_idlist(site_id)), Page.normalized_url.in_(norms)
+        )
+    ).all()
+    return [r[0] for r in rows]
 
 
 def load_page_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.DataFrame:
@@ -64,7 +89,8 @@ def load_page_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.DataFr
     )
     if page_ids is not None:
         stmt = stmt.where(PageMetricDaily.page_id.in_(list(page_ids)))
-    return pd.DataFrame(db.execute(stmt).all(), columns=PAGE_COLS)
+    df = pd.DataFrame(db.execute(stmt).all(), columns=PAGE_COLS)
+    return _collapse_overlap(df, ["url", "date"]) if len(_idlist(site_id)) > 1 else df
 
 
 def load_query_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.DataFrame:
@@ -87,7 +113,8 @@ def load_query_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.DataF
     )
     if page_ids is not None:
         stmt = stmt.where(QueryMetricDaily.page_id.in_(list(page_ids)))
-    return pd.DataFrame(db.execute(stmt).all(), columns=QUERY_COLS)
+    df = pd.DataFrame(db.execute(stmt).all(), columns=QUERY_COLS)
+    return _collapse_overlap(df, ["url", "query", "date"]) if len(_idlist(site_id)) > 1 else df
 
 
 def load_site_totals_df(db, site_id, dr: DateRange) -> pd.DataFrame:
@@ -101,7 +128,8 @@ def load_site_totals_df(db, site_id, dr: DateRange) -> pd.DataFrame:
         SiteTotalDaily.date >= dr.start,
         SiteTotalDaily.date <= dr.end,
     )
-    return pd.DataFrame(db.execute(stmt).all(), columns=TOTAL_COLS)
+    df = pd.DataFrame(db.execute(stmt).all(), columns=TOTAL_COLS)
+    return _collapse_overlap(df, ["date"]) if len(_idlist(site_id)) > 1 else df
 
 
 def load_device_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.DataFrame:
@@ -109,6 +137,7 @@ def load_device_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.Data
         select(
             Page.url,
             DeviceMetricDaily.device,
+            DeviceMetricDaily.date,
             DeviceMetricDaily.clicks,
             DeviceMetricDaily.impressions,
             DeviceMetricDaily.position,
@@ -122,9 +151,11 @@ def load_device_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.Data
     )
     if page_ids is not None:
         stmt = stmt.where(DeviceMetricDaily.page_id.in_(list(page_ids)))
-    return pd.DataFrame(
-        db.execute(stmt).all(), columns=["url", "device", "clicks", "impressions", "position"]
+    df = pd.DataFrame(
+        db.execute(stmt).all(),
+        columns=["url", "device", "date", "clicks", "impressions", "position"],
     )
+    return _collapse_overlap(df, ["url", "device", "date"]) if len(_idlist(site_id)) > 1 else df
 
 
 def agg_metrics(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:

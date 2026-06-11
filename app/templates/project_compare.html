@@ -34,13 +34,15 @@
     <label><input type="checkbox" name="clean" value="1" {% if clean %}checked{% endif %}> Вычитать ботов (≥ N×)</label>
     <label>Порог N× <input type="number" name="ratio" value="{{ ratio }}" min="2" step="1"></label>
     <label>Шум (≤ показов) <input type="number" name="min_impr" value="{{ min_impr }}" min="0"></label>
+    <label><input type="checkbox" name="merge" value="1" {% if merge %}checked{% endif %}> Объединить домен</label>
   </div>
 </form>
 {% if device != 'all' %}<p><mark>Показаны данные только по устройству: <strong>{{ 'десктоп' if device=='desktop' else 'мобильные' }}</strong> (там, где собраны device-данные).</mark></p>{% endif %}
 
 {% if clean %}<p><mark>Показаны «чистые» данные: на страницах с перекосом устройств ≥ {{ ratio }}× вычтено «ботовое» устройство (шум ≤ {{ min_impr }} показов не трогается).</mark></p>{% endif %}
+{% if merge %}<p><mark>В каждом движке объединены все свойства домена (https:// + sc-domain:), без задвоения.</mark></p>{% endif %}
 
-{% set qs = "metric=" ~ metric ~ "&a_start=" ~ period_a.start ~ "&a_end=" ~ period_a.end ~ "&b_start=" ~ period_b.start ~ "&b_end=" ~ period_b.end ~ ("&clean=1&ratio=" ~ ratio ~ "&min_impr=" ~ min_impr if clean else "") %}
+{% set qs = "metric=" ~ metric ~ "&a_start=" ~ period_a.start ~ "&a_end=" ~ period_a.end ~ "&b_start=" ~ period_b.start ~ "&b_end=" ~ period_b.end ~ ("&clean=1&ratio=" ~ ratio ~ "&min_impr=" ~ min_impr if clean else "") ~ ("&merge=1" if merge else "") %}
 <p>
   Экспорт:
   <a href="{{ base_path }}/api/projects/{{ project.id }}/compare?{{ qs }}&format=xlsx" role="button" class="outline">Excel</a>

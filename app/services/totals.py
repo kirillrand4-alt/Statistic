@@ -7,39 +7,19 @@ from app.services.loaders import (
     load_device_metrics_df,
     load_page_metrics_df,
     load_site_totals_df,
-    project_page_id_map,
+    project_page_ids,
     totals_from_df,
 )
 
 
-def _multi(site_id) -> bool:
-    return isinstance(site_id, (list, tuple, set)) and len(set(site_id)) > 1
-
-
-def _collapse_max(df, keys: list[str]):
-    """One row per `keys` group — the most complete (max impressions).
-
-    Used when merging same-domain properties (e.g. GSC ``https://`` + ``sc-domain:``):
-    a domain property already includes the prefix one, so taking the max per
-    (URL, day) / per day avoids double-counting instead of summing.
-    """
-    if df.empty:
-        return df
-    return df.sort_values("impressions").groupby(keys, as_index=False).last()
-
-
 def site_totals(db, site_id, dr: DateRange) -> dict:
-    df = load_site_totals_df(db, site_id, dr)
-    if _multi(site_id):
-        df = _collapse_max(df, ["date"])
-    return totals_from_df(df)
+    # Overlap of merged same-domain properties is de-duplicated inside the loaders.
+    return totals_from_df(load_site_totals_df(db, site_id, dr))
 
 
 def site_daily(db, site_id, dr: DateRange) -> list[dict]:
     """Daily site totals, for time-series charts."""
     df = load_site_totals_df(db, site_id, dr)
-    if _multi(site_id):
-        df = _collapse_max(df, ["date"])
     if df.empty:
         return []
     df = df.sort_values("date")
@@ -60,8 +40,6 @@ def site_daily(db, site_id, dr: DateRange) -> list[dict]:
 
 def per_page_totals(db, site_id, dr: DateRange, page_ids=None) -> list[dict]:
     df = load_page_metrics_df(db, site_id, dr, page_ids=page_ids)
-    if _multi(site_id):
-        df = _collapse_max(df, ["url", "date"])
     agg = agg_metrics(df, ["url"])
     agg = agg.sort_values("clicks", ascending=False) if not agg.empty else agg
     return [
@@ -101,7 +79,8 @@ def per_page_with_devices(db, site_id: int, dr: DateRange, page_ids=None) -> lis
     return out
 
 
-def subset_totals(db, project, dr: DateRange) -> dict:
-    page_map = project_page_id_map(db, project.site_id, project)
-    df = load_page_metrics_df(db, project.site_id, dr, page_ids=list(page_map.values()))
+def subset_totals(db, project, dr: DateRange, site_ids=None) -> dict:
+    ids = site_ids or project.site_id
+    page_ids = project_page_ids(db, ids, project)
+    df = load_page_metrics_df(db, ids, dr, page_ids=page_ids)
     return totals_from_df(df)

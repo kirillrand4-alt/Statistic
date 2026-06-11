@@ -20,7 +20,7 @@ from app.services.loaders import (
     agg_metrics,
     load_device_metrics_df,
     load_page_metrics_df,
-    project_page_id_map,
+    project_page_ids,
 )
 from app.utils import domain_of, normalize_url
 
@@ -48,10 +48,30 @@ def sites_for_project(db: Session, project) -> dict[str, Site]:
     return out
 
 
-def _values_by_url(db, site_id: int, project, dr: DateRange, exclude_bots: bool = False,
+def site_ids_for_project(db: Session, project, merge: bool = False) -> dict[str, list[int]]:
+    """Per engine, the site_ids sharing the project's domain. With ``merge`` all
+    of them (e.g. both GSC https:// and sc-domain:); otherwise one (own wins)."""
+    own = db.get(Site, project.site_id)
+    domain = domain_of(own.property_uri)
+    sites = (
+        db.execute(select(Site).join(Source, Site.source_id == Source.id).where(Source.code.in_(ENGINES)))
+        .scalars().all()
+    )
+    groups: dict[str, list[int]] = {}
+    for s in sites:
+        if domain_of(s.property_uri) == domain:
+            groups.setdefault(s.source.code, []).append(s.id)
+    if merge:
+        return groups
+    return {
+        code: [project.site_id] if project.site_id in ids else [ids[0]]
+        for code, ids in groups.items()
+    }
+
+
+def _values_by_url(db, site_id, project, dr: DateRange, exclude_bots: bool = False,
                    ratio: float = 10.0, min_impr: int = 100, device: str = "all") -> dict[str, dict]:
-    page_map = project_page_id_map(db, site_id, project)
-    page_ids = list(page_map.values())
+    page_ids = project_page_ids(db, site_id, project)
     if device in ("desktop", "mobile"):
         df = load_device_metrics_df(db, site_id, dr, page_ids=page_ids)
         if not df.empty:
@@ -111,16 +131,16 @@ def _diff(metric: str, a: float, b: float) -> dict:
 
 def compare_project(db, project, metric: str, period_a: DateRange, period_b: DateRange,
                     exclude_bots: bool = False, ratio: float = 10.0, min_impr: int = 100,
-                    device: str = "all") -> dict:
+                    device: str = "all", merge: bool = False) -> dict:
     metric = metric if metric in METRICS else "clicks"
     device = device if device in ("all", "desktop", "mobile") else "all"
-    sites = sites_for_project(db, project)
+    groups = site_ids_for_project(db, project, merge)
 
     engines: dict[str, dict] = {}
     per_url: dict[str, tuple[dict, dict]] = {}
-    for code, site in sites.items():
-        a_vals = _values_by_url(db, site.id, project, period_a, exclude_bots, ratio, min_impr, device)
-        b_vals = _values_by_url(db, site.id, project, period_b, exclude_bots, ratio, min_impr, device)
+    for code, ids in groups.items():
+        a_vals = _values_by_url(db, ids, project, period_a, exclude_bots, ratio, min_impr, device)
+        b_vals = _values_by_url(db, ids, project, period_b, exclude_bots, ratio, min_impr, device)
         per_url[code] = (a_vals, b_vals)
         tot_a, tot_b = _totals(a_vals), _totals(b_vals)
         engines[code] = {

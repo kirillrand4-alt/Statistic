@@ -29,8 +29,11 @@
       <option value="position" {% if order_by=='position' %}selected{% endif %}>позиции</option>
     </select>
   </label>
+  <label><input type="checkbox" name="merge" value="1" {% if merge %}checked{% endif %}> Объединить домен</label>
   <label>&nbsp;<button type="submit">Обновить</button></label>
 </form>
+{% if merged %}<p><mark>Объединено свойств домена «{{ merged.domain }}»: {{ merged.count }} (макс. на URL/день, без задвоения https:// и sc-domain:).</mark></p>
+{% elif merge %}<p><small>Другого свойства того же домена не нашлось — объединять нечего.</small></p>{% endif %}
 
 <div class="grid">
   <article><hgroup><h3>{{ subset_totals.clicks|numfmt }}</h3><p>Клики (подмножество)</p></hgroup></article>
