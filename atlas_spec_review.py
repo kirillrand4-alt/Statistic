@@ -163,11 +163,10 @@ def build():
     bold=Font(bold=True, color="FFFFFF"); hfill=PatternFill("solid", fgColor="305496")
     warn=PatternFill("solid", fgColor="FFE699")     # жёлтый: на сайте >1 разной карточки
     nomatch=PatternFill("solid", fgColor="F2F2F2")
-    checkfill=PatternFill("solid", fgColor="C6E0B4") # зелёный: карточка есть, цены нет
     center=Alignment(horizontal="center", vertical="center", wrap_text=True)
     for title, rows in (("спек-матч", clean), ("неоднозначные", ambig)):
         ws=wb.create_sheet(title)
-        HDR=["№","Наш товар","Ваша цена","Ваша ссылка"]+COMPETITORS\
+        HDR=["№","Наш товар","Ваша цена"]+COMPETITORS\
             +["min конк.","Δ к min, %","Почему сцепилось","ВЕРДИКТ (ок / ошибка: ...)"]
         ws.append(HDR)
         for ci in range(1,len(HDR)+1):
@@ -179,10 +178,10 @@ def build():
             ws.cell(r,1,r-1); ws.cell(r,2,o["name"])
             c3=ws.cell(r,3, o["price"] if o["price"] else "нет цены")
             if o["price"]: c3.number_format="# ##0"
-            l=ws.cell(r,4,"открыть"); l.hyperlink=o["url"]; l.font=blue
+            c3.hyperlink=o["url"]; c3.font=blue          # цена = ссылка на нашу карточку
             comp_prices=[]; first=None
             for ci,site in enumerate(COMPETITORS):
-                cell=ws.cell(r,5+ci)
+                cell=ws.cell(r,4+ci)
                 cards=list(per_site.get(site,{}).values())
                 if not cards: cell.fill=nomatch; continue
                 priced=[c for c in cards if c["price"] and c["status"]!="снято"]
@@ -195,17 +194,16 @@ def build():
                     else:
                         cell.font=blue; comp_prices.append(show["price"])
                 else:
-                    cell.value="снято" if show["status"]=="снято" else "проверить"
+                    cell.value="снято" if show["status"]=="снято" else "По запросу"
                     cell.hyperlink=show["url"]
                     cell.font=strike if show["status"]=="снято" else blue
-                    if show["status"]!="снято": cell.fill=checkfill
                 if len(cards)>1: cell.fill=warn
             if comp_prices:
                 mn=min(comp_prices)
-                ws.cell(r,11,mn).number_format="# ##0"
-                if o["price"]: ws.cell(r,12, round((o["price"]-mn)/mn*100,1))
-            ws.cell(r,13, why(o, first))
-        widths=[5,46,10,9]+[13]*len(COMPETITORS)+[11,10,46,24]
+                ws.cell(r,10,mn).number_format="# ##0"
+                if o["price"]: ws.cell(r,11, round((o["price"]-mn)/mn*100,1))
+            ws.cell(r,12, why(o, first))
+        widths=[5,46,12]+[13]*len(COMPETITORS)+[11,10,46,24]
         for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
         ws.freeze_panes="C2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
     wb.save(OUT); print(f"-> {OUT}")

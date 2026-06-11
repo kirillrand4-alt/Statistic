@@ -108,7 +108,7 @@ def cluster_all(info):
         data[brand][key][d][u]=min(prices) if prices else None
     return data
 
-HDR=["№","Отпечаток","Название","У нас","Конк-тов","Ваша цена","Ваша ссылка"]\
+HDR=["№","Отпечаток","Название","У нас","Конк-тов","Ваша цена"]\
     +COMPETITORS+["min конк.","Δ к min, %","ВЕРДИКТ (ок / ошибка: ...)"]
 
 def _pick_min(d):
@@ -134,7 +134,7 @@ def add_sheet(wb, info, data, brand, sheet_name):
     warn=PatternFill("solid", fgColor="FFE699")     # жёлтый: >1 разный URL у конкурента
     nomatch=PatternFill("solid", fgColor="F2F2F2")  # серый: не нашлось
     gapfill=PatternFill("solid", fgColor="DDEBF7")  # голубой: кандидат добавить (нас нет)
-    checkfill=PatternFill("solid", fgColor="C6E0B4") # зелёный: есть у конкур., цены нет → проверить
+    # «По запросу» = карточка у конкурента есть, публичной цены нет (синяя ссылка, без заливки)
     center=Alignment(horizontal="center", vertical="center", wrap_text=True)
     for c in range(1,len(HDR)+1):
         cell=wsx.cell(1,c); cell.font=bold; cell.fill=hfill; cell.alignment=center
@@ -164,12 +164,12 @@ def add_sheet(wb, info, data, brand, sheet_name):
         if has_pk:
             c6=wsx.cell(r,6, pk_price if pk_price else "нет цены")
             if pk_price: c6.number_format="# ##0"
-            l=wsx.cell(r,7,"открыть"); l.hyperlink=pk_url; l.font=blue
+            c6.hyperlink=pk_url; c6.font=blue          # цена = ссылка на нашу карточку
         else:
             wsx.cell(r,6,"—").fill=gapfill
         comp_prices=[]
         for ci,comp in enumerate(COMPETITORS):
-            cell=wsx.cell(r,8+ci)
+            cell=wsx.cell(r,7+ci)
             urls=sites.get(comp)
             if urls:
                 priced={u:p for u,p in urls.items() if p is not None}
@@ -188,14 +188,14 @@ def add_sheet(wb, info, data, brand, sheet_name):
                     if STATUS.get(cu)=="снято":
                         cell.value="снято"; cell.hyperlink=cu; cell.font=strike
                     else:
-                        cell.value="проверить"; cell.hyperlink=cu; cell.font=blue; cell.fill=checkfill
+                        cell.value="По запросу"; cell.hyperlink=cu; cell.font=blue
             else:
                 cell.fill=nomatch
         if comp_prices:
             mn=min(comp_prices)
-            wsx.cell(r,14,mn).number_format="# ##0"
-            if pk_price: wsx.cell(r,15, round((pk_price-mn)/mn*100,1))
-    widths=[5,40,44,7,9,11,8]+[13]*len(COMPETITORS)+[11,10,24]
+            wsx.cell(r,13,mn).number_format="# ##0"
+            if pk_price: wsx.cell(r,14, round((pk_price-mn)/mn*100,1))
+    widths=[5,40,44,7,9,12]+[13]*len(COMPETITORS)+[11,10,24]
     for i,w in enumerate(widths,1): wsx.column_dimensions[get_column_letter(i)].width=w
     wsx.freeze_panes="D2"; wsx.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{n+1}"
     return n
