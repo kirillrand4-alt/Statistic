@@ -33,12 +33,15 @@ _STOPW = {"компрессор","компрессора","компрессор�
 def gen_series(text, brand):
     s=" "+str(text).lower().replace("_"," ")+" "
     s=re.sub(r"(?<=[a-zа-я])[\-.](?=[a-zа-я])","",s)     # k-max -> kmax, dr.sonic -> drsonic
+    s=re.sub(r"(?<=[a-zа-я])\.(?=\d)"," ",s)             # genesis i.18,5 -> i 18,5 (десятичные 18.5 целы)
     s=s.replace("-"," ").replace("/"," ")
     btoks={brand}|{a for a,c in BRAND_ALIASES.items() if c==brand}
-    for m in re.finditer(r"\b([a-zа-я]{2,12})\s*(\d+(?:[.,]\d+)?)", s):
+    for m in re.finditer(r"\b([a-zа-я]{2,12})(?:\s+([a-z]))?\s*(\d+(?:[.,]\d+)?)", s):
         w=m.group(1)
         if w in _STOPW or w in btoks: continue
-        return (w, float(m.group(2).replace(",",".")))
+        # одиночная ЛАТИНСКАЯ буква между серией и числом = вариант линейки (GENESIS I = инвертор);
+        # кириллические одиночки (предлоги «с»/«и») игнорируются
+        return (w+(m.group(2) or ""), float(m.group(3).replace(",",".")))
     return None
 
 def ser_of(text, brand):
