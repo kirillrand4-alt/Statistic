@@ -24,6 +24,45 @@
 <article><p><small>Выгрузка списка страниц в индексе доступна для <strong>Яндекса</strong>. Выберите Яндекс-сайт.</small></p></article>
 {% endif %}
 
+{% if site %}
+<article>
+  <header>Проверить свой список по последнему снимку</header>
+  <form method="post" action="{{ base_path }}/ui/indexing/check" enctype="multipart/form-data">
+    <input type="hidden" name="site_id" value="{{ site.id }}">
+    <div class="grid">
+      <label>Список URL (по одному в строке; можно путь вида <code>/page</code>)
+        <textarea name="urls_text" rows="6" placeholder="https://site.ru/page1&#10;https://site.ru/page2&#10;/otnositelnyy-put"></textarea>
+      </label>
+      <label>…или файл со списком (.txt / .csv)
+        <input type="file" name="file" accept=".txt,.csv,.tsv">
+      </label>
+    </div>
+    <button type="submit">Проверить по индексу</button>
+  </form>
+  <small>Сверяет каждый URL с самым свежим снимком{% if snapshots %} ({{ snapshots[0].date }}, {{ snapshots[0].count|numfmt }} стр.){% endif %}.
+  Если снимков ещё нет — создайте кнопкой выше.</small>
+</article>
+{% endif %}
+
+{% if check %}
+<article>
+  <header>В индексе <ins>{{ check.in_count }}</ins> из {{ check.total }} · нет в индексе <del>{{ check.out_count }}</del> · по снимку {{ check.captured_on }}</header>
+  <figure><table class="sortable">
+    <thead><tr><th>URL</th><th>В индексе?</th><th>Заголовок в индексе</th></tr></thead>
+    <tbody>
+      {% for r in check.rows[:2000] %}
+      <tr>
+        <td><small>{{ r.input }}</small></td>
+        <td>{% if r.in_index %}<ins>✓ да</ins>{% else %}<del>✗ нет</del>{% endif %}</td>
+        <td><small>{{ r.title or '—' }}</small></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table></figure>
+  {% if check.total > 2000 %}<small>Показаны первые 2000 из {{ check.total|numfmt }}.</small>{% endif %}
+</article>
+{% endif %}
+
 {% if history %}
 <article>
   <header>Динамика числа страниц в индексе</header>

@@ -422,9 +422,7 @@ def compare_page(request: Request, site_id: int | None = None, metric: str = "cl
     )
 
 
-@router.get("/indexing")
-def indexing_page(request: Request, site_id: int | None = None, a: str | None = None,
-                  b: str | None = None, msg: str | None = None, db: Session = Depends(get_db)):
+def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None):
     from app.services import indexing
 
     sites = _sites(db)
@@ -440,14 +438,41 @@ def indexing_page(request: Request, site_id: int | None = None, a: str | None = 
         if da and db_:
             cmp = indexing.compare_snapshots(db, site.id, date.fromisoformat(da), date.fromisoformat(db_))
             a, b = da, db_
+    return {
+        "request": request, "msg": msg, "sites": sites, "site": site,
+        "snapshots": snapshots, "history": history, "cmp": cmp,
+        "a": a, "b": b, "can_capture": can_capture, "check": check,
+    }
+
+
+@router.get("/indexing")
+def indexing_page(request: Request, site_id: int | None = None, a: str | None = None,
+                  b: str | None = None, msg: str | None = None, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
-        request,
-        "indexing.html",
-        {
-            "request": request, "msg": msg, "sites": sites, "site": site,
-            "snapshots": snapshots, "history": history, "cmp": cmp,
-            "a": a, "b": b, "can_capture": can_capture,
-        },
+        request, "indexing.html", _indexing_ctx(db, request, site_id, a, b, msg)
+    )
+
+
+@router.post("/ui/indexing/check")
+async def ui_indexing_check(request: Request, site_id: int = Form(...),
+                            urls_text: str | None = Form(None),
+                            file: UploadFile | None = File(None),
+                            db: Session = Depends(get_db)):
+    from app.services import indexing
+
+    site = db.get(Site, site_id)
+    if site is None:
+        raise HTTPException(404, "site not found")
+    raw = ""
+    if file is not None:
+        raw += (await file.read()).decode("utf-8", errors="ignore") + "\n"
+    if urls_text:
+        raw += urls_text
+    urls = [line.strip() for line in raw.replace(",", "\n").splitlines() if line.strip()]
+    check = indexing.check_urls(db, site, urls)
+    msg = None if check else "Сначала создайте снимок страниц в индексе (кнопка выше) — потом проверяйте список."
+    return templates.TemplateResponse(
+        request, "indexing.html", _indexing_ctx(db, request, site_id, msg=msg, check=check)
     )
 
 
