@@ -179,12 +179,12 @@ def match(o, cands):
 # --- классификатор «это компрессор, а не запчасть/категория» (по имени+слагу) ---
 PARTS_RE = re.compile(
     r'фильтр|filter|\bkit\b|ремкомплект|запчаст|сепаратор|separator|клапан|valve|'
-    r'ремень|belt|подшипник|прокладк|gasket|картридж|шланг|hose|муфта|радиатор|'
+    r'ремень\b|belt|подшипник|прокладк|gasket|картридж|шланг|hose|муфта|радиатор|'
     r'охладител|термостат|манометр|реле|плата|датчик|sensor|контроллер|двигател|'
     r'шкив|shkiv|\bремонт|\bremont\b|'
     r'электродвигател|\bмотор\b|\bблок\b|airend|маслоотделит|\bмасло\b|масломинеральн|'
     r'маслосинтетич|paroil|\broil\b|смазк|antifriz|'
-    r'осушител[ья]\s|^осушител|рем\.?\s?набор|to-\d|для компрессор|элемент\b|'
+    r'осушител[ья]\s|^осушител|рем\.?\s?набор|\bto-\d|для компрессор|элемент\b|'
     r'сервис|обслуживан|\bнабор|'
     r'vozdushnyy-filtr|maslyanyy-filtr|remen\b|klapan|podshipnik|separator|filtr|'
     r'dvigatel|kontroller|datchik|mufta|shlang|radiator|ohladitel|termostat|manometr|'
@@ -194,11 +194,22 @@ CATEGORY_RE = re.compile(
     r'компрессоры\b|kompressor(?:yi|y|i)(?![a-z])|вся\s+серия|модельный\s+ряд',
     re.I)
 
+# «[тип] компрессор …» в начале названия = это компрессор-ЮНИТ (а не запчасть «X компрессора»).
+# Тогда part-слова (belt/двигатель/блок/осушитель) — это атрибуты/комплектация, а не товар-часть.
+UNIT_RE = re.compile(
+    r'^[\s\d.,№"]*([a-zа-яё]+\s+){0,2}'
+    r'(винтов|спиральн|поршнев|роторн|дизельн|передвижн|центробежн|зубчат|безмасл|турбо|'
+    r'двухступенч|одноступенч|scroll|screw|spiral|piston|rotary)\w*[\s-]+'
+    r'(компрессор|kompressor|compressor)(?![а-яёa-z])'
+    r'|^[\s\d.,№"]*(компрессор|kompressor|compressor)(?![а-яёa-z])', re.I)
+
 def is_compressor(text):
     """text = имя + слаг. Компрессор (товар), а не категория/листинг серии и не запчасть.
-    Множественное «компрессорЫ»/«kompressoryi» где угодно = листинг серии -> не товар."""
+    Множественное «компрессорЫ»/«kompressoryi» где угодно = листинг серии -> не товар.
+    «[тип] компрессор …» в начале = ЮНИТ (belt/двигатель/осушитель в названии = атрибут)."""
     s = str(text).lower()
     t = " " + s.replace("_", "-") + " "
     if CATEGORY_RE.search(s) or CATEGORY_RE.search(t): return False   # листинг серии
+    if UNIT_RE.search(s): return True                                # «винтовой компрессор …» = юнит
     if PARTS_RE.search(t): return False
     return ("компрессор" in t or "kompressor" in t or "compressor" in t)
