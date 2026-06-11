@@ -12,6 +12,7 @@ from datetime import date as date_type
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -226,6 +227,39 @@ class IndexedUrlSnapshot(Base):
     url: Mapped[str] = mapped_column(String(2048))
     normalized_url: Mapped[str] = mapped_column(String(2048))
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+
+class Visit(Base):
+    """A Yandex Metrica visit (from the Logs API / uploaded TSV) for analysis."""
+
+    __tablename__ = "visit"
+    __table_args__ = (
+        UniqueConstraint("site_id", "visit_id", name="uq_visit"),
+        Index("ix_visit_site_date", "site_id", "date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("site.id"), index=True)
+    visit_id: Mapped[int] = mapped_column(BigInteger)
+    counter_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    date: Mapped[date_type | None] = mapped_column(Date, nullable=True)
+    date_time: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    client_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    traffic_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    search_engine: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    adv_engine: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    referer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    start_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    end_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_views: Mapped[int] = mapped_column(Integer, default=0)
+    duration: Mapped[int] = mapped_column(Integer, default=0)
+    bounce: Mapped[int] = mapped_column(Integer, default=0)
+    device: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    os: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    browser: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    region_city: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    watch_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class AppSetting(Base):

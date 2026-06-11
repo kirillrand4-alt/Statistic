@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Метрика (визиты) · SEO Статистика{% endblock %}
+{% block content %}
+<h2>Яндекс.Метрика — визиты</h2>
+{% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
+
+{% if not sites %}<article><p>Сначала добавьте сайт.</p></article>{% else %}
+<form method="get" action="{{ base_path }}/metrika" class="grid">
+  <label>Сайт
+    <select name="site_id" onchange="this.form.submit()">
+      {% for s in sites %}<option value="{{ s.id }}" {% if site and s.id==site.id %}selected{% endif %}>{{ s.source.code|srclabel }} · {{ s.display_name or s.property_uri }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>С <input type="date" name="start" value="{{ range.start }}"></label>
+  <label>По <input type="date" name="end" value="{{ range.end }}"></label>
+  <label>&nbsp;<button type="submit">Показать</button></label>
+</form>
+
+<article>
+  <header>Загрузить визиты (файл выгрузки Logs API / с Google Диска)</header>
+  <form method="post" action="{{ base_path }}/ui/metrika/upload" enctype="multipart/form-data">
+    <div class="grid">
+      <label>Привязать к сайту
+        <select name="site_id" required>
+          {% for s in sites %}<option value="{{ s.id }}" {% if site and s.id==site.id %}selected{% endif %}>{{ s.source.code|srclabel }} · {{ s.display_name or s.property_uri }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Файл (TSV)
+        <input type="file" name="file" accept=".tsv,.csv,.txt" required>
+      </label>
+      <label>&nbsp;<button type="submit">Загрузить и разобрать</button></label>
+    </div>
+  </form>
+  <small>Файл должен содержать столбец <code>ym:s:visitID</code> и другие поля визитов
+  (как отдаёт Logs API Метрики). Дубликаты по visitID не задваиваются.</small>
+</article>
+
+{% if summary %}
+<div class="grid">
+  <article><hgroup><h3>{{ summary.total|numfmt }}</h3><p>Визитов</p></hgroup></article>
+  <article><hgroup><h3>{{ summary.page_views|numfmt }}</h3><p>Просмотров</p></hgroup></article>
+  <article><hgroup><h3>{{ summary.avg_duration }} c</h3><p>Ср. длительность</p></hgroup></article>
+  <article><hgroup><h3>{{ summary.bounce_rate }}%</h3><p>Отказы</p></hgroup></article>
+</div>
+
+<div class="grid">
+  <article>
+    <header>По источникам</header>
+    <table class="sortable"><thead><tr><th>Источник</th><th>Визитов</th></tr></thead>
+      <tbody>{% for r in summary.by_source %}<tr><td>{{ r.key }}</td><td>{{ r.count|numfmt }}</td></tr>{% else %}<tr><td colspan="2"><small>нет данных</small></td></tr>{% endfor %}</tbody></table>
+  </article>
+  <article>
+    <header>По устройствам</header>
+    <table class="sortable"><thead><tr><th>Устройство</th><th>Визитов</th></tr></thead>
+      <tbody>{% for r in summary.by_device %}<tr><td>{{ r.key }}</td><td>{{ r.count|numfmt }}</td></tr>{% else %}<tr><td colspan="2"><small>нет данных</small></td></tr>{% endfor %}</tbody></table>
+  </article>
+  <article>
+    <header>По поисковикам</header>
+    <table class="sortable"><thead><tr><th>Поисковик</th><th>Визитов</th></tr></thead>
+      <tbody>{% for r in summary.by_search %}<tr><td>{{ r.key }}</td><td>{{ r.count|numfmt }}</td></tr>{% else %}<tr><td colspan="2"><small>нет данных</small></td></tr>{% endfor %}</tbody></table>
+  </article>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

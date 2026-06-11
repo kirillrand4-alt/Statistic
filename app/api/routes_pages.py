@@ -470,6 +470,39 @@ def ui_indexing_capture(site_id: int = Form(...), db: Session = Depends(get_db))
     )
 
 
+@router.get("/metrika")
+def metrika_page(request: Request, site_id: int | None = None, start: str | None = None,
+                 end: str | None = None, msg: str | None = None, db: Session = Depends(get_db)):
+    from app.services import visits
+
+    sites = _sites(db)
+    site = _resolve_site(db, site_id)
+    dr = parse_date_range(start, end)
+    summary = visits.summary(db, site.id, dr) if site is not None else None
+    return templates.TemplateResponse(
+        request,
+        "metrika.html",
+        {"request": request, "msg": msg, "sites": sites, "site": site,
+         "range": dr, "summary": summary},
+    )
+
+
+@router.post("/ui/metrika/upload")
+async def ui_metrika_upload(site_id: int = Form(...), file: UploadFile = File(...),
+                            db: Session = Depends(get_db)):
+    from app.services import visits
+
+    if db.get(Site, site_id) is None:
+        raise HTTPException(404, "site not found")
+    try:
+        text = (await file.read()).decode("utf-8", errors="ignore")
+        n = visits.import_tsv(db, site_id, text.splitlines())
+        msg = f"Загружено визитов: {n}"
+    except Exception as exc:  # noqa: BLE001
+        msg = f"Ошибка: {exc}"
+    return RedirectResponse(url=f"{BP}/metrika?site_id={site_id}&msg={quote(msg)}", status_code=303)
+
+
 @router.get("/antifraud")
 def antifraud_page(request: Request, site_id: int | None = None, start: str | None = None,
                    end: str | None = None, ratio: float = 10.0, min_impr: int = 100,

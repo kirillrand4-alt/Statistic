@@ -302,6 +302,32 @@ def test_antifraud_analyze(db, site):
     assert res["summary"]["removed_impressions"] == 1000
 
 
+def test_visits_import_and_summary(db, site):
+    from datetime import date
+
+    from sqlalchemy import func, select
+
+    from app.db.models import Visit
+    from app.providers.base import DateRange
+    from app.services import visits
+
+    tsv = "\n".join([
+        "ym:s:visitID\tym:s:date\tym:s:lastTrafficSource\tym:s:deviceCategory\tym:s:pageViews\tym:s:visitDuration\tym:s:bounce\tym:s:lastSearchEngine",
+        "111\t2026-06-01\torganic\tdesktop\t3\t120\t0\tyandex",
+        "222\t2026-06-01\tdirect\tmobile\t1\t10\t1\t",
+        "111\t2026-06-01\torganic\tdesktop\t3\t120\t0\tyandex",  # duplicate visitID
+    ])
+    visits.import_tsv(db, site.id, tsv.splitlines())
+
+    assert db.execute(select(func.count()).select_from(Visit)).scalar_one() == 2  # dup ignored
+    s = visits.summary(db, site.id, DateRange(start=date(2026, 6, 1), end=date(2026, 6, 1)))
+    assert s["total"] == 2
+    assert s["page_views"] == 4
+    assert s["bounce_rate"] == 50.0
+    by_src = {r["key"]: r["count"] for r in s["by_source"]}
+    assert by_src.get("organic") == 1 and by_src.get("direct") == 1
+
+
 def test_daily_collect_accumulates_index(db, site):
     from sqlalchemy import func, select
 
