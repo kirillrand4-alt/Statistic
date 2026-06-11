@@ -4,6 +4,7 @@ __pycache__/
 *.xlsx
 *.zip
 brand_reports/
+gap_reports/
 *.txt
 !requirements.txt
 night_run/

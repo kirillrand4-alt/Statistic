@@ -39,7 +39,7 @@ BRAND_ALIASES = {
     "зиф":"zif","ркз":"mig","бежецк":"aso","чкз":"chkz","минский":"mmz","ремеза":"remeza",
     # конкурентские бренды, которых нет у prokompressor (на рассмотрение)
     "xeleron":"xeleron","gmp":"gmp","kaishan":"kaishan","denair":"denair","vortex":"vortex",
-    "brestor":"brestor","baldor":"baldor","alup":"alup",
+    "brestor":"brestor","baldor":"baldor","alup":"alup","compair":"compair",
 }
 
 # --- IP-рейтинг по умолчанию (шум). Остальные IP — сигнал ---
