@@ -9,7 +9,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from collections import defaultdict
 from matcher import brand_of, domain
-from spec_match import (num, sane_kw, sane_bar, bar_value, bar_from_text, flow_value,
+from spec_match import (num, sane_kw, sane_bar, bar_value, bar_from_text, flow_value, bar_flow_pairs,
                         series_num, text_flags, is_compressor, match, receiver_filter)
 from atlas_need_specs import is_product_url, slug, dm, best_name
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
@@ -97,19 +97,16 @@ def load_comp():
         sn=series_num(text)
         if not sn: continue
         d=specs.get(u, {})
-        kw=bar=fl=None; oil=None
+        kw=None; oil=None; raw_bar=raw_flow=fkey=None
         for k,v in d.items():
             kl=k.lower()
             if kw is None and "мощ" in kl and "шум" not in kl and "звук" not in kl: kw=sane_kw(num(v))
-            if bar is None and "давлен" in kl: bar=bar_value(v)          # диапазон VSD -> макс
-            if fl is None and "произв" in kl: fl=flow_value(v, kl+" "+str(v))
+            if raw_bar is None and "давлен" in kl: raw_bar=v
+            if raw_flow is None and "произв" in kl: raw_flow=v; fkey=kl
             if oil is None and "безмасл" in kl: oil=oil_of(v)
-        if kw is None and fl is None: continue   # совсем без спеков — липнет ко всей серии
         # флаги из НАЗВАНИЯ: слаги врут (aero клонирует FF-слаг под P-карточки);
         # слаг — только если названия нет (sitemap-only)
         ff,vsd,rv = text_flags(nm) if nm else text_flags(slug(u))
-        # ресивер из specs (rutector: «Объем ресивера, литров»=270, «Наличие ресивера»=Есть);
-        # объём точнее флага: текст-объём > specs-объём > текст-флаг > specs-флаг
         srv=None
         for k,v in d.items():
             if "ресивер" in k.lower():
@@ -117,9 +114,12 @@ def load_comp():
                 if n and n>=10: srv=n; break
                 if str(v).strip().lower() in ("да","есть","yes") and srv is None: srv=1
         if rv is None or (rv==1 and srv and srv>1): rv = srv if srv is not None else rv
-        cands.append(dict(sn=sn, kw=kw, bar=bar or bar_from_text(text), fl=fl, oil=oil,
-                          ff=ff, vsd=vsd, rv=rv, name=nm or slug(u), url=u, site=dm(u),
-                          price=price.get(u), status=status.get(u,"")))
+        # сдвоенные карточки «8/10» давление -> кандидат на каждый вариант
+        for bar,fl in bar_flow_pairs(raw_bar, raw_flow, (fkey or "")+" "+str(raw_flow or "")):
+            if kw is None and fl is None: continue
+            cands.append(dict(sn=sn, kw=kw, bar=bar or bar_from_text(text), fl=fl, oil=oil,
+                              ff=ff, vsd=vsd, rv=rv, name=nm or slug(u), url=u, site=dm(u),
+                              price=price.get(u), status=status.get(u,"")))
     return cands
 
 def why(o, c):

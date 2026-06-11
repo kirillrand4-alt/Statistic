@@ -114,6 +114,19 @@ def bar_value(raw):
     vals = [v for v in vals if v]
     return max(vals) if vals else None
 
+def bar_flow_pairs(raw_bar, raw_flow, flow_key=""):
+    """Сдвоенные карточки конкурентов («8/10» давление + «1,665/1,435» произв.) = ПЕРЕЧЕНЬ
+    вариантов на одной странице -> по паре (8,1665),(10,1435), каждая матчит свой SKU.
+    «/» = варианты; ' - ' = непрерывный VSD-диапазон (берём max, как раньше). Иначе одна пара."""
+    sb=str(raw_bar or "")
+    if re.search(r'\d\s*/\s*\d', sb) and "-" not in sb and "–" not in sb:
+        bars=[b for b in (sane_bar(num(x)) for x in sb.split("/")) if b]
+        if len(bars)>=2:
+            sf=str(raw_flow or "")
+            flows=[flow_to_lmin(num(x), flow_key) for x in sf.split("/")] if re.search(r'\d\s*/\s*\d', sf) else []
+            return [(b, flows[i] if i<len(flows) else flow_value(sf, flow_key)) for i,b in enumerate(bars)]
+    return [(bar_value(raw_bar), flow_value(raw_flow, flow_key))]
+
 
 def agree(a, b):                 # пусто с любой стороны = не противоречит
     return a is None or b is None or a == b
