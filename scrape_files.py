@@ -19,6 +19,7 @@ SCRAPE_FILES = [
     U + "c6dd7a65-all_prices_20260610_063956.csv",
     U + "5beded8c-all_prices_20260610_074407.csv",   # дочистка Atlas: прогон по atlas_competitors_need_specs
     U + "e6ea00d5-all_prices_20260610_173444.csv",   # дочистка ВСЕ бренды (из rar; 20k строк, specs 99%)
+    U + "2a9dcda0-all_prices_20260611_005525.csv",   # ночной: остаток брендов + осушители/ресиверы/азот/станции
 ]
 
 # прогоны ОБНОВЛЁННОГО парсера (фиксы проверены с 06:01 10.06, см. PARSER_NOTES).
