@@ -124,13 +124,15 @@ def agree_num(a, b, tol=0.06):
 FLOW_TOL = 0.04   # допуск производительности (строго: GA11=1560 vs GA11+=1820 не путать)
 
 def match(o, cands):
-    """o, cands: dict с ключами sn,kw,bar,fl,oil,vsd,ff,rv. Возврат: список подходящих."""
+    """o, cands: dict с ключами sn,kw,bar,fl,oil,vsd,ff,rv. Возврат: список подходящих.
+    Масло НЕ сравниваем: серия+номер обязаны совпасть, а внутри одной модели масляность
+    не варьируется — конфликт значит враньё на сайте (compressortyt: XAS97 «безмасляный»).
+    Бар 3%: v-p-k пишет рабочее давление (6.9 при номинале 7), а 7 vs 7.5 (6.7%) режется."""
     out = []
     for c in cands:
         if o["sn"] != c["sn"]: continue
-        if not (agree_num(o["kw"], c["kw"]) and agree_num(o["bar"], c["bar"], 0.01)): continue
+        if not (agree_num(o["kw"], c["kw"]) and agree_num(o["bar"], c["bar"], 0.03)): continue
         if not agree_num(o.get("fl"), c.get("fl"), FLOW_TOL): continue   # производительность 4%
-        if not agree(o["oil"], c["oil"]): continue
         if o.get("vsd",0) != c.get("vsd",0): continue   # жёстко: из текста
         if o.get("ff",0)  != c.get("ff",0):  continue   # жёстко: из текста
         if not agree(o.get("rv"), c.get("rv")): continue
