@@ -32,6 +32,7 @@ _STOPW = {"компрессор","компрессора","компрессор�
     "block","receiver","ресивер","resiver","tm","ас","wc","ac"}
 def gen_series(text, brand):
     s=" "+str(text).lower().replace("_"," ")+" "
+    s=re.sub(r"\b(new|новый|новая|нов)\b"," ",s)         # маркетинг-слова не серия (COMARO MD NEW 55)
     s=re.sub(r"(?<=[a-zа-я])[\-.](?=[a-zа-я])","",s)     # k-max -> kmax, dr.sonic -> drsonic
     s=re.sub(r"(?<=[a-zа-я])\.(?=\d)"," ",s)             # genesis i.18,5 -> i 18,5 (десятичные 18.5 целы)
     s=s.replace("-"," ").replace("/"," ")
@@ -104,7 +105,7 @@ def load_comp_all():
             if not u: continue
             try:
                 v=float(str(r.get("price","")).replace(",",".").replace(" ",""))
-                if v>0: price[u]=v
+                if 100<=v<=50_000_000: price[u]=v   # санити: артикулы в поле цены (99 млрд) и копейки — мимо
             except: pass
             st=(r.get("series_status") or "").lower()
             if "снят" in st and "v-p-k.ru/catalog" not in u: status[u]="снято"
@@ -238,7 +239,7 @@ def build_brand(brand, title, ours, cands):
     for c in cands:
         if c["sn"] in our_sn: continue
         gk=(c["sn"], round(c["kw"]) if c["kw"] else None, round(c["bar"]) if c["bar"] else None,
-            c["ff"] or 0, c["vsd"] or 0)
+            c["ff"] or 0, c["vsd"] or 0, c["rv"])
         groups[gk][c["site"]].append(c)
     gap=[(gk,s) for gk,s in groups.items() if len(s)>=2]
     gap.sort(key=lambda t:-len(t[1]))

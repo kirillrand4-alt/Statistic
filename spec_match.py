@@ -57,6 +57,10 @@ def text_flags(text):
     if m: rv = num(m.group(1)) or 1
     m2 = re.search(r'[- (/](270|500|900)(?:\s*[лl])?\b', tl)   # «P/500», «(270 л)», «270l»
     if m2: rv = float(m2.group(1))
+    # 100/150/200/300 — частые объёмы, но конфликтуют с номерами моделей (GA 200): берём
+    # только «хвостовые» (конец имени / перед «л» / закрывающей скобкой): CAVF7.5-10GA-300, 3/200
+    m3 = re.search(r'[-(/](100|150|200|300)(?:\s*[лl])?(?=\s*$|\s*\))', tl.rstrip())
+    if m3 and rv is None: rv = float(m3.group(1))
     return ff, vsd, rv
 
 def receiver_filter(o_rv, cands):

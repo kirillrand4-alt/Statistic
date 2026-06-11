@@ -83,7 +83,7 @@ def load_comp():
             # (pnevmo-sklad «по запросу»: price пуст, old_price=395960 повторяется по серии).
             try:
                 v=float(str(r.get("price","")).replace(",",".").replace(" ",""))
-                if v>0: price[u]=v
+                if 100<=v<=50_000_000: price[u]=v   # санити: артикулы в поле цены (99 млрд) и копейки — мимо
             except: pass
             if "снят" in (r.get("series_status") or "").lower(): status[u]="снято"
     cands=[]
