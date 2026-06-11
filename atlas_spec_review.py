@@ -154,6 +154,7 @@ def build():
                 per_site[c["site"]][k]=c
         if not per_site: n0+=1; continue
         (ambig if any(len(v)>1 for v in per_site.values()) else clean).append((o, per_site))
+    matched={id(o) for o,_ in clean+ambig}   # сматчилось -> спека уже сошлась с конкурентом
     print(f"однозначно (на каждом сайте 1 карточка): {len(clean)} | "
           f"неоднозначные (где-то 2+ разных): {len(ambig)} | без матча: {n0}")
 
@@ -206,6 +207,90 @@ def build():
         widths=[5,46,12]+[13]*len(COMPETITORS)+[11,10,46,24]
         for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
         ws.freeze_panes="C2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
+
+    # ЛИСТ 3: GAP — модели Atlas, которых у нас НЕТ (серия+номер не в каталоге), ≥2 сайта
+    our_sn={o["sn"] for o in ours}
+    groups=defaultdict(lambda: defaultdict(list))    # gkey -> site -> [cards]
+    for c in cands:
+        if c["sn"] in our_sn: continue                # серия у нас есть -> не gap (см. «Проверить карточку»)
+        gk=(c["sn"], round(c["kw"]) if c["kw"] else None,
+            round(c["bar"]) if c["bar"] else None, c["ff"] or 0, c["vsd"] or 0)
+        groups[gk][c["site"]].append(c)
+    gap=[(gk,sites) for gk,sites in groups.items() if len(sites)>=2]
+    gap.sort(key=lambda t:-len(t[1]))
+    ws=wb.create_sheet("GAP — нет у нас")
+    HDR=["№","Модель (у конкурентов, нас нет)","Серия","кВт","бар","Сайтов"]+COMPETITORS+["min конк."]
+    ws.append(HDR)
+    for ci in range(1,len(HDR)+1):
+        cell=ws.cell(1,ci); cell.font=bold; cell.fill=hfill; cell.alignment=center
+    r=1
+    for gk,sites in gap:
+        r+=1; allc=[c for cs in sites.values() for c in cs]
+        nm=max(allc, key=lambda c:len(c["name"]))["name"]
+        ws.cell(r,1,r-1); ws.cell(r,2,nm)
+        ws.cell(r,3, f"{gk[0][0].upper()}{gk[0][1]:g}"); ws.cell(r,4,gk[1] or ""); ws.cell(r,5,gk[2] or "")
+        ws.cell(r,6,len(sites))
+        prices=[]
+        for ci,site in enumerate(COMPETITORS):
+            cell=ws.cell(r,7+ci); cs=sites.get(site)
+            if not cs: cell.fill=nomatch; continue
+            priced=[c for c in cs if c["price"] and c["status"]!="снято"]
+            show=min(priced,key=lambda c:c["price"]) if priced else cs[0]
+            if show["price"]:
+                cell.value=show["price"]; cell.number_format="# ##0"; cell.hyperlink=show["url"]
+                cell.font=strike if show["status"]=="снято" else blue
+                if show["status"]!="снято": prices.append(show["price"])
+            else:
+                cell.value="снято" if show["status"]=="снято" else "По запросу"
+                cell.hyperlink=show["url"]; cell.font=strike if show["status"]=="снято" else blue
+            if len(cs)>1: cell.fill=warn
+        if prices: ws.cell(r,13,min(prices)).number_format="# ##0"
+    widths=[5,52,9,7,7,8]+[13]*len(COMPETITORS)+[11]
+    for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
+    ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
+    print(f"GAP-моделей (нет у нас, ≥2 сайта): {len(gap)}")
+
+    # ЛИСТ 4: Проверить карточку — у конкурентов ТА ЖЕ модель (серия+номер + совпали ДРУГИЕ
+    # поля + FF/VSD), но по одному полю ≥2 сайта согласны между собой, а наше значение иное.
+    # Пиннинг других полей обязателен: у GA22 куча вариантов по давлению/потоку.
+    FIELDS=[("кВт","kw",0.06),("бар","bar",0.10),("произв","fl",0.04)]
+    def find_issue(o, same):
+        for label,key,tol in FIELDS:
+            ov=o.get(key)
+            if not ov: continue
+            others=[(k2,t2) for (l2,k2,t2) in FIELDS if k2!=key]
+            variant=[c for c in same if c.get(key)
+                     and (c["ff"] or 0)==(o.get("ff") or 0) and (c["vsd"] or 0)==(o.get("vsd") or 0)
+                     and all(o.get(k2) and c.get(k2) and abs(o[k2]-c[k2])<=t2*max(o[k2],c[k2])
+                             for k2,t2 in others)]
+            for c1 in variant:
+                v1=c1[key]; doms={c2["site"] for c2 in variant if abs(c2[key]-v1)<=tol*max(c2[key],v1)}
+                if len(doms)>=2 and abs(ov-v1)>tol*max(ov,v1):
+                    src=next(c2 for c2 in variant if abs(c2[key]-v1)<=tol*max(c2[key],v1))
+                    return (f"{label}: у нас {ov:g}, у конкур. {v1:g} ({len(doms)} сайт.)", src)
+        return None
+    orange=Font(color="C55A11", underline="single")
+    ws=wb.create_sheet("Проверить карточку")
+    HDR=["№","Наш товар","Ваша цена","Что не так (спека)","Подтверждение (конкурент)"]
+    ws.append(HDR)
+    for ci in range(1,len(HDR)+1):
+        cell=ws.cell(1,ci); cell.font=bold; cell.fill=hfill; cell.alignment=center
+    r=1
+    for o in sorted(ours, key=lambda o:o["name"]):
+        if id(o) in matched: continue          # сматчился -> спека верна, не подозреваем
+        issue=find_issue(o, by_sn.get(o["sn"], []))
+        if not issue: continue
+        r+=1
+        ws.cell(r,1,r-1); ws.cell(r,2,o["name"])
+        c3=ws.cell(r,3, o["price"] if o["price"] else "нет цены")
+        if o["price"]: c3.number_format="# ##0"
+        c3.hyperlink=o["url"]; c3.font=blue
+        ws.cell(r,4, issue[0]).font=orange
+        lk=ws.cell(r,5, f"[{issue[1]['site']}] {issue[1]['name'][:50]}"); lk.hyperlink=issue[1]["url"]; lk.font=blue
+    widths=[5,46,12,40,52]
+    for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
+    ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
+    print(f"Проверить карточку (наша спека спорит с ≥2 сайтами): {r-1}")
     wb.save(OUT); print(f"-> {OUT}")
 
 if __name__=="__main__":
