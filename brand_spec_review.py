@@ -76,14 +76,30 @@ def ser_of(text, brand):
 
 _DTAIL=re.compile(r'[\d\)лl]\s*[-–]?\s*([дd])\s*(?:\(.*)?$', re.I)   # «270L D», «500Д», «10Д (с осуш.)»
 _VSTAIL=re.compile(r'(?:\d|\))\s*(вс|bc)\s*$', re.I)                  # «ВК100Р-10ВС»
+_OTAIL=re.compile(r'/[oо][w2]?\s*$', re.I)                            # Zammer «…-500/O», /OW, /O2 = осушитель
 def suffix_flags(name, brand, ff, rv):
     """Хвостовые маркеры НЕ-Atlas брендов (у Atlas 'Dd'=дизель, не трогаем):
     Д/D после числа/л = осушитель; ВС = воздухосборник (ресивер упомянут)."""
     if brand=="atlas": return ff, rv
     nm=str(name).strip()
-    if ff is None and (_DTAIL.search(nm) or "с осушителем" in nm.lower()): ff=1
+    if ff is None and (_DTAIL.search(nm) or _OTAIL.search(nm) or "с осушителем" in nm.lower()): ff=1
     if rv is None and _VSTAIL.search(nm): rv=1
     return ff, rv
+
+# --- Berg: суффикс-схема заводских кодов ВК (ПОДТВЕРЖДЕНА пропами нашего каталога):
+# Р=ременный привод, Е=частотник(VSD), О=осушитель; комбинации РЕ/РО/РЕО. Буквы клеятся
+# к числу (ВК-18.5РО-500) или идут одиночными токенами сразу после него (ВК-11 Е 10).
+_BERG_SUF=re.compile(r'(?:вк|vk)[- ]?\d+(?:[.,]\d+)?([а-яa-z]{0,3})', re.I)
+def berg_suffix(text):
+    """set ⊆ {r,e,o} для ВК-имён Berg; None, если имя не по ВК-схеме."""
+    t=str(text).lower().replace("_"," ")
+    m=_BERG_SUF.search(t)
+    if not m: return None
+    suf=set(m.group(1).translate(_CYR2LAT))
+    for tok in re.split(r'[-\s/(),]+', t[m.end():]):   # одиночные буквы до первой цифры
+        if len(tok)==1 and tok.isalpha(): suf.add(tok.translate(_CYR2LAT))
+        elif tok: break
+    return suf & {"r","e","o"}
 
 def oil_of(v):
     s=str(v).strip().lower()
@@ -126,6 +142,9 @@ def load_ours_all():
         nm,url,p = price.get(code.lower(), (name, f"https://prokompressor.ru/catalog/{code}/", None))
         wev=num(r.get("IP_PROP22555")); drv=(r.get("IP_PROP22601") or "").strip().lower() or None
         if drv: drv="ремен" if "ремен" in drv else ("прямой" if "прям" in drv else None)
+        if str(r.get("IP_PROP22565","")).strip().lower()=="да": ff=1   # проп «осушитель» (направл. флаг — безопасно)
+        if b=="berg" and str(r.get("IP_PROP22586","")).strip().lower()=="да":
+            vsd=1   # проп «частотник»: vsd строгий, глобально включать рискованно — пока Berg (Е-схема обоюдна)
         ours[b].append(dict(sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
                             bar=bar_value(r.get("IP_PROP22573")) or bar_from_text(name+" "+code),
                             fl=fl, oil=oil_of(r.get("IP_PROP22583")), ff=ff, vsd=vsd, rv=rv,
@@ -171,6 +190,10 @@ def load_comp_all():
             if oil is None and "безмасл" in kl: oil=oil_of(v)
         ff,vsd,rv = text_flags(nm) if nm else text_flags(slug(u))
         ff,rv = suffix_flags(nm or slug(u), b, ff, rv)
+        bsuf = berg_suffix(text) if b=="berg" else None
+        if bsuf is not None:           # заводская схема ВК: суффикс = вариант (код модели)
+            if "e" in bsuf: vsd=1
+            if "o" in bsuf: ff=1
         we=dr=sku2=None
         for k,v in d.items():
             kl=k.lower()
@@ -181,6 +204,10 @@ def load_comp_all():
                 vl=str(v).lower()
                 dr="ремен" if "ремен" in vl else ("прямой" if "прям" in vl else None)
             if sku2 is None and "артикул" in kl: sku2=str(v).strip()
+            if ff is None and "осушит" in kl and str(v).strip().lower() in ("да","есть","yes"):
+                ff=1   # спек-ключ «С осушителем: да» (Zammer /O и др.)
+        if bsuf is not None:   # ВК-схема Berg: Р в коде = ременный, отсутствие = прямой
+            dr = "ремен" if "r" in bsuf else "прямой"
         srv=None
         for k,v in d.items():
             if "ресивер" in k.lower():

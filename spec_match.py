@@ -203,6 +203,9 @@ def match(o, cands):
         if not (agree_num(o["kw"], c["kw"]) and agree_num(o["bar"], c["bar"], 0.03)): continue
         if not agree_num(o.get("fl"), c.get("fl"), FLOW_TOL): continue   # производительность 4%
         if o.get("vsd",0) != c.get("vsd",0): continue   # жёстко: из текста
+        # привод: только если ИЗВЕСТЕН с обеих сторон (наш — проп Битрикса, их — спека/схема
+        # имени Berg). Молчание совместимо. Ловит ВК-18.5Р (ремен) vs ВК-18.5 (прямой).
+        if o.get("dr") and c.get("dr") and o["dr"] != c["dr"]: continue
         if (o.get("ff") or 0)==1 and (c.get("ff") or 0)==1: pass        # оба размечены FF — ок
         elif (o.get("ff") or 0)!=(c.get("ff") or 0) and (c.get("ff") or 0)==1: continue
         # наш ff=1 vs их None — решает ff_filter (направленно по серии)
