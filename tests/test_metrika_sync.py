@@ -61,6 +61,23 @@ def test_visit_extra_and_upsert(db):
     assert db.execute(select(Visit.device).where(Visit.visit_id == 100)).scalar_one() == "mobile"
 
 
+def test_import_handles_huge_ids(db):
+    """A Metrica id past the signed-64-bit column limit is skipped (not a crash),
+    while the max valid id is stored EXACTLY (parsing must not round via float)."""
+    sid = _mksite(db, "big.ru")
+    maxok = 2**63 - 1          # fits exactly — int(float(id)) would round this up
+    huge = 2**63 + 100         # past the limit — row skipped, no OverflowError
+    n = V.import_tsv(db, sid, _lines(
+        VHDR,
+        f"{maxok}\t2026-06-01\tdesktop\t1\tg",
+        f"{huge}\t2026-06-01\tmobile\t2\ty",
+    ))
+    assert n == 1
+    ids = {v for (v,) in db.execute(
+        select(Visit.visit_id).where(Visit.site_id == sid)).all()}
+    assert ids == {maxok}
+
+
 def test_resolve_targets(db, monkeypatch):
     a, b, c = _mksite(db, "a.ru"), _mksite(db, "b.ru"), _mksite(db, "c.ru")
     # a.ru learns its counter from an existing visit; b/c from the counter list

@@ -104,10 +104,22 @@ HIT_FIELDS = [
 
 
 def _toint(v):
+    """Parse an integer field. Try an exact int first (Metrica ids are 18-19
+    digits — going through float would lose their low bits); fall back to float
+    for values like "3.0", and to 0 for blanks/garbage."""
     try:
-        return int(float(v))
+        return int(v)
     except (TypeError, ValueError):
-        return 0
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return 0
+
+
+# Signed 64-bit range — the limit of a BIGINT / SQLite INTEGER column. A Metrica
+# id past this can't be stored, so such a row is skipped rather than crashing the
+# whole batch with "Python int too large to convert to SQLite INTEGER".
+_INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1
 
 
 def _todate(v):
@@ -176,7 +188,7 @@ def _import_rows(db: Session, site_id: int, lines, *, model, field_map: dict,
         template[c] = 0
     conflict = ["site_id", key_col]
 
-    written, payload = 0, []
+    written, payload, oob = 0, [], 0
     for row in reader:
         rec = dict(template)
         rec["site_id"] = site_id
@@ -193,6 +205,12 @@ def _import_rows(db: Session, site_id: int, lines, *, model, field_map: dict,
             continue
         for c in int_cols:
             rec[c] = _toint(rec.get(c))
+        if not (_INT64_MIN <= rec[key_col] <= _INT64_MAX):
+            oob += 1  # id doesn't fit the column — skip just this row
+            continue
+        for c in int_cols:  # clamp non-key ints so a stray huge value can't crash
+            if c != key_col and not (_INT64_MIN <= rec[c] <= _INT64_MAX):
+                rec[c] = _INT64_MAX if rec[c] > 0 else _INT64_MIN
         if "date" in template:
             rec["date"] = _todate(rec.get("date"))
         for c in all_cols:
@@ -206,6 +224,8 @@ def _import_rows(db: Session, site_id: int, lines, *, model, field_map: dict,
     if payload:
         written += _insert_rows(db, model, payload, conflict, update)
     db.commit()
+    if oob:
+        print(f"   пропущено строк с id вне диапазона BIGINT: {oob}", flush=True)
     return written
 
 

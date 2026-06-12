@@ -501,6 +501,7 @@ def sync_rotate(targets, d1: date, d2: date, chunk: int = 10, parallel: int | No
                         n = _collect_request(db, it["base"], req_id, it["site_id"],
                                              it["source"], force)
                     except Exception as exc:  # noqa: BLE001 — 429/network: retry next poll
+                        db.rollback()  # drop the half-imported batch; reuse the session
                         if age_min >= timeout_min:
                             _cancel_logrequest(it["base"], req_id)
                             del inflight[req_id]
