@@ -118,7 +118,8 @@ class FakeHTTP:
     def post(self, url, headers=None, params=None, timeout=None):
         if url.endswith("/logrequests"):
             self.nid += 1
-            self.reqs[self.nid] = {"source": params["source"], "date1": params["date1"]}
+            self.reqs[self.nid] = {"source": params["source"], "date1": params["date1"],
+                                   "date2": params["date2"]}
             self.created.append((self.nid, _counter(url), params["source"]))
             self.max_open = max(self.max_open, len(self.reqs) - len(self.cleaned) - len(self.cancelled))
             return _Resp({"log_request": {"request_id": self.nid}})
@@ -157,6 +158,58 @@ def test_sync_rotate_happy(db, monkeypatch):
     try:
         assert s.execute(select(func.count()).select_from(Visit)).scalar_one() == 6
         assert s.execute(select(func.count()).select_from(Hit)).scalar_one() == 6
+    finally:
+        s.close()
+
+
+def test_sync_rotate_newest_first(db, monkeypatch):
+    """Windows are anchored to the END of the period and go newest -> oldest;
+    parallel defaults to one in-flight request per domain."""
+    sid = _mksite(db, "n.ru")
+    fake = FakeHTTP(status="processed")
+    monkeypatch.setattr(M, "httpx", fake)
+    monkeypatch.setattr(M, "_token", lambda: "t")
+
+    M.sync_rotate([(sid, 777, "n.ru")], date(2026, 6, 1), date(2026, 6, 11), chunk=10,
+                  sources=("visits",), force=True, timeout_min=999, poll_sec=0)
+
+    windows = [(fake.reqs[r]["date1"], fake.reqs[r]["date2"]) for r, _, _ in fake.created]
+    assert windows == [("2026-06-02", "2026-06-11"), ("2026-06-01", "2026-06-01")]
+
+
+def test_sync_rotate_survives_rate_limit(db, monkeypatch):
+    """429 on create or a failure mid-download doesn't abort the run — the
+    window is retried on the next poll and still gets imported."""
+
+    class Flaky(FakeHTTP):
+        def __init__(self):
+            super().__init__("processed")
+            self.fail_create = self.fail_stream = True
+
+        def post(self, url, **kw):
+            if url.endswith("/logrequests") and self.fail_create:
+                self.fail_create = False
+                return _Resp({}, code=429)
+            return super().post(url, **kw)
+
+        def stream(self, *a, **kw):
+            if self.fail_stream:
+                self.fail_stream = False
+                raise RuntimeError("simulated 429 mid-download")
+            return super().stream(*a, **kw)
+
+    sid = _mksite(db, "r.ru")
+    fake = Flaky()
+    monkeypatch.setattr(M, "httpx", fake)
+    monkeypatch.setattr(M, "_token", lambda: "t")
+
+    M.sync_rotate([(sid, 888, "r.ru")], date(2026, 6, 1), date(2026, 6, 3), chunk=3,
+                  sources=("visits",), force=True, timeout_min=999, poll_sec=0)
+
+    assert len(fake.created) == 1 and len(fake.cleaned) == 1 and not fake.cancelled
+    s = SessionLocal()
+    try:
+        assert s.execute(select(func.count()).select_from(Visit)).scalar_one() == 1
     finally:
         s.close()
 

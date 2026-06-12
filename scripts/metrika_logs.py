@@ -4,12 +4,16 @@ List counters (id + domain):
     python scripts/metrika_logs.py --list
 
 Rotated multi-domain sync (the main mode): downloads visits AND hits for every
-site that has a counter, keeping --parallel requests in flight at once, each on
-a different random domain, each a --chunk-day window. A window still not ready
-after --timeout-min minutes is cancelled and skipped (it stays a gap; re-run
-with --chunk 1 to backfill). Counter per domain is auto-detected (from existing
-visits, else by matching the domain in --list); override with --targets.
-    python scripts/metrika_logs.py --sync-all --force --from 2025-06-01 --to 2026-06-10
+site that has a counter. One Logs API request per domain is kept in flight — by
+default for ALL domains at once (cap with --parallel) — each a --chunk-day
+window (default 10), windows go newest -> oldest from --to (default yesterday).
+Readiness is polled every --poll-sec (default 180 s). Transient API errors
+(429 rate limit, 5xx, network) are retried — they don't abort the run. A window
+still not ready after --timeout-min minutes is cancelled and skipped (it stays
+a gap; re-run WITHOUT --force to download only what's missing). Counter per
+domain is auto-detected (from existing visits, else by matching the domain in
+--list); override with --targets.
+    python scripts/metrika_logs.py --sync-all --force --from 2025-06-01
     python scripts/metrika_logs.py --sync-all                 # only-missing, last 365d
     python scripts/metrika_logs.py --sync-all --no-hits --parallel 3 --chunk 3
 
@@ -96,7 +100,14 @@ def list_counters() -> None:
         print(f"  id={c.get('id'):<10} {str(c.get('site')):<40} {c.get('name')}")
 
 
-def _chunks(d1: date, d2: date, days: int):
+def _chunks(d1: date, d2: date, days: int, newest_first: bool = False):
+    if newest_first:  # windows anchored to d2, yielded newest -> oldest
+        cur = d2
+        while cur >= d1:
+            start = max(cur - timedelta(days=days - 1), d1)
+            yield start, cur
+            cur = start - timedelta(days=1)
+        return
     cur = d1
     while cur <= d2:
         end = min(cur + timedelta(days=days - 1), d2)
@@ -182,19 +193,30 @@ def coverage(site_id: int) -> None:
         db.close()
 
 
-def _create_logrequest(counter: int, source: str, c1: date, c2: date) -> int | None:
-    """Create a Logs API request; return its id, or None on failure (prints why)."""
-    r = httpx.post(
-        f"{API}/management/v1/counter/{counter}/logrequests",
-        headers=_headers(),
-        params={"date1": c1.isoformat(), "date2": c2.isoformat(),
-                "fields": _fields_for(source), "source": source},
-        timeout=60,
-    )
-    if r.status_code not in (200, 201):
-        print(f"   create FAILED {r.status_code}: {r.text[:200]}")
-        return None
-    return r.json()["log_request"]["request_id"]
+def _create_logrequest(counter: int, source: str, c1: date, c2: date):
+    """Create a Logs API request.
+
+    Returns the request id, the string ``"retry"`` on a transient failure
+    (429 rate limit / 5xx / network error) or ``None`` on a permanent one.
+    """
+    try:
+        r = httpx.post(
+            f"{API}/management/v1/counter/{counter}/logrequests",
+            headers=_headers(),
+            params={"date1": c1.isoformat(), "date2": c2.isoformat(),
+                    "fields": _fields_for(source), "source": source},
+            timeout=60,
+        )
+    except Exception as exc:  # noqa: BLE001 — network hiccup, not fatal
+        print(f"   create error ({exc.__class__.__name__}) — повторю позже")
+        return "retry"
+    if r.status_code in (200, 201):
+        return r.json()["log_request"]["request_id"]
+    if r.status_code == 429 or r.status_code >= 500:
+        print(f"   create {r.status_code} (лимит/сбой API) — повторю позже")
+        return "retry"
+    print(f"   create FAILED {r.status_code}: {r.text[:200]}")
+    return None
 
 
 def _cancel_logrequest(base: str, req_id: int) -> None:
@@ -242,7 +264,12 @@ def download(counter: int, site_id: int, d1: date, d2: date, chunk: int, source:
                 continue
             print(f"[{c1}..{c2}] {source}: создаю запрос...", flush=True)
             req_id = _create_logrequest(counter, source, c1, c2)
-            if req_id is None:
+            for _ in range(30):  # rate limited — wait a minute and retry the window
+                if req_id != "retry":
+                    break
+                time.sleep(60)
+                req_id = _create_logrequest(counter, source, c1, c2)
+            if not isinstance(req_id, int):
                 continue
             status = "created"
             for _ in range(120):  # up to ~40 min
@@ -311,20 +338,24 @@ def resolve_targets(explicit: str | None = None, only_site: int | None = None):
         db.close()
 
 
-def sync_rotate(targets, d1: date, d2: date, chunk: int = 3, parallel: int = 3,
+def sync_rotate(targets, d1: date, d2: date, chunk: int = 10, parallel: int | None = None,
                 sources=("visits", "hits"), force: bool = True,
-                timeout_min: int = 40, poll_sec: int = 20) -> None:
-    """Download missing windows across many domains, ``parallel`` at a time.
+                timeout_min: int = 40, poll_sec: int = 180) -> None:
+    """Download missing windows across many domains, one request per domain.
 
-    Keeps up to ``parallel`` Logs API requests in flight, each on a *different*
-    randomly chosen domain, each a ``chunk``-day window. When a request is ready
-    it's downloaded, imported and cleaned, and that domain's next window starts.
-    A request still not ready after ``timeout_min`` minutes is cancelled and its
-    window skipped (it stays a gap — re-run later with --chunk 1 to backfill).
+    Keeps one Logs API request in flight per domain — by default for *every*
+    domain at once (cap with ``parallel``) — each a ``chunk``-day window, going
+    newest -> oldest from ``d2``. Readiness is polled every ``poll_sec`` seconds;
+    when a request is ready it's downloaded, imported and cleaned, and that
+    domain's next (older) window starts. Transient API errors (429/5xx/network)
+    are retried and never abort the run. A request still not ready after
+    ``timeout_min`` minutes is cancelled and its window skipped (it stays a gap —
+    re-run later without --force to download only what's missing).
     """
     init_db()
     db = SessionLocal()
-    chunks = list(_chunks(d1, d2, chunk))
+    parallel = parallel or len(targets)
+    chunks = list(_chunks(d1, d2, chunk, newest_first=True))
     queues: dict[str, deque] = {}
     meta: dict[str, tuple[int, int]] = {}  # label -> (site_id, counter)
     skipped = []
@@ -345,7 +376,8 @@ def sync_rotate(targets, d1: date, d2: date, chunk: int = 3, parallel: int = 3,
             return
         total_items = sum(len(q) for q in queues.values())
         print(f"К закачке: {total_items} запросов по {len(queues)} доменам · "
-              f"{parallel} потока · отрезок {chunk} дн. · период {d1}..{d2} · "
+              f"параллельно {parallel} · окно {chunk} дн. (от новых к старым) · "
+              f"период {d1}..{d2} · опрос раз в {poll_sec} с. · "
               f"таймаут {timeout_min} мин.", flush=True)
 
         inflight: dict[int, dict] = {}
@@ -362,8 +394,13 @@ def sync_rotate(targets, d1: date, d2: date, chunk: int = 3, parallel: int = 3,
                     del queues[lbl]
                 base = f"{API}/management/v1/counter/{counter}/logrequest"
                 req_id = _create_logrequest(counter, source, c1, c2)
+                if req_id == "retry":
+                    # rate limited / API down — put the window back at the FRONT
+                    # (order kept, no attempt burned) and pause creating
+                    queues.setdefault(lbl, deque()).appendleft((source, c1, c2, attempts))
+                    break
                 if req_id is None:
-                    if attempts < 2:  # transient (e.g. rate limit) — requeue at the back
+                    if attempts < 2:  # bad response — retry the window a bit later
                         queues.setdefault(lbl, deque()).append((source, c1, c2, attempts + 1))
                     else:
                         skipped.append((lbl, source, c1, c2, "create failed"))
@@ -373,6 +410,7 @@ def sync_rotate(targets, d1: date, d2: date, chunk: int = 3, parallel: int = 3,
                 print(f"[{lbl}] {source} {c1}..{c2}: запрос {req_id} "
                       f"(в работе {len(inflight)}/{parallel})", flush=True)
             if not inflight:
+                time.sleep(poll_sec)  # nothing in flight (e.g. rate limited) — wait
                 continue
             time.sleep(poll_sec)
             for req_id, it in list(inflight.items()):
@@ -383,7 +421,22 @@ def sync_rotate(targets, d1: date, d2: date, chunk: int = 3, parallel: int = 3,
                     status = None
                 age_min = (time.monotonic() - it["started"]) / 60.0
                 if status in ("processed", "processed_with_errors"):
-                    n = _collect_request(db, it["base"], req_id, it["site_id"], it["source"], force)
+                    try:
+                        n = _collect_request(db, it["base"], req_id, it["site_id"],
+                                             it["source"], force)
+                    except Exception as exc:  # noqa: BLE001 — 429/network: retry next poll
+                        if age_min >= timeout_min:
+                            _cancel_logrequest(it["base"], req_id)
+                            del inflight[req_id]
+                            skipped.append((it["label"], it["source"], it["c1"], it["c2"],
+                                            "download failed"))
+                            print(f"[{it['label']}] {it['source']} {it['c1']}..{it['c2']}: "
+                                  f"скачивание так и не удалось — пропускаю окно")
+                        else:
+                            print(f"[{it['label']}] {it['source']} {it['c1']}..{it['c2']}: "
+                                  f"скачивание не удалось ({exc.__class__.__name__}), "
+                                  f"повторю через {poll_sec} с.", flush=True)
+                        continue
                     imported += n
                     done += 1
                     del inflight[req_id]
@@ -435,8 +488,11 @@ def main() -> None:
     ap.add_argument("--sync-all", dest="sync_all", action="store_true",
                     help="качать по всем доменам, ротируя запросы в N потоков")
     ap.add_argument("--targets", help='явная карта "site:counter,site:counter" (иначе авто)')
-    ap.add_argument("--parallel", type=int, default=3, help="одновременных запросов (доменов)")
+    ap.add_argument("--parallel", type=int, default=None,
+                    help="одновременных запросов (по умолчанию — все домены сразу)")
     ap.add_argument("--no-hits", dest="no_hits", action="store_true", help="только визиты, без хитов")
+    ap.add_argument("--poll-sec", dest="poll_sec", type=int, default=180,
+                    help="как часто проверять готовность, сек. (по умолчанию 180 = 3 мин)")
     ap.add_argument("--timeout-min", dest="timeout_min", type=int, default=40)
     ap.add_argument("--counter", type=int)
     ap.add_argument("--site", type=int)
@@ -462,7 +518,7 @@ def main() -> None:
 
     if a.sync_all:
         sources = ("visits",) if a.no_hits else ("visits", "hits")
-        chunk = a.chunk or 3
+        chunk = a.chunk or 10
         targets, missed = resolve_targets(a.targets, a.site)
         if missed:
             print(f"Без счётчика (пропускаю): {', '.join(missed)}")
@@ -474,7 +530,8 @@ def main() -> None:
         d2 = date.fromisoformat(a.d2) if a.d2 else date.today() - timedelta(days=1)
         d1 = date.fromisoformat(a.d1) if a.d1 else d2 - timedelta(days=365)
         sync_rotate(targets, d1, d2, chunk=chunk, parallel=a.parallel,
-                    sources=sources, force=a.force, timeout_min=a.timeout_min)
+                    sources=sources, force=a.force, timeout_min=a.timeout_min,
+                    poll_sec=a.poll_sec)
         return
 
     if not (a.counter and a.site):

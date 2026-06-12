@@ -8,9 +8,12 @@
 #   bash deploy/metrika_sync.sh log                     # tail -f the log
 #   bash deploy/metrika_sync.sh stop                    # stop it
 #
-# "start" with no extra args runs:  metrika_logs.py --sync-all --force
-# (visits + hits, last 365 days). Widen the period by passing flags through:
-#   bash deploy/metrika_sync.sh start --force --from 2025-06-01 --to 2026-06-10
+# "start" with no extra args runs:  metrika_logs.py --sync-all
+# (visits + hits, last 365 days, ONLY the windows still missing — safe to re-run
+# after a crash, it picks up where it left off). Pass flags through to widen the
+# period or redo everything:
+#   bash deploy/metrika_sync.sh start --from 2025-06-01            # докачать дыры
+#   bash deploy/metrika_sync.sh start --force --from 2025-06-01    # всё заново
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -32,8 +35,7 @@ case "$cmd" in
       exit 0
     fi
     args=("$@")
-    [ ${#args[@]} -eq 0 ] && args=(--force)
-    echo "Запускаю: $PY $SCRIPT --sync-all ${args[*]}"
+    echo "Запускаю: $PY $SCRIPT --sync-all ${args[*]:-}"
     # nohup + background + the launcher shell exits => process is reparented to
     # init and survives the console closing. Output goes to $LOG (not a tty).
     nohup "$PY" "$SCRIPT" --sync-all "${args[@]}" >"$LOG" 2>&1 &
