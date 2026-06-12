@@ -13,10 +13,11 @@ both carrying the counter and having a recognisable title.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import date, timedelta
 
 from sqlalchemy import distinct, func, or_, select
 
-from app.db.models import Hit
+from app.db.models import Hit, Site
 from app.providers.base import DateRange
 from app.utils import domain_of
 
@@ -62,6 +63,55 @@ def _ids(site_ids) -> list[int]:
     if isinstance(site_ids, Iterable) and not isinstance(site_ids, (str, bytes)):
         return list(site_ids)
     return [site_ids]
+
+
+def not_found_overview(db, dr: DateRange, markers_raw: str | None = None, *,
+                       yesterday: date, prev_day: date) -> list[dict]:
+    """One row per DOMAIN that has any 404 in the window: daily series over ``dr``
+    (for a chart), plus yesterday's count and the % change vs the day before.
+
+    Domains are bare hosts, so a domain's same-host properties are summed. Sorted
+    by yesterday's count (then period total), so the busiest 404s float up.
+    """
+    markers = parse_markers(markers_raw)
+    lo, hi = min(dr.start, prev_day), max(dr.end, yesterday)
+    where = [Hit.date >= lo, Hit.date <= hi, Hit.is_page_view == 1,
+             Hit.title.isnot(None), _title_filter(markers)]
+    rows = db.execute(
+        select(Hit.site_id, Hit.date, func.count()).where(*where)
+        .group_by(Hit.site_id, Hit.date)
+    ).all()
+    if not rows:
+        return []
+
+    dom_of, site_for_dom = {}, {}  # site_id -> domain; domain -> representative site
+    for sid, uri in db.execute(select(Site.id, Site.property_uri)).all():
+        d = domain_of(uri)
+        dom_of[sid] = d
+        if d and (d not in site_for_dom or sid < site_for_dom[d]):
+            site_for_dom[d] = sid
+
+    per: dict[str, dict[date, int]] = {}
+    for sid, d, c in rows:
+        dom = dom_of.get(sid)
+        if dom and d is not None:
+            per.setdefault(dom, {})[d] = per.setdefault(dom, {}).get(d, 0) + int(c)
+
+    out = []
+    span = (dr.end - dr.start).days
+    for dom, daymap in per.items():
+        daily = [{"date": (dr.start + timedelta(days=i)).isoformat(),
+                  "count": daymap.get(dr.start + timedelta(days=i), 0)}
+                 for i in range(span + 1)]
+        y, p = daymap.get(yesterday, 0), daymap.get(prev_day, 0)
+        out.append({
+            "domain": dom, "site_id": site_for_dom.get(dom), "daily": daily,
+            "total": sum(d2["count"] for d2 in daily),
+            "yesterday": y, "prev": p,
+            "delta_pct": ((y - p) / p * 100.0) if p else None,
+        })
+    out.sort(key=lambda r: (r["yesterday"], r["total"]), reverse=True)
+    return out
 
 
 def not_found_stats(db, site_ids, dr: DateRange, markers_raw: str | None = None,

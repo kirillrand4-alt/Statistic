@@ -7,6 +7,7 @@
 <form method="get" action="{{ base_path }}/errors" class="grid">
   <label>Сайт
     <select name="site_id" onchange="this.form.submit()">
+      <option value="" {% if not site %}selected{% endif %}>— Все домены (обзор) —</option>
       {% for s in sites %}<option value="{{ s.id }}" {% if site and s.id==site.id %}selected{% endif %}>{{ s.source.code|srclabel }} · {{ s.display_name or s.property_uri }}</option>{% endfor %}
     </select>
   </label>
@@ -20,14 +21,50 @@
 такой просмотр). Обновляется автоматически по мере загрузки данных. Канал
 (реклама / поиск / прямые) берём из источника перехода Метрики.</small>
 
-{% if stats is none %}
-  <article><p>Выберите сайт.</p></article>
-{% elif not stats.total %}
-  <article><p>За период страниц с маркерами 404 не найдено. Проверьте период,
-  список маркеров или то, что на странице 404 стоит счётчик Метрики и качаются
-  хиты этого домена.</p></article>
-{% else %}
+{# ===================== ОБЗОР: график на каждый домен ===================== #}
+{% if site is none %}
+  {% if not overview %}
+    <article><p>Ни по одному домену за период страниц с маркерами 404 не найдено.
+    Проверьте период/маркеры и что качаются хиты (страница 404 должна нести счётчик Метрики).</p></article>
+  {% else %}
+  <p><small>По каждому домену с 404 — динамика за период; справа число за вчера
+  ({{ yesterday }}) и изменение к позавчера ({{ prev_day }}). Рост 404 — <span style="color:#d93526">красным</span>.
+  Клик по домену — подробный разбор.</small></p>
+  {% for d in overview %}
+  <article>
+    <div style="display:flex; align-items:center; gap:1.2rem; flex-wrap:wrap;">
+      <div style="flex:1 1 60%; min-width:280px;">
+        <header style="margin-bottom:.2rem;">
+          <strong><a href="{{ base_path }}/errors?site_id={{ d.site_id }}&start={{ range.start }}&end={{ range.end }}">{{ d.domain }}</a></strong>
+          <small>· за период: {{ d.total|numfmt }}</small>
+        </header>
+        <canvas id="ov404-{{ loop.index0 }}" height="70"></canvas>
+      </div>
+      <div style="flex:0 0 auto; text-align:right; min-width:9rem;">
+        <h3 style="margin:0; line-height:1;">{{ d.yesterday|numfmt }}</h3>
+        <small>за вчера</small>
+        <p style="margin:.3rem 0 0;">
+          {% if d.delta_pct is not none %}
+            {% if d.delta_pct > 0 %}<strong style="color:#d93526">▲ +{{ d.delta_pct|round(0)|int }}%</strong>
+            {% elif d.delta_pct < 0 %}<strong style="color:#208a3c">▼ {{ d.delta_pct|round(0)|int }}%</strong>
+            {% else %}<strong>0%</strong>{% endif %}
+          {% elif d.yesterday %}<strong style="color:#d93526">▲ новые</strong>
+          {% else %}<strong>—</strong>{% endif %}
+        </p>
+        <small>к позавчера ({{ d.prev|numfmt }})</small>
+      </div>
+    </div>
+  </article>
+  {% endfor %}
+  {% endif %}
 
+{# ===================== ДЕТАЛЬ: один домен ===================== #}
+{% elif stats is none or not stats.total %}
+  <article><p>За период по «{{ domain }}» страниц с маркерами 404 не найдено.
+  Проверьте период, список маркеров или что на странице 404 стоит счётчик Метрики
+  и качаются хиты этого домена. <a href="{{ base_path }}/errors">← ко всем доменам</a></p></article>
+{% else %}
+<p><a href="{{ base_path }}/errors">← ко всем доменам</a></p>
 <div class="grid">
   <article><hgroup><h3>{{ stats.total|numfmt }}</h3><p>Открытий 404</p></hgroup></article>
   <article><hgroup><h3>{{ stats.unique_urls|numfmt }}</h3><p>Несуществующих URL</p></hgroup></article>
@@ -95,7 +132,25 @@
 {% endblock %}
 
 {% block scripts %}
-{% if stats and stats.daily %}
+{% if site is none and overview %}
+<script>
+  const ov = {{ overview|tojson }};
+  ov.forEach((d, i) => {
+    const el = document.getElementById('ov404-' + i);
+    if (!el) return;
+    new Chart(el, {
+      type: 'line',
+      data: {labels: d.daily.map(x => x.date),
+             datasets: [{data: d.daily.map(x => x.count), borderColor: '#d93526',
+                         backgroundColor: 'rgba(217,53,38,.1)', fill: true, tension: .3,
+                         pointRadius: 0}]},
+      options: {plugins: {legend: {display: false}},
+                interaction: {mode: 'index', intersect: false},
+                scales: {y: {beginAtZero: true, ticks: {precision: 0}}, x: {ticks: {maxTicksLimit: 8}}}}
+    });
+  });
+</script>
+{% elif stats and stats.daily %}
 <script>
   const d404 = {{ stats.daily|tojson }};
   new Chart(document.getElementById('trend404'), {

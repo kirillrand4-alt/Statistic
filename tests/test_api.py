@@ -75,7 +75,8 @@ def test_full_flow(client):
     assert client.get(f"/projects/{project_id}?{qp}").status_code == 200
     assert client.get(f"/compare?site_id={site_id}").status_code == 200
     assert client.get(f"/metrika?site_id={site_id}").status_code == 200
-    assert client.get(f"/errors?site_id={site_id}&{qp}").status_code == 200
+    assert client.get(f"/errors?{qp}").status_code == 200            # overview
+    assert client.get(f"/errors?site_id={site_id}&{qp}").status_code == 200  # detail
 
     # 9. two-engine project comparison (JSON, page, CSV export)
     r = client.get(f"/api/projects/{project_id}/compare?metric=clicks&a_start={start}&a_end={end}")

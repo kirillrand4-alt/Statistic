@@ -599,25 +599,31 @@ def _same_domain_site_ids(db: Session, site: Site) -> tuple[list[int], str]:
 
 
 @router.get("/errors")
-def errors_page(request: Request, site_id: int | None = None, start: str | None = None,
+def errors_page(request: Request, site_id: str | None = None, start: str | None = None,
                 end: str | None = None, markers: str | None = None,
                 db: Session = Depends(get_db)):
+    from datetime import timedelta
+
     from app.services import not_found
 
     sites = _sites(db)
-    site = _resolve_site(db, site_id)
     dr = parse_date_range(start, end)
-    stats, domain = None, None
-    if site is not None:
+    sid = int(site_id) if site_id else None  # "" / None -> overview of all domains
+    site = db.get(Site, sid) if sid else None
+    yesterday = date.today() - timedelta(days=1)
+    prev_day = yesterday - timedelta(days=1)
+    ctx = {"request": request, "sites": sites, "site": site, "range": dr,
+           "yesterday": yesterday.isoformat(), "prev_day": prev_day.isoformat(),
+           "stats": None, "overview": None, "domain": None,
+           "markers": markers if markers is not None else ", ".join(not_found.DEFAULT_MARKERS)}
+    if site is not None:  # detailed view for one domain
         ids, domain = _same_domain_site_ids(db, site)
-        stats = not_found.not_found_stats(db, ids, dr, markers, site_domain=domain)
-    return templates.TemplateResponse(
-        request,
-        "errors.html",
-        {"request": request, "sites": sites, "site": site, "range": dr,
-         "domain": domain, "stats": stats,
-         "markers": markers if markers is not None else ", ".join(not_found.DEFAULT_MARKERS)},
-    )
+        ctx["domain"] = domain
+        ctx["stats"] = not_found.not_found_stats(db, ids, dr, markers, site_domain=domain)
+    else:  # overview: a chart per domain that has any 404, with the daily delta
+        ctx["overview"] = not_found.not_found_overview(
+            db, dr, markers, yesterday=yesterday, prev_day=prev_day)
+    return templates.TemplateResponse(request, "errors.html", ctx)
 
 
 @router.get("/metrika")

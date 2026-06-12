@@ -6,7 +6,11 @@ from datetime import date
 from app.bootstrap import ensure_sources
 from app.db.models import Hit, Site
 from app.providers.base import DateRange
-from app.services.not_found import not_found_stats, parse_markers
+from app.services.not_found import (
+    not_found_overview,
+    not_found_stats,
+    parse_markers,
+)
 
 DR = DateRange(start=date(2026, 6, 1), end=date(2026, 6, 30))
 
@@ -59,6 +63,32 @@ def test_not_found_detection_channels_and_referrers(db):
     by_url = {u["url"]: u for u in s["top_urls"]}
     assert by_url["/old"]["ad"] == 1 and by_url["/old"]["search"] == 1
     assert by_url["/gone"]["direct"] == 1 and by_url["/gone"]["other"] == 1  # internal -> other
+
+
+def test_not_found_overview_per_domain_with_daily_delta(db):
+    yest, prev = date(2026, 6, 11), date(2026, 6, 10)
+    dr = DateRange(start=date(2026, 6, 1), end=yest)
+    a, b = _site(db, "a.ru"), _site(db, "b.ru")
+    # a.ru: 2 on the day-before, 3 yesterday -> +50%
+    _hit(db, a, 1, "404", "/x", "", "organic", d=prev)
+    _hit(db, a, 2, "404", "/x", "", "ad", d=prev)
+    _hit(db, a, 3, "404", "/y", "", "organic", d=yest)
+    _hit(db, a, 4, "404", "/y", "", "organic", d=yest)
+    _hit(db, a, 5, "404", "/z", "", "ad", d=yest)
+    # b.ru: only one, on the day-before -> yesterday 0
+    _hit(db, b, 6, "Страница не найдена", "/p", "", "direct", d=prev)
+    db.commit()
+
+    ov = not_found_overview(db, dr, yesterday=yest, prev_day=prev)
+    by_dom = {r["domain"]: r for r in ov}
+    assert set(by_dom) == {"a.ru", "b.ru"}
+    assert ov[0]["domain"] == "a.ru"  # sorted by yesterday's count desc
+    assert by_dom["a.ru"]["yesterday"] == 3 and by_dom["a.ru"]["prev"] == 2
+    assert by_dom["a.ru"]["delta_pct"] == 50.0
+    assert by_dom["a.ru"]["total"] == 5
+    assert by_dom["b.ru"]["yesterday"] == 0 and by_dom["b.ru"]["delta_pct"] == -100.0
+    # daily series spans the whole period (one point per day)
+    assert len(by_dom["a.ru"]["daily"]) == (dr.end - dr.start).days + 1
 
 
 def test_not_found_empty_and_custom_markers(db):
