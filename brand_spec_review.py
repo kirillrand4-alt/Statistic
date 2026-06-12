@@ -11,7 +11,8 @@ from openpyxl.utils import get_column_letter
 from collections import defaultdict, Counter
 from matcher import brand_of, BRAND_ALIASES, brand_from_text
 from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value, bar_flow_pairs,
-                        series_num, text_flags, is_compressor, match, receiver_filter, ff_filter, card_issue)
+                        series_num, text_flags, is_compressor, match, receiver_filter, ff_filter,
+                        ip_filter, ip_class, card_issue)
 from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
 from scrape_files import U
 
@@ -128,7 +129,7 @@ def load_ours_all():
         ours[b].append(dict(sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
                             bar=bar_value(r.get("IP_PROP22573")) or bar_from_text(name+" "+code),
                             fl=fl, oil=oil_of(r.get("IP_PROP22583")), ff=ff, vsd=vsd, rv=rv,
-                            name=nm or name, url=url, price=p,
+                            name=nm or name, url=url, price=p, ip=ip_class(name+" "+code),
                             we=(wev if wev and 1<=wev<=50000 else None), dr=drv))
     return ours
 
@@ -196,7 +197,7 @@ def load_comp_all():
             cp=price.get(u) if (len(pairs)==1 or i==0) else None
             cands[b].append(dict(sn=sn, kw=kw, bar=bar or bar_from_text(text), fl=fl, oil=oil,
                                  ff=ff, vsd=vsd, rv=rv, name=nm or slug(u), url=u, site=dm(u),
-                                 price=cp, status=status.get(u,""),
+                                 price=cp, status=status.get(u,""), ip=ip_class(text),
                                  we=we, dr=dr, sku=skus.get(u) or sku2))
     return cands
 
@@ -230,7 +231,8 @@ def build_brand(brand, title, ours, cands, po=None):
     for c in cands: by_sn[c["sn"]].append(c)
     clean=[]; ambig=[]; n0=0
     for o in ours:
-        m=receiver_filter(o.get("rv"), ff_filter(o.get("ff"), match(o, by_sn.get(o["sn"], []))))
+        m=receiver_filter(o.get("rv"), ff_filter(o.get("ff"),
+            ip_filter(o.get("ip"), match(o, by_sn.get(o["sn"], [])))))
         per=defaultdict(dict); nexec=defaultdict(lambda: defaultdict(int))
         for c in m:
             k=(c["sn"],c["kw"],c["bar"],c["fl"],c["ff"] or 0,c["vsd"] or 0,c["rv"])

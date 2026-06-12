@@ -14,9 +14,7 @@ from brand_spec_review import SPECS_CSV, PROKO_CSV, ser_of, _CYR2LAT
 from atlas_need_specs import load_universe, is_product_url, slug, dm, COMPETITORS
 from dropped_export import specs_kbf
 
-def ip_of(text):
-    m = re.search(r'ip\s*[- ]?(\d{2})', str(text).lower())
-    return m.group(1) if m else None
+from spec_match import ip_class as ip_of   # 54≈55 нормализованы (правило заказчика)
 
 def drive_of_text(name):
     t = str(name).lower()

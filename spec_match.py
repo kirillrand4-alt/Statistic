@@ -63,6 +63,22 @@ def text_flags(text):
     if m3 and rv is None: rv = float(m3.group(1))
     return ff, vsd, rv
 
+def ip_class(text):
+    """Класс защиты IP из текста. 54 и 55 — один ценовой класс (нормализуем 55→54);
+    23 — другой (открытое исполнение). Нет в тексте — None (молчание ≠ «отличается»)."""
+    m = re.search(r'(?<![a-z])ip\s*[- ]?(\d{2})\b', str(text).lower())
+    if not m: return None
+    v = m.group(1)
+    return "54" if v == "55" else v
+
+def ip_filter(o_ip, cands):
+    """Направленное правило IP: кандидат отбрасывается ТОЛЬКО если обе стороны явно
+    размечены и классы различаются (54≈55 равны). Неразмеченные не фильтруем —
+    молчание совместимо с любым исполнением."""
+    if not o_ip:
+        return cands
+    return [c for c in cands if not c.get("ip") or c["ip"] == o_ip]
+
 def ff_filter(o_ff, cands):
     """Направленное правило FF (как receiver_filter): если в серии конкурент РАЗМЕЧАЕТ
     FF (есть карточки с ff=1) — молчуны при нашем FF отбрасываются (молчание=без осушителя);

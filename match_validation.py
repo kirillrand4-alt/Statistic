@@ -3,7 +3,7 @@
 import re, sys
 from collections import defaultdict, Counter
 from brand_spec_review import load_ours_all, load_comp_all
-from spec_match import match, receiver_filter, ff_filter
+from spec_match import match, receiver_filter, ff_filter, ip_filter
 
 def norm_sku(s):
     s=re.sub(r"[^a-zа-я0-9]","",str(s).lower())
@@ -17,7 +17,8 @@ def get_matches():
         by=defaultdict(list)
         for c in cands_all[b]: by[c["sn"]].append(c)
         for o in ours_all[b]:
-            m=receiver_filter(o.get("rv"), ff_filter(o.get("ff"), match(o, by.get(o["sn"], []))))
+            m=receiver_filter(o.get("rv"), ff_filter(o.get("ff"),
+                ip_filter(o.get("ip"), match(o, by.get(o["sn"], [])))))
             if m: out.append((b,o,m))
     return out
 
