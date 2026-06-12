@@ -5,6 +5,7 @@ __pycache__/
 *.zip
 brand_reports/
 gap_reports/
+unmatched/
 *.txt
 !requirements.txt
 night_run/
