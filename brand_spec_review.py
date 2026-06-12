@@ -225,7 +225,7 @@ def why(o, c):
     if o.get("rv") is not None: parts.append(f"ресивер {f(o['rv'])}≈{f(c.get('rv'))}")
     return " · ".join(parts)
 
-def build_brand(brand, title, ours, cands):
+def build_brand(brand, title, ours, cands, po=None):
     by_sn=defaultdict(list)
     for c in cands: by_sn[c["sn"]].append(c)
     clean=[]; ambig=[]; n0=0
@@ -367,23 +367,67 @@ def build_brand(brand, title, ours, cands):
     widths=[5,60,18,12,10,50,12]
     for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
     ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(7)}{r}"
+    # 6: Особо проверить — НЕТ СЕРИИ в названии (power-only: kw+bar+fl равны, power_only.py)
+    n_po=0
+    if po:
+        ws=wb.create_sheet("Особо проверить (нет серии)")
+        HDR=["№","Наш товар (нет серии в названии)","Ваша цена"]+COMPETITORS+["min конк.","Δ к min, %","Совпало"]
+        _hdr(ws, HDR, st); r=1
+        for o,m in sorted(po, key=lambda t:t[0]["name"]):
+            r+=1; ws.cell(r,1,r-1); ws.cell(r,2,o["name"])
+            c3=ws.cell(r,3, o["price"] if o.get("price") else "нет цены")
+            if o.get("price"): c3.number_format="# ##0"
+            c3.hyperlink=o["url"]; c3.font=st["blue"]
+            per=defaultdict(list)
+            for c in m: per[c["site"]].append(c)
+            prices=[]
+            for ci,site in enumerate(COMPETITORS):
+                cell=ws.cell(r,4+ci); cs=per.get(site)
+                if not cs: cell.fill=st["nomatch"]; continue
+                priced=[c for c in cs if c.get("price") and c.get("status")!="снято"]
+                show=min(priced,key=lambda c:c["price"]) if priced else cs[0]
+                if show.get("price"):
+                    cell.value=show["price"]; cell.number_format="# ##0"; cell.hyperlink=show["url"]
+                    if show.get("status")=="снято": cell.font=st["strike"]
+                    else: cell.font=st["blue"]; prices.append(show["price"])
+                else:
+                    cell.value="снято" if show.get("status")=="снято" else "По запросу"
+                    cell.hyperlink=show["url"]
+                    cell.font=st["strike"] if show.get("status")=="снято" else st["blue"]
+                if len(cs)>1: cell.fill=st["warn"]
+            if prices:
+                mn=min(prices); ws.cell(r,10,mn).number_format="# ##0"
+                if o.get("price"): ws.cell(r,11, round((o["price"]-mn)/mn*100,1))
+            sov=f"{o['kw']:g} кВт / {o['bar']:g} бар / {o['fl']:g} л/мин"
+            if o.get("ip"): sov+=f" / IP{o['ip']}"
+            ws.cell(r,12,sov)
+        widths=[5,46,12]+[13]*6+[11,10,30]
+        for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
+        ws.freeze_panes="C2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
+        n_po=r-1
     path=os.path.join(OUTDIR, f"{title}_spec_review.xlsx")
     wb.save(path)
-    return dict(clean=len(clean), ambig=len(ambig), no=n0, gap=n_gap, chk=n_chk, sny=len(sny), path=path)
+    return dict(clean=len(clean), ambig=len(ambig), no=n0, gap=n_gap, chk=n_chk, sny=len(sny),
+                po=n_po, path=path)
 
 def build_all(only=None, min_ours=5, min_cands=5):
     os.makedirs(OUTDIR, exist_ok=True)
     ours_all=load_ours_all(); cands_all=load_comp_all()
+    from power_only import build_po_pairs       # lazy: модуль импортирует нас же
+    po_all=build_po_pairs(set(only) if only else None)
     res={}
-    brands=sorted(set(ours_all)&set(cands_all))
+    brands=sorted(set(ours_all)&set(cands_all) | set(po_all))
     for b in brands:
         if only and b not in only: continue
-        if len(ours_all[b])<min_ours or len(cands_all[b])<min_cands: continue
+        po=po_all.get(b)
+        if (len(ours_all.get(b,[]))<min_ours or len(cands_all.get(b,[]))<min_cands) and not po:
+            continue                              # po-only бренды (ZUV) собираем всегда
         title=b.capitalize() if b!="ir" else "IngersollRand"
-        r=build_brand(b, title, ours_all[b], cands_all[b])
+        r=build_brand(b, title, ours_all.get(b,[]), cands_all.get(b,[]), po=po)
         res[b]=r
         print(f"{b:<14} матч {r['clean']:>4} | неодн {r['ambig']:>3} | без {r['no']:>4} | "
-              f"GAP {r['gap']:>4} | карточки {r['chk']:>3} | снятые {r['sny']:>4}")
+              f"GAP {r['gap']:>4} | карточки {r['chk']:>3} | снятые {r['sny']:>4} | "
+              f"без серии {r['po']:>3}")
     return res
 
 if __name__=="__main__":
