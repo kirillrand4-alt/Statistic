@@ -63,6 +63,15 @@ def text_flags(text):
     if m3 and rv is None: rv = float(m3.group(1))
     return ff, vsd, rv
 
+def ff_filter(o_ff, cands):
+    """Направленное правило FF (как receiver_filter): если в серии конкурент РАЗМЕЧАЕТ
+    FF (есть карточки с ff=1) — молчуны при нашем FF отбрасываются (молчание=без осушителя);
+    если НИКТО не размечает (Atlas ZR/ZT: FF не пишут) — молчание не противоречит."""
+    if not o_ff:                       # наш без FF: явные FF-карточки исключаем
+        return [c for c in cands if not c.get("ff")]
+    explicit=[c for c in cands if c.get("ff")]
+    return explicit if explicit else cands
+
 def receiver_filter(o_rv, cands):
     """Направленное правило ресивера (наш артикул кодирует вариант всегда):
     - у нас ресивера НЕТ -> кандидаты с явным ресивером исключаются;
@@ -178,7 +187,9 @@ def match(o, cands):
         if not (agree_num(o["kw"], c["kw"]) and agree_num(o["bar"], c["bar"], 0.03)): continue
         if not agree_num(o.get("fl"), c.get("fl"), FLOW_TOL): continue   # производительность 4%
         if o.get("vsd",0) != c.get("vsd",0): continue   # жёстко: из текста
-        if o.get("ff",0)  != c.get("ff",0):  continue   # жёстко: из текста
+        if (o.get("ff") or 0)==1 and (c.get("ff") or 0)==1: pass        # оба размечены FF — ок
+        elif (o.get("ff") or 0)!=(c.get("ff") or 0) and (c.get("ff") or 0)==1: continue
+        # наш ff=1 vs их None — решает ff_filter (направленно по серии)
         if not agree(o.get("rv"), c.get("rv")): continue
         out.append(c)
     return out

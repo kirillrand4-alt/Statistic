@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 from collections import defaultdict
 from matcher import brand_of, domain
 from spec_match import (num, sane_kw, sane_bar, bar_value, bar_from_text, flow_value, bar_flow_pairs,
-                        series_num, text_flags, is_compressor, match, receiver_filter, card_issue)
+                        series_num, text_flags, is_compressor, match, receiver_filter, ff_filter, card_issue)
 from atlas_need_specs import is_product_url, slug, dm, best_name
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
                "pnevmo-sklad.ru","v-p-k.ru","rutector.ru"]   # порядок колонок как в осн. отчётах
@@ -149,7 +149,7 @@ def build():
     # неоднозначность = >1 РАЗНОЙ карточки на одном сайте
     clean=[]; ambig=[]; n0=0
     for o in ours:
-        m=receiver_filter(o.get("rv"), match(o, by_sn.get(o["sn"], [])))
+        m=receiver_filter(o.get("rv"), ff_filter(o.get("ff"), match(o, by_sn.get(o["sn"], []))))
         # группируем кандидатов по ФИЗИЧЕСКОМУ ключу (исполнение/охлаждение/фаза НЕ различаем —
         # их у нас в каталоге нет; AC/WC/Pack одной спеки = один сопоставимый товар, берём дешевле).
         # считаем кол-во исполнений на сайте: ячейку с >1 пометим жёлтым (цена — минимальная).

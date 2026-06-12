@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 from collections import defaultdict, Counter
 from matcher import brand_of, BRAND_ALIASES, brand_from_text
 from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value, bar_flow_pairs,
-                        series_num, text_flags, is_compressor, match, receiver_filter, card_issue)
+                        series_num, text_flags, is_compressor, match, receiver_filter, ff_filter, card_issue)
 from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
 from scrape_files import U
 
@@ -211,7 +211,7 @@ def build_brand(brand, title, ours, cands):
     for c in cands: by_sn[c["sn"]].append(c)
     clean=[]; ambig=[]; n0=0
     for o in ours:
-        m=receiver_filter(o.get("rv"), match(o, by_sn.get(o["sn"], [])))
+        m=receiver_filter(o.get("rv"), ff_filter(o.get("ff"), match(o, by_sn.get(o["sn"], []))))
         per=defaultdict(dict); nexec=defaultdict(lambda: defaultdict(int))
         for c in m:
             k=(c["sn"],c["kw"],c["bar"],c["fl"],c["ff"] or 0,c["vsd"] or 0,c["rv"])
