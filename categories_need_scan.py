@@ -18,6 +18,20 @@ CATS = [  # (имя файла, регэксп по имени+слагу, ан�
                     re.compile(r'фильтр|filtr|картридж|сервис|мембран\w+\s+для', re.I)),
 ]
 
+# Леаф-страница = СЕРИЯ/ДИАПАЗОН/категория-фильтр, а не один товар (особенно aerocompressors:
+# осушители сгруппированы по производительности «osushiteli_na_10_m3_min», по версиям
+# «..._versiya_...», по линейкам «seriya/serii», диапазонами «1500-15600 l_min»). Парсить их
+# бессмысленно — паспорта одного SKU не дадут. Смотрим ТОЛЬКО последний сегмент (родительские
+# папки вроде «..._serii_d/» не считаем — там в леафе реальный товар).
+_SERIES_LEAF = re.compile(
+    r'(?:^|[_-])osushiteli_na_\d'                              # фильтр-категория по производительности
+    r'|(?:^|[_-])(?:seriya|versiya|serii)(?:[_-]|$)'           # серия/версия/линейка
+    r'|\d+\s*[-_–]+\s*\d+\s*_?(?:l[_ ]?min|lmin|m3[_ ]?min|mmin|m_min|kvt|kw)'  # диапазон произв./мощн.
+    r'|\d{7,}\s*_?l[_ ]?min',                                  # склеенный диапазон (6000-18000 -> 600018000_lmin)
+    re.I)
+def is_series_or_range_leaf(u):
+    return bool(_SERIES_LEAF.search(slug(u)))
+
 def build():
     names, specs, rescanned = load_universe()
     out={c[0]:[] for c in CATS}; by=Counter()
@@ -27,6 +41,7 @@ def build():
         text=(nm or "")+" "+slug(u)
         if not any(ch.isdigit() for ch in text): continue
         if is_compressor(text): continue          # компрессоры/станции — в основном списке
+        if is_series_or_range_leaf(u): continue    # серия/диапазон/категория-фильтр, не один товар
         if u in rescanned: continue               # уже пройден новым парсером
         for cat,rx,anti in CATS:
             if rx.search(text) and not anti.search(text):
