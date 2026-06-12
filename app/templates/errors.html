@@ -16,10 +16,12 @@
   <label>Маркеры в заголовке <input type="text" name="markers" value="{{ markers }}" title="через запятую; по ним опознаём страницу 404 в заголовке"></label>
   <label>&nbsp;<button type="submit">Показать</button></label>
 </form>
-<small>Источник — хиты Яндекс.Метрики: считаем просмотры страниц, у которых
-заголовок содержит один из маркеров (страница 404 со счётчиком Метрики даёт
-такой просмотр). Обновляется автоматически по мере загрузки данных. Канал
-(реклама / поиск / прямые) берём из источника перехода Метрики.</small>
+<small>Источник — хиты Яндекс.Метрики: считаем <b>все</b> просмотры страниц 404
+(и входы прямо на 404, и те, куда упёрлись по ходу визита) — у которых заголовок
+содержит один из маркеров (страница 404 со счётчиком Метрики даёт такой просмотр).
+Обновляется автоматически по мере загрузки данных. Канал (реклама / поиск /
+прямые) и реферер берём из перехода Метрики: внутренний реферер — битая ссылка
+на самом сайте, внешний/реклама — заход на несуществующую страницу извне.</small>
 
 {# ===================== ОБЗОР: график на каждый домен ===================== #}
 {% if site is none %}
@@ -27,9 +29,9 @@
     <article><p>Ни по одному домену за период страниц с маркерами 404 не найдено.
     Проверьте период/маркеры и что качаются хиты (страница 404 должна нести счётчик Метрики).</p></article>
   {% else %}
-  <p><small>По каждому домену с 404 — динамика за период; справа число за вчера
-  ({{ yesterday }}) и изменение к позавчера ({{ prev_day }}). Рост 404 — <span style="color:#d93526">красным</span>.
-  Клик по домену — подробный разбор.</small></p>
+  <p><small>По каждому домену с 404 — динамика за период; справа число за
+  последний день с данными и изменение к предыдущему дню. Рост 404 —
+  <span style="color:#d93526">красным</span>. Клик по домену — подробный разбор.</small></p>
   {% for d in overview %}
   <article>
     <div style="display:flex; align-items:center; gap:1.2rem; flex-wrap:wrap;">
@@ -41,17 +43,16 @@
         <canvas id="ov404-{{ loop.index0 }}" height="70"></canvas>
       </div>
       <div style="flex:0 0 auto; text-align:right; min-width:9rem;">
-        <h3 style="margin:0; line-height:1;">{{ d.yesterday|numfmt }}</h3>
-        <small>за вчера</small>
+        <h3 style="margin:0; line-height:1;">{{ d.last|numfmt }}</h3>
+        <small>за {{ d.last_date }}</small>
         <p style="margin:.3rem 0 0;">
           {% if d.delta_pct is not none %}
             {% if d.delta_pct > 0 %}<strong style="color:#d93526">▲ +{{ d.delta_pct|round(0)|int }}%</strong>
             {% elif d.delta_pct < 0 %}<strong style="color:#208a3c">▼ {{ d.delta_pct|round(0)|int }}%</strong>
             {% else %}<strong>0%</strong>{% endif %}
-          {% elif d.yesterday %}<strong style="color:#d93526">▲ новые</strong>
-          {% else %}<strong>—</strong>{% endif %}
+          {% else %}<strong style="color:#d93526">▲ новые</strong>{% endif %}
         </p>
-        <small>к позавчера ({{ d.prev|numfmt }})</small>
+        <small>{% if d.prev_date %}к {{ d.prev_date }} ({{ d.prev|numfmt }}){% else %}нет предыдущего дня{% endif %}</small>
       </div>
     </div>
   </article>

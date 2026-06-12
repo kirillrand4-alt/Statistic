@@ -65,29 +65,29 @@ def test_not_found_detection_channels_and_referrers(db):
     assert by_url["/gone"]["direct"] == 1 and by_url["/gone"]["other"] == 1  # internal -> other
 
 
-def test_not_found_overview_per_domain_with_daily_delta(db):
-    yest, prev = date(2026, 6, 11), date(2026, 6, 10)
-    dr = DateRange(start=date(2026, 6, 1), end=yest)
+def test_not_found_overview_last_day_vs_previous(db):
+    dr = DateRange(start=date(2026, 6, 1), end=date(2026, 6, 11))
+    d1, d2 = date(2026, 6, 4), date(2026, 6, 5)  # last two days with data (sync lags)
     a, b = _site(db, "a.ru"), _site(db, "b.ru")
-    # a.ru: 2 on the day-before, 3 yesterday -> +50%
-    _hit(db, a, 1, "404", "/x", "", "organic", d=prev)
-    _hit(db, a, 2, "404", "/x", "", "ad", d=prev)
-    _hit(db, a, 3, "404", "/y", "", "organic", d=yest)
-    _hit(db, a, 4, "404", "/y", "", "organic", d=yest)
-    _hit(db, a, 5, "404", "/z", "", "ad", d=yest)
-    # b.ru: only one, on the day-before -> yesterday 0
-    _hit(db, b, 6, "Страница не найдена", "/p", "", "direct", d=prev)
+    # a.ru: 2 on its prev day (06-04), 3 on its last day (06-05) -> +50%
+    _hit(db, a, 1, "404", "/x", "", "organic", d=d1)
+    _hit(db, a, 2, "404", "/x", "", "ad", d=d1)
+    _hit(db, a, 3, "404", "/y", "", "organic", d=d2)
+    _hit(db, a, 4, "404", "/y", "", "organic", d=d2)
+    _hit(db, a, 5, "404", "/z", "", "ad", d=d2)
+    # b.ru: a single 404 day -> no previous day
+    _hit(db, b, 6, "Страница не найдена", "/p", "", "direct", d=d1)
     db.commit()
 
-    ov = not_found_overview(db, dr, yesterday=yest, prev_day=prev)
+    ov = not_found_overview(db, dr)
     by_dom = {r["domain"]: r for r in ov}
     assert set(by_dom) == {"a.ru", "b.ru"}
-    assert ov[0]["domain"] == "a.ru"  # sorted by yesterday's count desc
-    assert by_dom["a.ru"]["yesterday"] == 3 and by_dom["a.ru"]["prev"] == 2
-    assert by_dom["a.ru"]["delta_pct"] == 50.0
-    assert by_dom["a.ru"]["total"] == 5
-    assert by_dom["b.ru"]["yesterday"] == 0 and by_dom["b.ru"]["delta_pct"] == -100.0
-    # daily series spans the whole period (one point per day)
+    assert ov[0]["domain"] == "a.ru"  # sorted by last-day count desc
+    assert by_dom["a.ru"]["last"] == 3 and by_dom["a.ru"]["prev"] == 2
+    assert by_dom["a.ru"]["last_date"] == "2026-06-05" and by_dom["a.ru"]["prev_date"] == "2026-06-04"
+    assert by_dom["a.ru"]["delta_pct"] == 50.0 and by_dom["a.ru"]["total"] == 5
+    assert by_dom["b.ru"]["last"] == 1 and by_dom["b.ru"]["prev_date"] is None
+    assert by_dom["b.ru"]["delta_pct"] is None  # single day -> "новые"
     assert len(by_dom["a.ru"]["daily"]) == (dr.end - dr.start).days + 1
 
 

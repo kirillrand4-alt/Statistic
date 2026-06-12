@@ -65,17 +65,17 @@ def _ids(site_ids) -> list[int]:
     return [site_ids]
 
 
-def not_found_overview(db, dr: DateRange, markers_raw: str | None = None, *,
-                       yesterday: date, prev_day: date) -> list[dict]:
-    """One row per DOMAIN that has any 404 in the window: daily series over ``dr``
-    (for a chart), plus yesterday's count and the % change vs the day before.
+def not_found_overview(db, dr: DateRange, markers_raw: str | None = None) -> list[dict]:
+    """One row per DOMAIN that has any 404 in ``dr``: daily series (for a chart),
+    plus the count on the LAST day with 404 data and the % change vs the previous
+    day with data (so it follows the data frontier — useful when the sync lags
+    and the calendar "yesterday" isn't downloaded yet).
 
     Domains are bare hosts, so a domain's same-host properties are summed. Sorted
-    by yesterday's count (then period total), so the busiest 404s float up.
+    by the last-day count (then period total), so the busiest 404s float up.
     """
     markers = parse_markers(markers_raw)
-    lo, hi = min(dr.start, prev_day), max(dr.end, yesterday)
-    where = [Hit.date >= lo, Hit.date <= hi, Hit.is_page_view == 1,
+    where = [Hit.date >= dr.start, Hit.date <= dr.end, Hit.is_page_view == 1,
              Hit.title.isnot(None), _title_filter(markers)]
     rows = db.execute(
         select(Hit.site_id, Hit.date, func.count()).where(*where)
@@ -103,14 +103,20 @@ def not_found_overview(db, dr: DateRange, markers_raw: str | None = None, *,
         daily = [{"date": (dr.start + timedelta(days=i)).isoformat(),
                   "count": daymap.get(dr.start + timedelta(days=i), 0)}
                  for i in range(span + 1)]
-        y, p = daymap.get(yesterday, 0), daymap.get(prev_day, 0)
+        days = sorted(daymap)  # days that actually have 404, ascending
+        last_d = days[-1]
+        prev_d = days[-2] if len(days) > 1 else None
+        last = daymap[last_d]
+        prev = daymap[prev_d] if prev_d else 0
         out.append({
             "domain": dom, "site_id": site_for_dom.get(dom), "daily": daily,
-            "total": sum(d2["count"] for d2 in daily),
-            "yesterday": y, "prev": p,
-            "delta_pct": ((y - p) / p * 100.0) if p else None,
+            "total": sum(daymap.values()),
+            "last": last, "prev": prev,
+            "last_date": last_d.isoformat(),
+            "prev_date": prev_d.isoformat() if prev_d else None,
+            "delta_pct": ((last - prev) / prev * 100.0) if prev else None,
         })
-    out.sort(key=lambda r: (r["yesterday"], r["total"]), reverse=True)
+    out.sort(key=lambda r: (r["last"], r["total"]), reverse=True)
     return out
 
 
