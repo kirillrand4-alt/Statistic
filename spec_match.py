@@ -51,9 +51,10 @@ def text_flags(text):
     и буквой не срабатывает, ловим отдельно; (?<![a-z]) отсекает англ. 'off'/'staff'."""
     tl = " " + str(text).lower().replace("_","-") + " "
     ff  = 1 if re.search(r'(?<![a-z])ff\b|\dff\b', tl) else None
-    # VSD-маркеры имени (заводской код надёжнее спек-таблиц: GENESIS I.15 у pnevmoteh
-    # имеет спеку «частотник: нет» — враньё). Вариации: VSD / частот / VS (ET) /
-    # I-серии ABAC (GENESIS I.15, FORMULA.I, дефисный слаг genesis-i-15) / MEI30 / инвертор.
+    # VSD-маркеры имени: заводской код модели надёжнее спек-таблиц, т.к. в таблицах
+    # ключ «частот» неоднозначен (Частота тока/вращения/напряжения ≠ частотный привод).
+    # Вариации инвертора: VSD / частот / VS (ET) / I-серии ABAC (GENESIS I.15, FORMULA.I,
+    # дефисный слаг genesis-i-15) / MEI30 / инвертор. (pnevmoteh поле пишет корректно.)
     vsd = 1 if ("vsd" in tl or "частот" in tl or "инвертор" in tl or "inverter" in tl
                 or re.search(r'\bvs\b', tl) or re.search(r'\bi\.\d', tl)
                 or re.search(r'(?:genesis|formula)[\s.\-]*i\b', tl)
