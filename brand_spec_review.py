@@ -143,8 +143,9 @@ def load_ours_all():
         wev=num(r.get("IP_PROP22555")); drv=(r.get("IP_PROP22601") or "").strip().lower() or None
         if drv: drv="ремен" if "ремен" in drv else ("прямой" if "прям" in drv else None)
         if str(r.get("IP_PROP22565","")).strip().lower()=="да": ff=1   # проп «осушитель» (направл. флаг — безопасно)
-        if b=="berg" and str(r.get("IP_PROP22586","")).strip().lower()=="да":
-            vsd=1   # проп «частотник»: vsd строгий, глобально включать рискованно — пока Berg (Е-схема обоюдна)
+        pv=str(r.get("IP_PROP22586","")).strip().lower()   # проп «частотник»: знание да/нет
+        if vsd is None and pv:                             # имя-маркер приоритетнее пропа
+            vsd = 1 if pv=="да" else (0 if pv=="нет" else None)
         ours[b].append(dict(sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
                             bar=bar_value(r.get("IP_PROP22573")) or bar_from_text(name+" "+code),
                             fl=fl, oil=oil_of(r.get("IP_PROP22583")), ff=ff, vsd=vsd, rv=rv,
@@ -191,8 +192,8 @@ def load_comp_all():
         ff,vsd,rv = text_flags(nm) if nm else text_flags(slug(u))
         ff,rv = suffix_flags(nm or slug(u), b, ff, rv)
         bsuf = berg_suffix(text) if b=="berg" else None
-        if bsuf is not None:           # заводская схема ВК: суффикс = вариант (код модели)
-            if "e" in bsuf: vsd=1
+        if bsuf is not None:           # заводская схема ВК: код модели ПОЛНЫЙ, отсутствие
+            vsd = 1 if "e" in bsuf else 0          # буквы = знаем-нет (не «не указано»)
             if "o" in bsuf: ff=1
         we=dr=sku2=None
         for k,v in d.items():
@@ -206,6 +207,10 @@ def load_comp_all():
             if sku2 is None and "артикул" in kl: sku2=str(v).strip()
             if ff is None and "осушит" in kl and str(v).strip().lower() in ("да","есть","yes"):
                 ff=1   # спек-ключ «С осушителем: да» (Zammer /O и др.)
+            if vsd is None and "частот" in kl:     # «Частотный преобразователь: да/нет»;
+                vl=str(v).strip().lower()          # «Частота тока: 50» отсеется значением
+                if vl in ("да","есть","yes") or "частотн" in vl: vsd=1
+                elif vl in ("нет","no"): vsd=0
         if bsuf is not None:   # ВК-схема Berg: Р в коде = ременный, отсутствие = прямой
             dr = "ремен" if "r" in bsuf else "прямой"
         srv=None
@@ -251,6 +256,13 @@ def why(o, c):
     if o.get("ff"): parts.append("FF")
     if o.get("vsd"): parts.append("VSD")
     if o.get("rv") is not None: parts.append(f"ресивер {f(o['rv'])}≈{f(c.get('rv'))}")
+    # особая отметка (правило заказчика): «не указано» матчится, но подсвечивается.
+    # Помечаем только рисковый случай: одна сторона ДА, вторая молчит (+35% к цене);
+    # «знаем-нет ↔ молчит» не шумим — это типовой фикс без частотника.
+    if o.get("vsd")==1 and c.get("vsd") is None:
+        parts.append("⚠ VSD у конкурента не подтверждён")
+    elif c.get("vsd")==1 and o.get("vsd") is None:
+        parts.append("⚠ у конкурента VSD, у нас не указано")
     return " · ".join(parts)
 
 def build_brand(brand, title, ours, cands, po=None):

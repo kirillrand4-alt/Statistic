@@ -51,7 +51,13 @@ def text_flags(text):
     и буквой не срабатывает, ловим отдельно; (?<![a-z]) отсекает англ. 'off'/'staff'."""
     tl = " " + str(text).lower().replace("_","-") + " "
     ff  = 1 if re.search(r'(?<![a-z])ff\b|\dff\b', tl) else None
-    vsd = 1 if ("vsd" in tl or "частот" in tl or re.search(r'\bvs\b', tl)) else None   # ET «VS PM»
+    # VSD-маркеры имени (заводской код надёжнее спек-таблиц: GENESIS I.15 у pnevmoteh
+    # имеет спеку «частотник: нет» — враньё). Вариации: VSD / частот / VS (ET) /
+    # I-серии ABAC (GENESIS I.15, FORMULA.I, дефисный слаг genesis-i-15) / MEI30 / инвертор.
+    vsd = 1 if ("vsd" in tl or "частот" in tl or "инвертор" in tl or "inverter" in tl
+                or re.search(r'\bvs\b', tl) or re.search(r'\bi\.\d', tl)
+                or re.search(r'(?:genesis|formula)[\s.\-]*i\b', tl)
+                or re.search(r'\bmei\d', tl)) else None
     rv = None
     m = re.search(r'(?:ресивер\w*|resiver\w*|receiver\w*|\btm)[- ]?(\d{2,3})?\b', tl)
     if m: rv = num(m.group(1)) or 1
@@ -202,7 +208,11 @@ def match(o, cands):
         if o["sn"] != c["sn"]: continue
         if not (agree_num(o["kw"], c["kw"]) and agree_num(o["bar"], c["bar"], 0.03)): continue
         if not agree_num(o.get("fl"), c.get("fl"), FLOW_TOL): continue   # производительность 4%
-        if o.get("vsd",0) != c.get("vsd",0): continue   # жёстко: из текста
+        # частотник (+35% к цене): есть=есть, нет=нет — режем только ЯВНЫЙ конфликт.
+        # Тристейт: 1=знаем-да (имя/проп/спек-ключ), 0=знаем-нет (проп/спек «нет»),
+        # None=не указано (матчится с пометкой «частотник не подтверждён» в отчёте).
+        ov, cv = o.get("vsd"), c.get("vsd")
+        if ov is not None and cv is not None and ov != cv: continue
         # привод: только если ИЗВЕСТЕН с обеих сторон (наш — проп Битрикса, их — спека/схема
         # имени Berg). Молчание совместимо. Ловит ВК-18.5Р (ремен) vs ВК-18.5 (прямой).
         if o.get("dr") and c.get("dr") and o["dr"] != c["dr"]: continue
