@@ -12,7 +12,7 @@ from collections import defaultdict, Counter
 from matcher import brand_of, BRAND_ALIASES, brand_from_text
 from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value, bar_flow_pairs,
                         series_num, text_flags, is_compressor, match, receiver_filter, ff_filter,
-                        ip_filter, ip_class, is_flow_key, card_issue)
+                        ip_filter, ip_class, cool_filter, cool_class, is_flow_key, card_issue)
 from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
 from scrape_files import U
 
@@ -150,6 +150,7 @@ def load_ours_all():
                             bar=bar_value(r.get("IP_PROP22573")) or bar_from_text(name+" "+code),
                             fl=fl, oil=oil_of(r.get("IP_PROP22583")), ff=ff, vsd=vsd, rv=rv,
                             name=nm or name, url=url, price=p, ip=ip_class(name+" "+code),
+                            cool=cool_class(name+" "+code, r.get("IP_PROP22669")),
                             we=(wev if wev and 1<=wev<=50000 else None), dr=drv))
     return ours
 
@@ -182,13 +183,14 @@ def load_comp_all():
         sn=ser_of(text, b)
         if not sn: continue
         d=specs.get(u, {})
-        kw=None; oil=None; raw_bar=raw_flow=fkey=None
+        kw=None; oil=None; raw_bar=raw_flow=fkey=None; cool_raw=""
         for k,v in d.items():
             kl=k.lower()
             if kw is None and "мощ" in kl and "шум" not in kl and "звук" not in kl: kw=sane_kw(num(v))
             if raw_bar is None and "давлен" in kl: raw_bar=v
             if raw_flow is None and is_flow_key(k): raw_flow=v; fkey=kl
             if oil is None and "безмасл" in kl: oil=oil_of(v)
+            if not cool_raw and "охлажд" in kl: cool_raw=str(v)
         ff,vsd,rv = text_flags(nm) if nm else text_flags(slug(u))
         ff,rv = suffix_flags(nm or slug(u), b, ff, rv)
         bsuf = berg_suffix(text) if b=="berg" else None
@@ -230,6 +232,7 @@ def load_comp_all():
             cands[b].append(dict(sn=sn, kw=kw, bar=bar or bar_from_text(text), fl=fl, oil=oil,
                                  ff=ff, vsd=vsd, rv=rv, name=nm or slug(u), url=u, site=dm(u),
                                  price=cp, status=status.get(u,""), ip=ip_class(text),
+                                 cool=cool_class(text, cool_raw),
                                  we=we, dr=dr, sku=skus.get(u) or sku2))
     return cands
 
@@ -256,6 +259,7 @@ def why(o, c):
     if o.get("ff"): parts.append("FF")
     if o.get("vsd"): parts.append("VSD")
     if o.get("rv") is not None: parts.append(f"ресивер {f(o['rv'])}≈{f(c.get('rv'))}")
+    if o.get("cool"): parts.append("вод.охл" if o["cool"]=="water" else "возд.охл")
     # особая отметка (правило заказчика): «не указано» матчится, но подсвечивается.
     # Помечаем только рисковый случай: одна сторона ДА, вторая молчит (+35% к цене);
     # «знаем-нет ↔ молчит» не шумим — это типовой фикс без частотника.
@@ -271,7 +275,7 @@ def build_brand(brand, title, ours, cands, po=None):
     clean=[]; ambig=[]; n0=0
     for o in ours:
         m=receiver_filter(o.get("rv"), ff_filter(o.get("ff"),
-            ip_filter(o.get("ip"), match(o, by_sn.get(o["sn"], [])))))
+            cool_filter(o.get("cool"), ip_filter(o.get("ip"), match(o, by_sn.get(o["sn"], []))))))
         per=defaultdict(dict); nexec=defaultdict(lambda: defaultdict(int))
         for c in m:
             k=(c["sn"],c["kw"],c["bar"],c["fl"],c["ff"] or 0,c["vsd"] or 0,c["rv"])
@@ -334,7 +338,7 @@ def build_brand(brand, title, ours, cands, po=None):
     for c in cands:
         if c["sn"] in our_sn: continue
         gk=(c["sn"], round(c["kw"]) if c["kw"] else None, round(c["bar"]) if c["bar"] else None,
-            c["ff"] or 0, c["vsd"] or 0, c["rv"])
+            c["ff"] or 0, c["vsd"] or 0, c["rv"], c.get("cool"))   # возд/вод = разные товары
         groups[gk][c["site"]].append(c)
     gap=[(gk,s) for gk,s in groups.items() if len(s)>=2]
     gap.sort(key=lambda t:-len(t[1]))

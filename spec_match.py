@@ -86,6 +86,29 @@ def ip_filter(o_ip, cands):
         return cands
     return [c for c in cands if not c.get("ip") or c["ip"] == o_ip]
 
+def cool_class(text, prop=None):
+    """Тип охлаждения: 'water'/'air'/None. Сначала проп/спека, потом имя. «вод»/«жидк» =
+    water, «возд»/«air» = air. Если в значении ОБА (воздушное/водяное, опционально) или
+    масляное/неясное → None (любое, не фильтруем). Голый 'ac' НЕ трактуем (= Atlas Copco)."""
+    s = (str(prop) + " " + str(text)).lower()
+    water = bool(re.search(r'водян|жидкост|water[\s-]?cool|\bwc\b', s))
+    air   = bool(re.search(r'воздушн\w*\s*охлажд|air[\s-]?cool', s))
+    # явный проп «воздушное»/«водяное» (значение колонки/ключа целиком)
+    pl = str(prop).strip().lower()
+    if pl in ("воздушное", "воздушный", "air"): air = True
+    if pl in ("водяное", "водяной", "жидкостное", "water"): water = True
+    if water and air: return None     # «воздушное/водяное», «опционально» — подходит к любому
+    if water: return "water"
+    if air:   return "air"
+    return None
+
+def cool_filter(o_cool, cands):
+    """Направленное правило охлаждения (как ip_filter): отбрасываем кандидата, только
+    если обе стороны явно размечены и классы различаются. Молчание = совместимо."""
+    if not o_cool:
+        return cands
+    return [c for c in cands if not c.get("cool") or c["cool"] == o_cool]
+
 def ff_filter(o_ff, cands):
     """Направленное правило FF (как receiver_filter): если в серии конкурент РАЗМЕЧАЕТ
     FF (есть карточки с ff=1) — молчуны при нашем FF отбрасываются (молчание=без осушителя);

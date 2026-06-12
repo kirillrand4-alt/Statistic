@@ -5,7 +5,7 @@ import csv, sys, os, zipfile
 csv.field_size_limit(sys.maxsize)
 from collections import defaultdict
 from brand_spec_review import load_ours_all, load_comp_all
-from spec_match import match, receiver_filter, ff_filter, ip_filter
+from spec_match import match, receiver_filter, ff_filter, ip_filter, cool_filter
 from category_spec_review import (load_ours_cat, load_comp_cat, match_cat, CATS)
 
 OUTDIR="/home/user/Statistic/unmatched"; ZIP="/home/user/Statistic/Unmatched_all.zip"
@@ -31,7 +31,7 @@ def build():
         our_sn={o["sn"] for o in ours.get(b,[])}
         for o in ours.get(b,[]):
             m=receiver_filter(o.get("rv"), ff_filter(o.get("ff"),
-                ip_filter(o.get("ip"), match(o, by.get(o["sn"], [])))))
+                cool_filter(o.get("cool"), ip_filter(o.get("ip"), match(o, by.get(o["sn"], []))))))
             if m:
                 for c in m: matched_comp.add(c["url"])
             else:
