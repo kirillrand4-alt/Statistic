@@ -40,10 +40,13 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import signal
 import sys
 import tempfile
+import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -285,6 +288,30 @@ def _create_logrequest(counter: int, source: str, c1: date, c2: date):
     return None
 
 
+@contextmanager
+def _time_limit(seconds: float):
+    """Abort the wrapped block if it runs longer than ``seconds`` (raises
+    TimeoutError). Uses SIGALRM, so it can interrupt a stuck socket read / disk
+    write that slips past httpx's own per-operation timeouts. No-op off the main
+    thread or where SIGALRM is unavailable."""
+    usable = (seconds and seconds > 0 and hasattr(signal, "SIGALRM")
+              and threading.current_thread() is threading.main_thread())
+    if not usable:
+        yield
+        return
+
+    def _fire(signum, frame):
+        raise TimeoutError(f"окно не уложилось в {int(seconds)} с")
+
+    old = signal.signal(signal.SIGALRM, _fire)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)
+
+
 def _cancel_logrequest(base: str, req_id: int) -> None:
     try:
         httpx.post(f"{base}/{req_id}/cancel", headers=_headers(), timeout=60)
@@ -481,7 +508,8 @@ def merge_domain_dupes() -> int:
 def sync_rotate(targets, d1: date, d2: date, chunk: int | None = None,
                 max_chunk: int = 30, parallel: int | None = None,
                 sources=("visits", "hits"), force: bool = True,
-                timeout_min: int = 40, poll_sec: int = 180) -> None:
+                timeout_min: int = 40, poll_sec: int = 180,
+                collect_timeout_min: int = 15) -> None:
     """Download missing windows across many domains, one request per domain.
 
     Keeps one Logs API request in flight per domain — by default for *every*
@@ -578,9 +606,10 @@ def sync_rotate(targets, d1: date, d2: date, chunk: int | None = None,
                 age_min = (time.monotonic() - it["started"]) / 60.0
                 if status in ("processed", "processed_with_errors"):
                     try:
-                        n = _collect_request(db, it["base"], req_id, it["site_id"],
-                                             it["source"], force)
-                    except Exception as exc:  # noqa: BLE001 — 429/network: retry next poll
+                        with _time_limit(collect_timeout_min * 60):
+                            n = _collect_request(db, it["base"], req_id, it["site_id"],
+                                                 it["source"], force)
+                    except Exception as exc:  # noqa: BLE001 — 429/network/stuck: retry next poll
                         db.rollback()  # drop the half-imported batch; reuse the session
                         if age_min >= timeout_min:
                             _cancel_logrequest(it["base"], req_id)
@@ -653,6 +682,8 @@ def main() -> None:
     ap.add_argument("--poll-sec", dest="poll_sec", type=int, default=180,
                     help="как часто проверять готовность, сек. (по умолчанию 180 = 3 мин)")
     ap.add_argument("--timeout-min", dest="timeout_min", type=int, default=40)
+    ap.add_argument("--collect-timeout-min", dest="collect_timeout_min", type=int, default=15,
+                    help="макс. время на скачивание+импорт одного окна, мин (по умолчанию 15)")
     ap.add_argument("--counter", type=int)
     ap.add_argument("--site", type=int)
     ap.add_argument("--from", dest="d1")
@@ -696,7 +727,8 @@ def main() -> None:
         d1 = date.fromisoformat(a.d1) if a.d1 else d2 - timedelta(days=365)
         sync_rotate(targets, d1, d2, chunk=a.chunk, max_chunk=a.max_chunk,
                     parallel=a.parallel, sources=sources, force=a.force,
-                    timeout_min=a.timeout_min, poll_sec=a.poll_sec)
+                    timeout_min=a.timeout_min, poll_sec=a.poll_sec,
+                    collect_timeout_min=a.collect_timeout_min)
         return
 
     if not (a.counter and a.site):

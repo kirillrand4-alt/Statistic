@@ -349,6 +349,19 @@ def test_sync_rotate_evaluate_clamps_to_under_a_year(db, monkeypatch):
     assert spans and max(spans) == 8  # sized from the clamped probe, not the default 10
 
 
+def test_time_limit_interrupts_stuck_call():
+    """_time_limit aborts a block that runs past its deadline (so a stuck
+    download/import can't freeze the whole run)."""
+    import time as _t
+
+    with pytest.raises(TimeoutError):
+        with M._time_limit(0.2):
+            _t.sleep(5)
+    # the timer is disarmed afterwards: a quick block runs untouched
+    with M._time_limit(5):
+        _t.sleep(0.01)
+
+
 def test_sync_rotate_timeout_skips(db, monkeypatch):
     sid = _mksite(db, "z.ru")
     fake = FakeHTTP(status="created")  # never becomes ready
