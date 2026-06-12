@@ -362,6 +362,66 @@ def test_time_limit_interrupts_stuck_call():
         _t.sleep(0.01)
 
 
+def test_sync_rotate_pauses_on_quota_then_continues(db, monkeypatch):
+    """A 429 quota error makes the run pause (not hammer) and then finish the
+    window once the quota frees up — no crash, no lost window."""
+    sid = _mksite(db, "q.ru")
+
+    class QuotaOnce(FakeHTTP):
+        def __init__(self):
+            super().__init__("processed")
+            self.first = True
+
+        def post(self, url, headers=None, params=None, timeout=None):
+            if url.endswith("/logrequests") and self.first:
+                self.first = False  # first create is quota-blocked, then it clears
+                return _Resp({"errors": [{"error_type": "quota_requests_by_uid"}],
+                              "code": 429}, code=429)
+            return super().post(url, headers=headers, params=params, timeout=timeout)
+
+    fake = QuotaOnce()
+    monkeypatch.setattr(M, "httpx", fake)
+    monkeypatch.setattr(M, "_token", lambda: "t")
+    paused = []
+    monkeypatch.setattr(M.time, "sleep", lambda s: paused.append(s))  # don't really wait
+
+    M.sync_rotate([(sid, 1, "q.ru")], date(2026, 6, 1), date(2026, 6, 3), chunk=3,
+                  sources=("visits",), force=True, timeout_min=999, poll_sec=0,
+                  collect_timeout_min=0)
+
+    assert 300 in paused                      # it waited out the quota
+    assert len(fake.created) == 1 and len(fake.cleaned) == 1  # window still completed
+    s = SessionLocal()
+    try:
+        assert s.execute(select(func.count()).select_from(Visit)).scalar_one() == 1
+    finally:
+        s.close()
+
+
+def test_sync_rotate_stops_on_persistent_quota(db, monkeypatch):
+    """--stop-on-quota ends the run on a sustained quota error (so the scheduled
+    job exits instead of spinning); gap-fill lets a later run resume."""
+    sid = _mksite(db, "q2.ru")
+
+    class AlwaysQuota(FakeHTTP):
+        def post(self, url, headers=None, params=None, timeout=None):
+            if url.endswith("/logrequests"):
+                return _Resp({"errors": [{"error_type": "quota_requests_by_uid"}],
+                              "code": 429}, code=429)
+            return super().post(url, headers=headers, params=params, timeout=timeout)
+
+    fake = AlwaysQuota()
+    monkeypatch.setattr(M, "httpx", fake)
+    monkeypatch.setattr(M, "_token", lambda: "t")
+    monkeypatch.setattr(M.time, "sleep", lambda s: None)
+
+    M.sync_rotate([(sid, 1, "q2.ru")], date(2026, 6, 1), date(2026, 6, 3), chunk=3,
+                  sources=("visits",), force=True, timeout_min=999, poll_sec=0,
+                  collect_timeout_min=0, stop_on_quota=True)
+
+    assert fake.created == [] and not fake.cleaned  # stopped, didn't hang
+
+
 def test_sync_rotate_timeout_skips(db, monkeypatch):
     sid = _mksite(db, "z.ru")
     fake = FakeHTTP(status="created")  # never becomes ready

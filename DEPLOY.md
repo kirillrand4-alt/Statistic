@@ -131,6 +131,27 @@ bash deploy/metrika_sync.sh stop       # остановить
 (можно и отдельно: `--merge-dupes`).
 Пропущенные окна добираются точечно: тот же запуск с `--chunk 1` без `--force`.
 
+#### Автозапуск по расписанию (докачка после сброса квоты)
+
+У Яндекса есть суточная квота на число API-запросов (ошибка 429
+`quota_requests_by_uid`). С флагом `--stop-on-quota` прогон при исчерпании
+квоты аккуратно завершается, а systemd-таймер запускает его каждое утро —
+квота к тому времени сбрасывается, и докачка (gap-fill) продолжается с того
+места, где остановилась. За несколько дней так добирается весь архив, а потом
+таймер ежедневно подтягивает свежие дни.
+```bash
+cp deploy/seostat-metrika.service /etc/systemd/system/
+cp deploy/seostat-metrika.timer   /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now seostat-metrika.timer     # включить и поставить на 05:00
+systemctl start  seostat-metrika.service         # (необязательно) запустить сейчас же
+systemctl list-timers seostat-metrika.timer      # когда следующий запуск
+journalctl -u seostat-metrika -f                 # лог закачки
+```
+Перед включением таймера остановите ручную закачку (`metrika_sync.sh stop`),
+чтобы не качать в два процесса. Период правится в `seostat-metrika.service`
+(`--from`), время — в `.timer` (`OnCalendar`).
+
 
 ## Обновление версии
 ```bash

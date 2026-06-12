@@ -103,6 +103,31 @@ def _fetch_counters() -> list[dict]:
     return r.json().get("counters", [])
 
 
+# Set on the account-level request-quota 429 ("quota_requests_by_uid") — which
+# needs a long wait — as opposed to a plain 429 (a short burst rate limit) that
+# just needs a quick retry. The rotation pauses on it instead of hammering (see
+# sync_rotate). One flag is enough; it's checked/reset per loop.
+_QUOTA = {"hit": False}
+
+
+def _is_quota_429(resp) -> bool:
+    """Note (and report) an exhausted API-request quota. Distinguishes it from a
+    plain 429 by the 'quota' marker in the body, so a burst 429 stays a quick
+    retry while a quota 429 triggers the pause."""
+    if resp.status_code != 429:
+        return False
+    blob = resp.text or ""
+    if not blob:
+        try:
+            blob = str(resp.json())
+        except Exception:  # noqa: BLE001
+            blob = ""
+    if "quota" in blob.lower():
+        _QUOTA["hit"] = True
+        return True
+    return False
+
+
 def list_counters() -> None:
     for c in _fetch_counters():
         print(f"  id={c.get('id'):<10} {str(c.get('site')):<40} {c.get('name')}")
@@ -136,6 +161,7 @@ def _evaluate(counter: int, source: str, d1: date, d2: date) -> int | None:
         _eval_warn(f"сеть/таймаут ({exc.__class__.__name__})")
         return None
     if r.status_code != 200:
+        _is_quota_429(r)
         _eval_warn(f"HTTP {r.status_code}: {r.text[:160]}")
         return None
     body = r.json()
@@ -164,6 +190,8 @@ def _window_days(counter: int, source: str, d1: date, d2: date,
     (enough to gauge data density)."""
     if fixed:
         return fixed
+    if _QUOTA["hit"]:  # already rate-limited — don't burn calls, use the default
+        return min(10, max_chunk)
     probe_from = max(d1, d2 - timedelta(days=360))  # evaluate: max 1 year per call
     n = _evaluate(counter, source, probe_from, d2)
     return max(1, min(n or 10, max_chunk))
@@ -282,6 +310,7 @@ def _create_logrequest(counter: int, source: str, c1: date, c2: date):
     if r.status_code in (200, 201):
         return r.json()["log_request"]["request_id"]
     if r.status_code == 429 or r.status_code >= 500:
+        _is_quota_429(r)
         print(f"   create {r.status_code} (лимит/сбой API) — повторю позже")
         return "retry"
     print(f"   create FAILED {r.status_code}: {r.text[:200]}")
@@ -509,7 +538,7 @@ def sync_rotate(targets, d1: date, d2: date, chunk: int | None = None,
                 max_chunk: int = 30, parallel: int | None = None,
                 sources=("visits", "hits"), force: bool = True,
                 timeout_min: int = 40, poll_sec: int = 180,
-                collect_timeout_min: int = 15) -> None:
+                collect_timeout_min: int = 15, stop_on_quota: bool = False) -> None:
     """Download missing windows across many domains, one request per domain.
 
     Keeps one Logs API request in flight per domain — by default for *every*
@@ -528,6 +557,7 @@ def sync_rotate(targets, d1: date, d2: date, chunk: int | None = None,
     init_db()
     db = SessionLocal()
     parallel = parallel or len(targets)
+    _QUOTA["hit"] = False
     starts = _counter_start_dates() if not chunk else {}  # only needed for clipping
     queues: dict[str, deque] = {}
     meta: dict[str, tuple[int, int]] = {}  # label -> (site_id, counter)
@@ -566,7 +596,21 @@ def sync_rotate(targets, d1: date, d2: date, chunk: int | None = None,
 
         inflight: dict[int, dict] = {}
         done = imported = 0
+        quota_pause, quota_hits = 300, 0  # wait out the API-request quota
         while queues or inflight:
+            if _QUOTA["hit"]:  # account hit its API-request quota
+                _QUOTA["hit"] = False
+                quota_hits += 1
+                if stop_on_quota and quota_hits >= 2:
+                    # daily quota spent — stop now; the scheduled run resumes
+                    # tomorrow (gap-fill, so nothing downloaded so far is lost)
+                    print("Квота запросов Яндекса исчерпана — останавливаюсь, "
+                          "продолжу по расписанию (докачаю недостающее).", flush=True)
+                    break
+                print(f"Превышена квота запросов Яндекса — пауза {quota_pause // 60} мин, "
+                      f"потом продолжу (прогресс не теряется).", flush=True)
+                time.sleep(quota_pause)
+                continue
             busy = {v["label"] for v in inflight.values()}
             free = [lbl for lbl in queues if lbl not in busy]
             random.shuffle(free)
@@ -599,8 +643,12 @@ def sync_rotate(targets, d1: date, d2: date, chunk: int | None = None,
             time.sleep(poll_sec)
             for req_id, it in list(inflight.items()):
                 try:
-                    status = httpx.get(f"{it['base']}/{req_id}", headers=_headers(),
-                                       timeout=60).json()["log_request"].get("status")
+                    resp = httpx.get(f"{it['base']}/{req_id}", headers=_headers(), timeout=60)
+                    if resp.status_code != 200:
+                        _is_quota_429(resp)
+                        status = None
+                    else:
+                        status = resp.json()["log_request"].get("status")
                 except Exception:  # noqa: BLE001
                     status = None
                 age_min = (time.monotonic() - it["started"]) / 60.0
@@ -684,6 +732,8 @@ def main() -> None:
     ap.add_argument("--timeout-min", dest="timeout_min", type=int, default=40)
     ap.add_argument("--collect-timeout-min", dest="collect_timeout_min", type=int, default=15,
                     help="макс. время на скачивание+импорт одного окна, мин (по умолчанию 15)")
+    ap.add_argument("--stop-on-quota", dest="stop_on_quota", action="store_true",
+                    help="при исчерпании квоты API — выйти (для запуска по расписанию)")
     ap.add_argument("--counter", type=int)
     ap.add_argument("--site", type=int)
     ap.add_argument("--from", dest="d1")
@@ -728,7 +778,8 @@ def main() -> None:
         sync_rotate(targets, d1, d2, chunk=a.chunk, max_chunk=a.max_chunk,
                     parallel=a.parallel, sources=sources, force=a.force,
                     timeout_min=a.timeout_min, poll_sec=a.poll_sec,
-                    collect_timeout_min=a.collect_timeout_min)
+                    collect_timeout_min=a.collect_timeout_min,
+                    stop_on_quota=a.stop_on_quota)
         return
 
     if not (a.counter and a.site):

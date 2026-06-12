@@ -1,0 +1,19 @@
+[Unit]
+Description=Metrica Logs API sync (visits + hits, all domains) — one pass
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# One pass per timer tick. It exits when everything is downloaded OR when the
+# account's daily API-request quota is spent (--stop-on-quota); the timer then
+# re-runs it next morning, after the quota resets. Gap-fill (no --force) means a
+# resumed run only fetches what's still missing, so nothing is re-downloaded.
+Type=simple
+WorkingDirectory=/opt/seostat
+ExecStart=/opt/seostat/.venv/bin/python scripts/metrika_logs.py --sync-all --from 2025-06-01 --stop-on-quota
+Restart=no
+# adjust if the service runs under a non-root user / different path
+# User=seostat
+
+[Install]
+WantedBy=multi-user.target

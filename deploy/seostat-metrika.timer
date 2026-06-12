@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Metrica sync (resumes after the Yandex API request quota resets)
+
+[Timer]
+# Every day at 05:00 (server time) — safely after the quota's midnight reset.
+# Persistent=true runs a missed tick on next boot if the server was off.
+OnCalendar=*-*-* 05:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
