@@ -51,7 +51,7 @@ def text_flags(text):
     и буквой не срабатывает, ловим отдельно; (?<![a-z]) отсекает англ. 'off'/'staff'."""
     tl = " " + str(text).lower().replace("_","-") + " "
     ff  = 1 if re.search(r'(?<![a-z])ff\b|\dff\b', tl) else None
-    vsd = 1 if ("vsd" in tl or "частот" in tl) else None
+    vsd = 1 if ("vsd" in tl or "частот" in tl or re.search(r'\bvs\b', tl)) else None   # ET «VS PM»
     rv = None
     m = re.search(r'(?:ресивер\w*|resiver\w*|receiver\w*|\btm)[- ]?(\d{2,3})?\b', tl)
     if m: rv = num(m.group(1)) or 1

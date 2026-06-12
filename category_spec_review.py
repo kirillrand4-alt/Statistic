@@ -16,7 +16,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, PatternFill
 from collections import defaultdict, Counter
 from matcher import brand_of, BRAND_ALIASES, brand_from_text
-from spec_match import num, sane_bar, bar_value, flow_value, agree, agree_num
+from spec_match import num, sane_bar, bar_value, flow_value, agree, agree_num, is_compressor
 from atlas_need_specs import is_product_url, slug, dm, load_universe
 from brand_spec_review import gen_series, _styles, _hdr, COMPETITORS
 from scrape_files import U
@@ -40,7 +40,8 @@ CATS={
     anti=re.compile(r'фильтр|filtr|картридж|сервис|мембран\w+\s+для', re.I)),
 }
 def cat_of(text):
-    for ck,cfg in CATS.items():
+    if is_compressor(text): return None          # компрессор «с осушителем/на ресивере» = компрессор,
+    for ck,cfg in CATS.items():                  # а не товар-осушитель/ресивер (та же ловушка, что belt)
         if cfg["rx"].search(text) and not cfg["anti"].search(text): return ck
     return None
 

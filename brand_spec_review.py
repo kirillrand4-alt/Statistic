@@ -37,16 +37,33 @@ def gen_series(text, brand):
     s=re.sub(r"(?<=[a-zа-я])\.(?=\d)"," ",s)             # genesis i.18,5 -> i 18,5 (десятичные 18.5 целы)
     s=s.replace("-"," ").replace("/"," ")
     btoks={brand}|{a for a,c in BRAND_ALIASES.items() if c==brand}
-    for m in re.finditer(r"\b([a-zа-я]{2,12})(?:\s+([a-z]))?\s*(\d+(?:[.,]\d+)?)", s):
+    UNITS={"l","kw","hp","ph","db","v","w","bar","atm","psi","min","mm","kg"}
+    for m in re.finditer(r"\b([a-zа-я]{2,12})(?:\s+([a-z]))?\s*(\d+(?:[.,]\d+)?)"
+                         r"\s*([a-z]{1,4}(?![a-zа-я]))?(?:\s+([a-z]{1,4}(?![a-zа-я])))?(?!\d)", s):
         w=m.group(1)
         if w in _STOPW or w in btoks: continue
         # одиночная ЛАТИНСКАЯ буква между серией и числом = вариант линейки (GENESIS I = инвертор);
-        # кириллические одиночки (предлоги «с»/«и») игнорируются
-        return (w+(m.group(2) or ""), float(m.group(3).replace(",",".")))
+        # кириллические одиночки (предлоги «с»/«и») игнорируются.
+        # До ДВУХ латинских токенов ПОСЛЕ числа = вариант модели: Ozen OSC 110D/110U/110S,
+        # Ekomak DMD 100 C / CR / CRD / C STD — разные заводские sku (доказано V1-артикулами).
+        # Кириллицу (пВ у KraftMachine) не берём.
+        suf="".join(t for t in (m.group(4), m.group(5)) if t and t not in UNITS)
+        return (w+(m.group(2) or "")+suf, float(m.group(3).replace(",",".")))
     return None
 
 def ser_of(text, brand):
     return series_num(text) if brand=="atlas" else gen_series(text, brand)
+
+_DTAIL=re.compile(r'[\d\)лl]\s*[-–]?\s*([дd])\s*(?:\(.*)?$', re.I)   # «270L D», «500Д», «10Д (с осуш.)»
+_VSTAIL=re.compile(r'(?:\d|\))\s*(вс|bc)\s*$', re.I)                  # «ВК100Р-10ВС»
+def suffix_flags(name, brand, ff, rv):
+    """Хвостовые маркеры НЕ-Atlas брендов (у Atlas 'Dd'=дизель, не трогаем):
+    Д/D после числа/л = осушитель; ВС = воздухосборник (ресивер упомянут)."""
+    if brand=="atlas": return ff, rv
+    nm=str(name).strip()
+    if ff is None and (_DTAIL.search(nm) or "с осушителем" in nm.lower()): ff=1
+    if rv is None and _VSTAIL.search(nm): rv=1
+    return ff, rv
 
 def oil_of(v):
     s=str(v).strip().lower()
@@ -81,21 +98,25 @@ def load_ours_all():
         sn=ser_of(name+" "+code, b)
         if not sn: continue
         ff,vsd,rv = text_flags(name+" "+code)
+        ff,rv = suffix_flags(name, b, ff, rv)
         if rv is None:
             if num(r.get("IP_PROP22564")): rv=num(r.get("IP_PROP22564"))
             elif str(r.get("IP_PROP22574","")).strip().lower() in ("да","есть"): rv=1
         fl = flow_value(r.get("IP_PROP22571"), "л/мин") or flow_value(r.get("IP_PROP22658"), "м3/мин")
         nm,url,p = price.get(code.lower(), (name, f"https://prokompressor.ru/catalog/{code}/", None))
+        wev=num(r.get("IP_PROP22555")); drv=(r.get("IP_PROP22601") or "").strip().lower() or None
+        if drv: drv="ремен" if "ремен" in drv else ("прямой" if "прям" in drv else None)
         ours[b].append(dict(sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
                             bar=bar_value(r.get("IP_PROP22573")) or bar_from_text(name+" "+code),
                             fl=fl, oil=oil_of(r.get("IP_PROP22583")), ff=ff, vsd=vsd, rv=rv,
-                            name=nm or name, url=url, price=p))
+                            name=nm or name, url=url, price=p,
+                            we=(wev if wev and 1<=wev<=50000 else None), dr=drv))
     return ours
 
 # --- конкуренты по брендам ----------------------------------------------------------------
 def load_comp_all():
     names, specs, _ = load_universe()
-    price={}; status={}
+    price={}; status={}; skus={}
     import scrape_files
     for f in scrape_files.SCRAPE_FILES:
         try: fh=open(f, encoding="utf-8-sig", errors="replace")
@@ -103,6 +124,8 @@ def load_comp_all():
         for r in csv.DictReader(fh):
             u=(r.get("product_url") or "").strip()
             if not u: continue
+            sk=(r.get("sku") or "").strip()
+            if sk: skus[u]=sk
             try:
                 v=float(str(r.get("price","")).replace(",",".").replace(" ",""))
                 if 100<=v<=50_000_000: price[u]=v   # санити: артикулы в поле цены (99 млрд) и копейки — мимо
@@ -127,6 +150,17 @@ def load_comp_all():
             if raw_flow is None and "произв" in kl: raw_flow=v; fkey=kl
             if oil is None and "безмасл" in kl: oil=oil_of(v)
         ff,vsd,rv = text_flags(nm) if nm else text_flags(slug(u))
+        ff,rv = suffix_flags(nm or slug(u), b, ff, rv)
+        we=dr=sku2=None
+        for k,v in d.items():
+            kl=k.lower()
+            if we is None and ("вес" in kl or "масса" in kl) and "кг" not in str(v).lower()[:0]:
+                n=num(v)
+                if n and 1<=n<=50000: we=n
+            if dr is None and "привод" in kl:
+                vl=str(v).lower()
+                dr="ремен" if "ремен" in vl else ("прямой" if "прям" in vl else None)
+            if sku2 is None and "артикул" in kl: sku2=str(v).strip()
         srv=None
         for k,v in d.items():
             if "ресивер" in k.lower():
@@ -143,7 +177,8 @@ def load_comp_all():
             cp=price.get(u) if (len(pairs)==1 or i==0) else None
             cands[b].append(dict(sn=sn, kw=kw, bar=bar or bar_from_text(text), fl=fl, oil=oil,
                                  ff=ff, vsd=vsd, rv=rv, name=nm or slug(u), url=u, site=dm(u),
-                                 price=cp, status=status.get(u,"")))
+                                 price=cp, status=status.get(u,""),
+                                 we=we, dr=dr, sku=skus.get(u) or sku2))
     return cands
 
 # --- стили --------------------------------------------------------------------------------
