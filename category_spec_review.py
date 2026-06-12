@@ -253,9 +253,10 @@ def build():
                 if cur is None or (c["price"] and (not cur["price"] or c["price"]<cur["price"])): per[c["site"]][k]=c
             if not per: n0+=1; continue
             (ambig if any(len(v)>1 for v in per.values()) else clean).append((b,o,per))
-        SPEC={"osushiteli":lambda x:f"{(x.get('typ') or '')} {x.get('fl') or '—'}л/мин {x.get('bar') or '—'}бар тр{x.get('dp') if x.get('dp') is not None else '—'}",
+        rnd=lambda v: round(v) if v else "—"
+        SPEC={"osushiteli":lambda x:f"{(x.get('typ') or '')} {rnd(x.get('fl'))}л/мин {x.get('bar') or '—'}бар тр{x.get('dp') if x.get('dp') is not None else '—'}",
               "resivery":lambda x:f"{x.get('vol') or '—'}л {x.get('bar') or '—'}бар {(x.get('ori') or '')}",
-              "azot":lambda x:f"{x.get('fl') or '—'}л/мин {x.get('pur') or '—'}% {x.get('bar') or '—'}бар"}[ck]
+              "azot":lambda x:f"{rnd(x.get('fl'))}л/мин {x.get('pur') or '—'}% {x.get('bar') or '—'}бар"}[ck]
         for tname,rows in (("спек-матч",clean),("неоднозначные",ambig)):
             ws=wb.create_sheet(tname)
             HDR=["№","Бренд","Наш товар","Наши хар-ки","Ваша цена"]+COMPETITORS+["min конк.","Δ %","Проверить карточку"]
@@ -293,11 +294,18 @@ def build():
             ws.freeze_panes="D2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
         # GAP
         our_sn={(b,o["sn"]) for b,o in allours}
+        def gap_key(b,c):
+            if ck=="azot":   # серии азотников — шумные модельные коды (Xeleron YQD-1400N…):
+                # группируем по ФИЗИКЕ, иначе каждая карточка уникальна и GAP пуст
+                # бар НЕ в ключе: половина сайтов его не публикует (None рвал группы)
+                fl=c.get("fl"); 
+                return (b, (round(fl/25)*25 if fl else None, c.get("pur")))
+            return (b, pkey(ck,c))
         groups=defaultdict(lambda: defaultdict(list))
         for b,lst in C.items():
             for c in lst:
                 if (b,c["sn"]) in our_sn: continue
-                groups[(b,pkey(ck,c))][c["site"]].append(c)
+                groups[gap_key(b,c)][c["site"]].append(c)
         gap=[(g,s) for g,s in groups.items() if len(s)>=2]
         gap.sort(key=lambda t:-len(t[1]))
         ws=wb.create_sheet("GAP — нет у нас")
