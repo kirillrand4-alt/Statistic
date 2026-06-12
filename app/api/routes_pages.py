@@ -589,6 +589,37 @@ def ui_indexing_capture(site_id: int = Form(...), db: Session = Depends(get_db))
     )
 
 
+def _same_domain_site_ids(db: Session, site: Site) -> tuple[list[int], str]:
+    """All site_ids of the same bare domain (any source) + that domain. Metrica
+    rows live under whichever twin holds them, so 404/visit queries span them."""
+    d = domain_of(site.property_uri)
+    ids = [sid for sid, uri in db.execute(select(Site.id, Site.property_uri)).all()
+           if d and domain_of(uri) == d] or [site.id]
+    return ids, d
+
+
+@router.get("/errors")
+def errors_page(request: Request, site_id: int | None = None, start: str | None = None,
+                end: str | None = None, markers: str | None = None,
+                db: Session = Depends(get_db)):
+    from app.services import not_found
+
+    sites = _sites(db)
+    site = _resolve_site(db, site_id)
+    dr = parse_date_range(start, end)
+    stats, domain = None, None
+    if site is not None:
+        ids, domain = _same_domain_site_ids(db, site)
+        stats = not_found.not_found_stats(db, ids, dr, markers, site_domain=domain)
+    return templates.TemplateResponse(
+        request,
+        "errors.html",
+        {"request": request, "sites": sites, "site": site, "range": dr,
+         "domain": domain, "stats": stats,
+         "markers": markers if markers is not None else ", ".join(not_found.DEFAULT_MARKERS)},
+    )
+
+
 @router.get("/metrika")
 def metrika_page(request: Request, site_id: int | None = None, start: str | None = None,
                  end: str | None = None, msg: str | None = None, db: Session = Depends(get_db)):

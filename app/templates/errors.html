@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Ошибки 404 · SEO Статистика{% endblock %}
+{% block content %}
+<h2>Ошибки 404 — «страница не найдена»</h2>
+
+{% if not sites %}<article><p>Сначала добавьте сайт.</p></article>{% else %}
+<form method="get" action="{{ base_path }}/errors" class="grid">
+  <label>Сайт
+    <select name="site_id" onchange="this.form.submit()">
+      {% for s in sites %}<option value="{{ s.id }}" {% if site and s.id==site.id %}selected{% endif %}>{{ s.source.code|srclabel }} · {{ s.display_name or s.property_uri }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>С <input type="date" name="start" value="{{ range.start }}"></label>
+  <label>По <input type="date" name="end" value="{{ range.end }}"></label>
+  <label>Маркеры в заголовке <input type="text" name="markers" value="{{ markers }}" title="через запятую; по ним опознаём страницу 404 в заголовке"></label>
+  <label>&nbsp;<button type="submit">Показать</button></label>
+</form>
+<small>Источник — хиты Яндекс.Метрики: считаем просмотры страниц, у которых
+заголовок содержит один из маркеров (страница 404 со счётчиком Метрики даёт
+такой просмотр). Обновляется автоматически по мере загрузки данных. Канал
+(реклама / поиск / прямые) берём из источника перехода Метрики.</small>
+
+{% if stats is none %}
+  <article><p>Выберите сайт.</p></article>
+{% elif not stats.total %}
+  <article><p>За период страниц с маркерами 404 не найдено. Проверьте период,
+  список маркеров или то, что на странице 404 стоит счётчик Метрики и качаются
+  хиты этого домена.</p></article>
+{% else %}
+
+<div class="grid">
+  <article><hgroup><h3>{{ stats.total|numfmt }}</h3><p>Открытий 404</p></hgroup></article>
+  <article><hgroup><h3>{{ stats.unique_urls|numfmt }}</h3><p>Несуществующих URL</p></hgroup></article>
+  <article><hgroup><h3>{{ stats.ad|numfmt }}</h3><p>Из рекламы</p></hgroup></article>
+  <article><hgroup><h3>{{ stats.from_internal|numfmt }}</h3><p>С внутренних ссылок</p></hgroup></article>
+</div>
+
+<article>
+  <header>Динамика 404 по дням</header>
+  {% if stats.daily %}<canvas id="trend404" height="90"></canvas>{% else %}
+  <p><small>Нет данных за период.</small></p>{% endif %}
+</article>
+
+<div class="grid">
+  <article>
+    <header>По каналам перехода</header>
+    <table class="sortable"><thead><tr><th>Канал</th><th>Открытий 404</th><th>Доля</th></tr></thead>
+      <tbody>{% for r in stats.by_channel %}<tr><td>{{ r.key }}</td><td>{{ r.count|numfmt }}</td>
+        <td>{{ (100 * r.count / stats.total)|round(1) }}%</td></tr>{% endfor %}</tbody></table>
+  </article>
+  <article>
+    <header>Откуда пришли (реферер)</header>
+    <table><tbody>
+      <tr><td>🔗 С этого же сайта (внутренние битые ссылки)</td><td><strong>{{ stats.from_internal|numfmt }}</strong></td></tr>
+      <tr><td>🌐 С других сайтов / поиска</td><td>{{ stats.from_external|numfmt }}</td></tr>
+      <tr><td>↳ Без реферера (прямые / закладки)</td><td>{{ stats.from_direct|numfmt }}</td></tr>
+    </tbody></table>
+    <small>Внутренние — самые важные: это битые ссылки на вашем же сайте.</small>
+  </article>
+</div>
+
+<article>
+  <header>Топ несуществующих URL (по числу открытий 404), с разбивкой по каналам</header>
+  <figure>
+  <table class="sortable">
+    <thead><tr><th>URL</th><th>Всего</th><th>Реклама</th><th>Поиск</th><th>Прямые</th><th>Прочее</th></tr></thead>
+    <tbody>
+    {% for p in stats.top_urls %}
+      <tr><td><small>{{ p.url or '—' }}</small></td><td>{{ p.count|numfmt }}</td>
+          <td>{{ p.ad|numfmt }}</td><td>{{ p.search|numfmt }}</td>
+          <td>{{ p.direct|numfmt }}</td><td>{{ p.other|numfmt }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </figure>
+</article>
+
+<article>
+  <header>Топ рефереров (откуда ведут битые ссылки)</header>
+  <figure>
+  <table class="sortable">
+    <thead><tr><th>Реферер</th><th>Тип</th><th>Открытий 404</th></tr></thead>
+    <tbody>
+    {% for r in stats.top_referers %}
+      <tr><td><small>{{ r.referer }}</small></td>
+          <td>{% if r.kind == 'internal' %}<mark>внутренний</mark>{% elif r.kind == 'external' %}внешний{% else %}—{% endif %}</td>
+          <td>{{ r.count|numfmt }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </figure>
+</article>
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if stats and stats.daily %}
+<script>
+  const d404 = {{ stats.daily|tojson }};
+  new Chart(document.getElementById('trend404'), {
+    type: 'line',
+    data: {
+      labels: d404.map(d => d.date),
+      datasets: [{label: 'Открытий 404', data: d404.map(d => d.count),
+                  borderColor: '#d93526', backgroundColor: 'rgba(217,53,38,.1)', fill: true, tension: .3}]
+    },
+    options: {interaction: {mode: 'index', intersect: false},
+              scales: {y: {beginAtZero: true, title: {display: true, text: 'Открытий 404'}}}}
+  });
+</script>
+{% endif %}
+{% endblock %}
