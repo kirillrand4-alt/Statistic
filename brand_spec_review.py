@@ -43,17 +43,31 @@ def gen_series(text, brand):
     s=s.replace("-"," ").replace("/"," ")
     btoks={brand}|{a for a,c in BRAND_ALIASES.items() if c==brand}
     UNITS={"l","kw","hp","ph","db","v","w","bar","atm","psi","min","mm","kg"}
-    for m in re.finditer(r"\b([a-zа-я]{2,12})(?:\s+([a-z]))?\s*(\d+(?:[.,]\d+)?)"
+    for m in re.finditer(r"\b([a-zа-я]{2,12})(\+?)(?:\s+([a-z]))?\s*(\d+(?:[.,]\d+)?)"
                          r"\s*([a-z]{1,4}(?![a-zа-я]))?(?:\s+([a-z]{1,4}(?![a-zа-я])))?(?!\d)", s):
         w=m.group(1)
-        if w in _STOPW or w in btoks: continue
+        # «plus» сразу после бренда перед числом = РЕАЛЬНАЯ серия (Fini PLUS 11-08), не маркетинг.
+        # В «VEGA 11 R PLUS» серией становится vega (раньше в строке) — plus туда не попадёт.
+        if (w in _STOPW and w!="plus") or w in btoks: continue
         # одиночная ЛАТИНСКАЯ буква между серией и числом = вариант линейки (GENESIS I = инвертор);
         # кириллические одиночки (предлоги «с»/«и») игнорируются.
+        # «+» приклеенный к числу (ARIACOM HCA+110) = часть имени серии (HCA+ ≠ HCA), пишется
+        # одинаково с обеих сторон — раньше валил извлечение (попадал в «серия не извлекается»).
         # До ДВУХ латинских токенов ПОСЛЕ числа = вариант модели: Ozen OSC 110D/110U/110S,
         # Ekomak DMD 100 C / CR / CRD / C STD — разные заводские sku (доказано V1-артикулами).
         # Кириллицу (пВ у KraftMachine) не берём. «plus»/маркетинг — стоп-слова везде.
-        suf="".join(t for t in (m.group(4), m.group(5)) if t and t not in UNITS and t not in _STOPW)
-        return ((w+(m.group(2) or "")+suf).translate(_CYR2LAT), float(m.group(3).replace(",",".")))
+        suf="".join(t for t in (m.group(5), m.group(6)) if t and t not in UNITS and t not in _STOPW)
+        return ((w+m.group(2)+(m.group(3) or "")+suf).translate(_CYR2LAT), float(m.group(4).replace(",",".")))
+    # FALLBACK: одно-буквенная серия (Atom А-11, Boge C 10, Comprag D-11, Dalgakiran F 11,
+    # IR R110). Срабатывает ТОЛЬКО если основной проход вернул None — старые извлечения не
+    # затрагиваются. Латиница всегда; кириллица — кроме предлогов/союзов.
+    _CYR_PREP={"с","и","в","у","о","к","я","на","до","от","по","за","не","со","из"}  # «а» = серия Atom
+    for m in re.finditer(r"\b([a-zа-я])\s*[- ]?\s*(\d+(?:[.,]\d+)?)"
+                         r"\s*([a-z]{1,4}(?![a-zа-я]))?(?!\d)", s):
+        w=m.group(1)
+        if w in btoks or (re.match(r"[а-я]", w) and w in _CYR_PREP): continue
+        suf=m.group(3) if (m.group(3) and m.group(3) not in UNITS and m.group(3) not in _STOPW) else ""
+        return ((w+suf).translate(_CYR2LAT), float(m.group(2).replace(",",".")))
     return None
 
 def ser_of(text, brand):
