@@ -1,6 +1,8 @@
 """Feature 3: total clicks/impressions — site-wide, per-page, and subset."""
 from __future__ import annotations
 
+from datetime import date
+
 from app.providers.base import DateRange
 from app.services.loaders import (
     agg_metrics,
@@ -10,6 +12,53 @@ from app.services.loaders import (
     project_page_ids,
     totals_from_df,
 )
+
+
+def bucket_label(d: date, gran: str) -> str:
+    """Chronologically-sortable bucket label for a date: the day itself, the
+    week's Monday, or YYYY-MM."""
+    if gran == "week":
+        y, w, _ = d.isocalendar()
+        return date.fromisocalendar(y, w, 1).isoformat()
+    if gran == "month":
+        return f"{d.year:04d}-{d.month:02d}"
+    return d.isoformat()
+
+
+def bucket_series(daily: list[dict], gran: str, agg: str = "sum") -> list[dict]:
+    """Roll a daily series up to week/month. ``agg='sum'`` for flows (clicks,
+    impressions, event counts) — ctr/position are recomputed (impression-
+    weighted); ``agg='last'`` for stocks (e.g. pages-in-index) keeps the last
+    snapshot of each bucket. ``gran='day'`` (or empty input) returns it as-is."""
+    if gran not in ("week", "month") or not daily:
+        return daily
+    order: list[str] = []
+    buckets: dict[str, dict] = {}
+    for r in daily:
+        label = bucket_label(date.fromisoformat(r["date"]), gran)
+        if label not in buckets:
+            buckets[label] = {"date": label, "_pw": 0.0} if agg == "sum" else None
+            order.append(label)
+        if agg == "last":  # later rows win (input is date-ascending)
+            buckets[label] = {**r, "date": label}
+            continue
+        b = buckets[label]
+        for f, v in r.items():
+            if f != "date" and f not in ("ctr", "position"):
+                b[f] = b.get(f, 0) + v
+        if "position" in r and "impressions" in r:
+            b["_pw"] += r["position"] * r["impressions"]
+    out = []
+    for label in order:
+        b = buckets[label]
+        if agg == "sum":
+            pw = b.pop("_pw", 0.0)
+            if "clicks" in b and "impressions" in b:
+                im = b["impressions"]
+                b["ctr"] = (b["clicks"] / im) if im else 0.0
+                b["position"] = (pw / im) if im else 0.0
+        out.append(b)
+    return out
 
 
 def site_totals(db, site_id, dr: DateRange) -> dict:

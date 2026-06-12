@@ -122,7 +122,7 @@ def dashboard(request: Request, domain: str | None = None,
               engines: list[str] | None = Query(None), start: str | None = None,
               end: str | None = None, msg: str | None = None, clean: int = 0,
               ratio: float = 10.0, min_impr: int = 100, devices: int = 0,
-              db: Session = Depends(get_db)):
+              gran: str = "day", db: Session = Depends(get_db)):
     domains = _domains(db)
     cur = domain if domain and any(d["domain"] == domain for d in domains) \
         else (domains[0]["domain"] if domains else None)
@@ -131,7 +131,7 @@ def dashboard(request: Request, domain: str | None = None,
     dr = parse_date_range(start, end)
     ctx = {
         "request": request, "msg": msg, "domains": domains, "cur_domain": cur,
-        "engines": sel, "range": dr,
+        "engines": sel, "range": dr, "gran": gran,
         "projects": db.execute(select(Project).order_by(Project.id)).scalars().all(),
         "clean": bool(clean), "ratio": ratio, "min_impr": min_impr, "devices": bool(devices),
         "totals": None, "daily": [], "top_pages": [], "export_sites": [], "site_ids": [],
@@ -147,7 +147,8 @@ def dashboard(request: Request, domain: str | None = None,
         ctx["export_sites"] = [{"id": sid, "label": labels.get(code, code)}
                                for code, ids in engine_ids.items() for sid in ids]
         ctx["site_ids"] = [s["id"] for s in ctx["export_sites"]]
-        ctx["daily"] = totals_svc.combine_daily([totals_svc.site_daily(db, ids, dr) for ids in parts])
+        daily = totals_svc.combine_daily([totals_svc.site_daily(db, ids, dr) for ids in parts])
+        ctx["daily"] = totals_svc.bucket_series(daily, gran)
         if devices:
             ctx["top_pages"] = totals_svc.combine_pages_devices(
                 [totals_svc.per_page_with_devices(db, ids, dr) for ids in parts])
@@ -517,7 +518,7 @@ def compare_page(request: Request, site_id: int | None = None, metric: str = "cl
     )
 
 
-def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None):
+def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None, gran="day"):
     from app.services import indexing
 
     sites = _sites(db)
@@ -526,7 +527,8 @@ def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None):
     if site is not None:
         can_capture = indexing.supports(site)
         snapshots = indexing.list_snapshots(db, site.id)
-        history = indexing.count_history(db, site)
+        # index size is a STOCK, not a flow — roll up by last snapshot per bucket
+        history = totals_svc.bucket_series(indexing.count_history(db, site), gran, agg="last")
         dates = [s["date"] for s in snapshots]
         da = a or (dates[0] if dates else None)
         db_ = b or (dates[1] if len(dates) > 1 else None)
@@ -536,15 +538,16 @@ def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None):
     return {
         "request": request, "msg": msg, "sites": sites, "site": site,
         "snapshots": snapshots, "history": history, "cmp": cmp,
-        "a": a, "b": b, "can_capture": can_capture, "check": check,
+        "a": a, "b": b, "can_capture": can_capture, "check": check, "gran": gran,
     }
 
 
 @router.get("/indexing")
 def indexing_page(request: Request, site_id: int | None = None, a: str | None = None,
-                  b: str | None = None, msg: str | None = None, db: Session = Depends(get_db)):
+                  b: str | None = None, msg: str | None = None, gran: str = "day",
+                  db: Session = Depends(get_db)):
     return templates.TemplateResponse(
-        request, "indexing.html", _indexing_ctx(db, request, site_id, a, b, msg)
+        request, "indexing.html", _indexing_ctx(db, request, site_id, a, b, msg, gran=gran)
     )
 
 
@@ -648,7 +651,7 @@ def _same_domain_site_ids(db: Session, site: Site) -> tuple[list[int], str]:
 
 @router.get("/errors")
 def errors_page(request: Request, site_id: str | None = None, start: str | None = None,
-                end: str | None = None, markers: str | None = None,
+                end: str | None = None, markers: str | None = None, gran: str = "day",
                 db: Session = Depends(get_db)):
     from app.services import not_found
 
@@ -656,15 +659,15 @@ def errors_page(request: Request, site_id: str | None = None, start: str | None 
     dr = parse_date_range(start, end)
     sid = int(site_id) if site_id else None  # "" / None -> overview of all domains
     site = db.get(Site, sid) if sid else None
-    ctx = {"request": request, "sites": sites, "site": site, "range": dr,
+    ctx = {"request": request, "sites": sites, "site": site, "range": dr, "gran": gran,
            "stats": None, "overview": None, "domain": None,
            "markers": markers if markers is not None else ", ".join(not_found.DEFAULT_MARKERS)}
     if site is not None:  # detailed view for one domain
         ids, domain = _same_domain_site_ids(db, site)
         ctx["domain"] = domain
-        ctx["stats"] = not_found.not_found_stats(db, ids, dr, markers, site_domain=domain)
-    else:  # overview: a chart per domain that has any 404, last-day vs previous
-        ctx["overview"] = not_found.not_found_overview(db, dr, markers)
+        ctx["stats"] = not_found.not_found_stats(db, ids, dr, markers, site_domain=domain, gran=gran)
+    else:  # overview: a chart per domain that has any 404, last bucket vs previous
+        ctx["overview"] = not_found.not_found_overview(db, dr, markers, gran=gran)
     return templates.TemplateResponse(request, "errors.html", ctx)
 
 

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/site_selector.html" import gran_select %}
 {% block title %}Ошибки 404 · SEO Статистика{% endblock %}
 {% block content %}
 <h2>Ошибки 404 — «страница не найдена»</h2>
@@ -13,6 +14,7 @@
   </label>
   <label>С <input type="date" name="start" value="{{ range.start }}"></label>
   <label>По <input type="date" name="end" value="{{ range.end }}"></label>
+  {{ gran_select(gran) }}
   <label>Маркеры в заголовке <input type="text" name="markers" value="{{ markers }}" title="через запятую; по ним опознаём страницу 404 в заголовке"></label>
   <label>&nbsp;<button type="submit">Показать</button></label>
 </form>
@@ -29,9 +31,11 @@
     <article><p>Ни по одному домену за период страниц с маркерами 404 не найдено.
     Проверьте период/маркеры и что качаются хиты (страница 404 должна нести счётчик Метрики).</p></article>
   {% else %}
-  <p><small>По каждому домену с 404 — динамика за период; справа число за
-  последний день с данными и изменение к предыдущему дню. Рост 404 —
-  <span style="color:#d93526">красным</span>. Клик по домену — подробный разбор.</small></p>
+  <p><small>По каждому домену с 404 — динамика за период
+  ({% if gran == 'week' %}по неделям{% elif gran == 'month' %}по месяцам{% else %}по дням{% endif %});
+  справа число за последний {% if gran == 'week' %}неделю{% elif gran == 'month' %}месяц{% else %}день{% endif %}
+  с данными и изменение к предыдущему. Рост 404 — <span style="color:#d93526">красным</span>.
+  Клик по домену — подробный разбор.</small></p>
   {% for d in overview %}
   <article>
     <div style="display:flex; align-items:center; gap:1.2rem; flex-wrap:wrap;">
@@ -52,7 +56,7 @@
             {% else %}<strong>0%</strong>{% endif %}
           {% else %}<strong style="color:#d93526">▲ новые</strong>{% endif %}
         </p>
-        <small>{% if d.prev_date %}к {{ d.prev_date }} ({{ d.prev|numfmt }}){% else %}нет предыдущего дня{% endif %}</small>
+        <small>{% if d.prev_date %}к {{ d.prev_date }} ({{ d.prev|numfmt }}){% else %}нет предыдущего периода{% endif %}</small>
       </div>
     </div>
   </article>
@@ -74,7 +78,7 @@
 </div>
 
 <article>
-  <header>Динамика 404 по дням</header>
+  <header>Динамика 404 {% if gran == 'week' %}по неделям{% elif gran == 'month' %}по месяцам{% else %}по дням{% endif %}</header>
   {% if stats.daily %}<canvas id="trend404" height="90"></canvas>{% else %}
   <p><small>Нет данных за период.</small></p>{% endif %}
 </article>
@@ -143,7 +147,7 @@
       type: 'line',
       data: {labels: d.daily.map(x => x.date),
              datasets: [{data: d.daily.map(x => x.count), borderColor: '#d93526',
-                         backgroundColor: 'rgba(217,53,38,.1)', fill: true, tension: .3,
+                         backgroundColor: 'rgba(217,53,38,.1)', fill: true, tension: 0,
                          pointRadius: 0}]},
       options: {plugins: {legend: {display: false}},
                 interaction: {mode: 'index', intersect: false},
@@ -159,7 +163,7 @@
     data: {
       labels: d404.map(d => d.date),
       datasets: [{label: 'Открытий 404', data: d404.map(d => d.count),
-                  borderColor: '#d93526', backgroundColor: 'rgba(217,53,38,.1)', fill: true, tension: .3}]
+                  borderColor: '#d93526', backgroundColor: 'rgba(217,53,38,.1)', fill: true, tension: 0}]
     },
     options: {interaction: {mode: 'index', intersect: false},
               scales: {y: {beginAtZero: true, title: {display: true, text: 'Открытий 404'}}}}

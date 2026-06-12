@@ -95,6 +95,28 @@ def test_dashboard_picks_domain_and_merges(client, db):
     assert "склеены" in r.text              # the auto-merge note
 
 
+def test_bucket_series_week_month_and_last_snapshot():
+    daily = [  # 2026-06-01 is a Monday; 06-01/06-02 same ISO week, 06-08 next
+        {"date": "2026-06-01", "clicks": 1, "impressions": 10, "ctr": 0.1, "position": 4.0},
+        {"date": "2026-06-02", "clicks": 2, "impressions": 20, "ctr": 0.1, "position": 6.0},
+        {"date": "2026-06-08", "clicks": 3, "impressions": 30, "ctr": 0.1, "position": 5.0},
+    ]
+    wk = T.bucket_series(daily, "week")
+    assert [w["date"] for w in wk] == ["2026-06-01", "2026-06-08"]
+    assert wk[0]["clicks"] == 3 and wk[0]["impressions"] == 30
+    assert round(wk[0]["position"], 3) == round((4 * 10 + 6 * 20) / 30, 3)  # impression-weighted
+
+    mo = T.bucket_series(daily, "month")
+    assert len(mo) == 1 and mo[0]["date"] == "2026-06" and mo[0]["clicks"] == 6
+
+    assert T.bucket_series(daily, "day") == daily  # unchanged
+
+    snaps = [{"date": "2026-06-01", "count": 100}, {"date": "2026-06-02", "count": 130},
+             {"date": "2026-06-08", "count": 90}]
+    last = T.bucket_series(snaps, "week", agg="last")  # stock -> last of each bucket
+    assert [s["count"] for s in last] == [130, 90]
+
+
 def test_combine_across_engines_sums():
     # within an engine the loaders take max on overlap; ACROSS engines we sum,
     # with impression-weighted position.

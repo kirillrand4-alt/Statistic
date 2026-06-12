@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "partials/site_selector.html" import picker %}
+{% from "partials/site_selector.html" import picker, gran_select %}
 {% block title %}Дашборд · SEO Статистика{% endblock %}
 {% block content %}
 <h2>Дашборд</h2>
@@ -16,6 +16,7 @@
   {{ picker(domains, cur_domain, engines) }}
   <label>С <input type="date" name="start" value="{{ range.start }}"></label>
   <label>По <input type="date" name="end" value="{{ range.end }}"></label>
+  {{ gran_select(gran) }}
   <label><input type="checkbox" name="clean" value="1" {% if clean %}checked{% endif %} onchange="this.form.submit()"> Без ботов</label>
   <label><input type="checkbox" name="devices" value="1" {% if devices %}checked{% endif %} onchange="this.form.submit()"> Десктоп/моб отдельно</label>
   <label>&nbsp;<button type="submit">Показать</button></label>
@@ -33,7 +34,7 @@
 {% endif %}
 
 <article>
-  <header>Динамика по дням (весь сайт)</header>
+  <header>Динамика (весь домен){% if gran == 'week' %} — по неделям{% elif gran == 'month' %} — по месяцам{% else %} — по дням{% endif %}</header>
   {% if daily %}<canvas id="trend" height="90"></canvas>{% else %}
   <p><small>Нет данных за период. Запустите сбор статистики ниже.</small></p>{% endif %}
 </article>
@@ -109,8 +110,8 @@
     data: {
       labels: daily.map(d => d.date),
       datasets: [
-        {label: 'Клики', data: daily.map(d => d.clicks), borderColor: '#1095c1', yAxisID: 'y', tension: .3},
-        {label: 'Показы', data: daily.map(d => d.impressions), borderColor: '#d93526', yAxisID: 'y1', tension: .3}
+        {label: 'Клики', data: daily.map(d => d.clicks), borderColor: '#1095c1', yAxisID: 'y', tension: 0},
+        {label: 'Показы', data: daily.map(d => d.impressions), borderColor: '#d93526', yAxisID: 'y1', tension: 0}
       ]
     },
     options: {

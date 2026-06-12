@@ -19,6 +19,7 @@ from sqlalchemy import distinct, func, or_, select
 
 from app.db.models import Hit, Site
 from app.providers.base import DateRange
+from app.services.totals import bucket_label, bucket_series
 from app.utils import domain_of
 
 # Substrings a 404 page <title> usually contains. Matched case-insensitively
@@ -65,14 +66,15 @@ def _ids(site_ids) -> list[int]:
     return [site_ids]
 
 
-def not_found_overview(db, dr: DateRange, markers_raw: str | None = None) -> list[dict]:
-    """One row per DOMAIN that has any 404 in ``dr``: daily series (for a chart),
-    plus the count on the LAST day with 404 data and the % change vs the previous
-    day with data (so it follows the data frontier — useful when the sync lags
-    and the calendar "yesterday" isn't downloaded yet).
+def not_found_overview(db, dr: DateRange, markers_raw: str | None = None,
+                       gran: str = "day") -> list[dict]:
+    """One row per DOMAIN that has any 404 in ``dr``: series at ``gran`` (day /
+    week / month, for a chart), plus the count on the LAST bucket with 404 data
+    and the % change vs the previous one (follows the data frontier — useful when
+    the sync lags and the calendar "yesterday" isn't downloaded yet).
 
     Domains are bare hosts, so a domain's same-host properties are summed. Sorted
-    by the last-day count (then period total), so the busiest 404s float up.
+    by the last-bucket count (then period total), so the busiest 404s float up.
     """
     markers = parse_markers(markers_raw)
     where = [Hit.date >= dr.start, Hit.date <= dr.end, Hit.is_page_view == 1,
@@ -103,17 +105,22 @@ def not_found_overview(db, dr: DateRange, markers_raw: str | None = None) -> lis
         daily = [{"date": (dr.start + timedelta(days=i)).isoformat(),
                   "count": daymap.get(dr.start + timedelta(days=i), 0)}
                  for i in range(span + 1)]
-        days = sorted(daymap)  # days that actually have 404, ascending
-        last_d = days[-1]
-        prev_d = days[-2] if len(days) > 1 else None
-        last = daymap[last_d]
-        prev = daymap[prev_d] if prev_d else 0
+        daily = bucket_series(daily, gran)  # chart series at the chosen granularity
+        # last vs previous BUCKET that actually has 404s
+        bmap: dict[str, int] = {}
+        for d, c in daymap.items():
+            lbl = bucket_label(d, gran)
+            bmap[lbl] = bmap.get(lbl, 0) + c
+        keys = sorted(bmap)
+        last_lbl = keys[-1]
+        prev_lbl = keys[-2] if len(keys) > 1 else None
+        last = bmap[last_lbl]
+        prev = bmap[prev_lbl] if prev_lbl else 0
         out.append({
             "domain": dom, "site_id": site_for_dom.get(dom), "daily": daily,
             "total": sum(daymap.values()),
             "last": last, "prev": prev,
-            "last_date": last_d.isoformat(),
-            "prev_date": prev_d.isoformat() if prev_d else None,
+            "last_date": last_lbl, "prev_date": prev_lbl,
             "delta_pct": ((last - prev) / prev * 100.0) if prev else None,
         })
     out.sort(key=lambda r: (r["last"], r["total"]), reverse=True)
@@ -121,7 +128,8 @@ def not_found_overview(db, dr: DateRange, markers_raw: str | None = None) -> lis
 
 
 def not_found_stats(db, site_ids, dr: DateRange, markers_raw: str | None = None,
-                    site_domain: str | None = None, top: int = 30) -> dict:
+                    site_domain: str | None = None, top: int = 30,
+                    gran: str = "day") -> dict:
     """404 pageviews over ``dr`` for the given site(s): totals, daily trend,
     channel split, top URLs (with ad/search/direct breakdown) and top referrers
     (internal vs external)."""
@@ -136,12 +144,12 @@ def not_found_stats(db, site_ids, dr: DateRange, markers_raw: str | None = None,
     if not total:
         return out
 
-    out["daily"] = [
+    out["daily"] = bucket_series([
         {"date": d.isoformat(), "count": int(c)}
         for d, c in db.execute(
             select(Hit.date, func.count()).where(*where).group_by(Hit.date).order_by(Hit.date)
         ).all() if d is not None
-    ]
+    ], gran)
 
     # --- by traffic channel (ad / search / direct / ...) ---------------------
     channels: dict[str, int] = {}

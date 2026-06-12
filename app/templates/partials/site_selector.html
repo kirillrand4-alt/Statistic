@@ -4,6 +4,16 @@
    icon, so the engine icons live on the checkboxes. #}
 {% macro engine_icon(code) %}{% if code == 'gsc' %}<svg viewBox="0 0 48 48" width="18" height="18" style="vertical-align:-4px"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.7 4.7-6.2 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.5 29.3 4.5 24 4.5 13.2 4.5 4.5 13.2 4.5 24S13.2 43.5 24 43.5 43.5 34.8 43.5 24c0-1.2-.1-2.3-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.5 29.3 4.5 24 4.5 16.3 4.5 9.7 8.9 6.3 14.7z"/><path fill="#4CAF50" d="M24 43.5c5.3 0 10-1.8 13.4-4.9l-6.2-5.2C29.3 34.7 26.8 35.5 24 35.5c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.6 39.1 16.2 43.5 24 43.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.1 5.6l6.2 5.2C39.9 36.6 43.5 31 43.5 24c0-1.2-.1-2.3-.4-3.5z"/></svg>{% else %}<svg viewBox="0 0 24 24" width="16" height="16" style="vertical-align:-3px"><rect width="24" height="24" rx="5" fill="#FC3F1D"/><text x="12" y="17.5" font-size="15" fill="#fff" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="700">Я</text></svg>{% endif %}{% endmacro %}
 
+{% macro gran_select(gran) %}
+<label>Группировка
+  <select name="gran" onchange="this.form.submit()">
+    <option value="day" {% if gran not in ('week','month') %}selected{% endif %}>по дням</option>
+    <option value="week" {% if gran == 'week' %}selected{% endif %}>по неделям</option>
+    <option value="month" {% if gran == 'month' %}selected{% endif %}>по месяцам</option>
+  </select>
+</label>
+{% endmacro %}
+
 {% macro picker(domains, cur_domain, engines) %}
 <label style="min-width:340px;">Домен
   <select name="domain" onchange="this.form.submit()">

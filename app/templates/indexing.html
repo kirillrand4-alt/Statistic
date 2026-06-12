@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/site_selector.html" import gran_select %}
 {% block title %}Индексация · SEO Статистика{% endblock %}
 {% block content %}
 <h2>Страницы в индексе</h2>
@@ -11,6 +12,7 @@
       {% for s in sites %}<option value="{{ s.id }}" {% if site and s.id==site.id %}selected{% endif %}>{{ s.source.code|srclabel }} · {{ s.display_name or s.property_uri }}</option>{% endfor %}
     </select>
   </label>
+  {{ gran_select(gran) }}
   <label>&nbsp;<button type="submit">Показать</button></label>
 </form>
 
@@ -131,7 +133,7 @@
   const h = {{ history|tojson }};
   new Chart(document.getElementById('idx'), {
     type: 'line',
-    data: {labels: h.map(p => p.date), datasets: [{label: 'Страниц в индексе', data: h.map(p => p.count), borderColor: '#1095c1', tension: .2, pointRadius: 0}]},
+    data: {labels: h.map(p => p.date), datasets: [{label: 'Страниц в индексе', data: h.map(p => p.count), borderColor: '#1095c1', tension: 0, pointRadius: 0}]},
     options: {plugins: {legend: {display: false}}}
   });
 </script>

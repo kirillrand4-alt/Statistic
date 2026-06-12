@@ -77,6 +77,11 @@ def test_full_flow(client):
     assert client.get(f"/metrika?site_id={site_id}").status_code == 200
     assert client.get(f"/errors?{qp}").status_code == 200            # overview
     assert client.get(f"/errors?site_id={site_id}&{qp}").status_code == 200  # detail
+    # time-granularity (day/week/month) renders on the trend pages
+    assert client.get("/?gran=week").status_code == 200
+    assert client.get(f"/?gran=month").status_code == 200
+    assert client.get("/errors?gran=week").status_code == 200
+    assert client.get(f"/indexing?site_id={site_id}&gran=month").status_code == 200
 
     # 9. two-engine project comparison (JSON, page, CSV export)
     r = client.get(f"/api/projects/{project_id}/compare?metric=clicks&a_start={start}&a_end={end}")
