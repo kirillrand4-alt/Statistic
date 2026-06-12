@@ -119,7 +119,8 @@ def _counter_start_dates() -> dict[int, date]:
 
 def _evaluate(counter: int, source: str, d1: date, d2: date) -> int | None:
     """Max days the Logs API will accept in ONE request for this counter/source/
-    period — Yandex sizes it from the estimated data volume. None if unknown."""
+    period — Yandex sizes it from the estimated data volume. None if unknown
+    (the first failure is logged once so a silent fallback is visible)."""
     try:
         r = httpx.get(
             f"{API}/management/v1/counter/{counter}/logrequests/evaluate",
@@ -128,12 +129,28 @@ def _evaluate(counter: int, source: str, d1: date, d2: date) -> int | None:
                     "fields": _fields_for(source), "source": source},
             timeout=60,
         )
-    except Exception:  # noqa: BLE001 — fall back to the fixed window
+    except Exception as exc:  # noqa: BLE001 — fall back to the default window
+        _eval_warn(f"сеть/таймаут ({exc.__class__.__name__})")
         return None
     if r.status_code != 200:
+        _eval_warn(f"HTTP {r.status_code}: {r.text[:160]}")
         return None
-    n = r.json().get("log_request_evaluation", {}).get("max_possible_day_quantity")
-    return int(n) if isinstance(n, int) and n > 0 else None
+    body = r.json()
+    n = body.get("log_request_evaluation", {}).get("max_possible_day_quantity")
+    if not (isinstance(n, int) and n > 0):
+        _eval_warn(f"нет max_possible_day_quantity: {str(body)[:160]}")
+        return None
+    return n
+
+
+def _eval_warn(why: str) -> None:
+    """Print the first ``evaluate`` failure once (then stay quiet)."""
+    if not _eval_warn.done:
+        print(f"   evaluate не сработал → окно по умолчанию. Причина: {why}", flush=True)
+        _eval_warn.done = True
+
+
+_eval_warn.done = False
 
 
 def _window_days(counter: int, source: str, d1: date, d2: date,
@@ -143,6 +160,9 @@ def _window_days(counter: int, source: str, d1: date, d2: date,
     if fixed:
         return fixed
     n = _evaluate(counter, source, d1, d2)
+    if n is None and (d2 - d1).days >= 90:
+        # a year+ range can be rejected outright — estimate from a recent 90 days
+        n = _evaluate(counter, source, d2 - timedelta(days=89), d2)
     return max(1, min(n or 10, max_chunk))
 
 
@@ -485,11 +505,13 @@ def sync_rotate(targets, d1: date, d2: date, chunk: int | None = None,
     meta: dict[str, tuple[int, int]] = {}  # label -> (site_id, counter)
     skipped = []
     try:
+        win_days: dict[str, int] = {}  # label -> chosen window (visits source), for the log
         for site_id, counter, label in targets:
             lo = max(d1, starts.get(counter, d1))  # don't ask before the counter existed
             items = deque()
             for source in sources:
                 days = _window_days(counter, source, lo, d2, chunk, max_chunk)
+                win_days.setdefault(label, days)
                 have = set() if force else _covered_dates(db, site_id, lo, d2, _MODEL[source])
                 for c1, c2 in _chunks(lo, d2, days, newest_first=True):
                     win = {c1 + timedelta(days=i) for i in range((c2 - c1).days + 1)}
@@ -508,6 +530,11 @@ def sync_rotate(targets, d1: date, d2: date, chunk: int | None = None,
               f"параллельно {parallel} · окно {window} (от новых к старым) · "
               f"период {d1}..{d2} · опрос раз в {poll_sec} с. · "
               f"таймаут {timeout_min} мин.", flush=True)
+        if not chunk:  # show the per-domain window the evaluate picked
+            shown = sorted((win_days[lbl], lbl) for lbl in queues)
+            sample = ", ".join(f"{lbl}={d}д" for d, lbl in shown[:14])
+            extra = f" … (+{len(shown) - 14})" if len(shown) > 14 else ""
+            print(f"Окна по доменам: {sample}{extra}", flush=True)
 
         inflight: dict[int, dict] = {}
         done = imported = 0

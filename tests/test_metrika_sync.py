@@ -200,7 +200,10 @@ class FakeHTTP:
         if url.endswith("/counters"):
             return _Resp({"counters": self.counters})
         if url.endswith("/evaluate"):
-            return _Resp({"log_request_evaluation": {"max_possible_day_quantity": self.eval_days}})
+            ed = self.eval_days
+            if callable(ed):  # size depends on the probed span
+                ed = ed(params["date1"], params["date2"])
+            return _Resp({"log_request_evaluation": {"max_possible_day_quantity": ed}})
         return _Resp({"log_request": {"status": self.status, "parts": [{"part_number": 0}]}})
 
     def stream(self, method, url, headers=None, timeout=None):
@@ -320,6 +323,29 @@ def test_sync_rotate_evaluate_capped_by_max_chunk(db, monkeypatch):
               - date.fromisoformat(fake.reqs[r]["date1"])).days + 1
              for r, _, _ in fake.created]
     assert max(spans) == 7 and len(fake.created) == 3  # 20 days / 7 -> 7+7+6
+
+
+def test_sync_rotate_evaluate_probes_recent_on_wide_range(db, monkeypatch):
+    """A year+ range that evaluate won't size falls back to probing a recent
+    ~90-day window instead of dropping to the default 10."""
+    sid = _mksite(db, "wide.ru")
+
+    def ev(d1, d2):  # the wide range returns nothing; a <=90-day probe gives 5
+        span = (date.fromisoformat(d2) - date.fromisoformat(d1)).days + 1
+        return None if span > 90 else 5
+
+    fake = FakeHTTP(status="processed", eval_days=ev, counters=[])
+    monkeypatch.setattr(M, "httpx", fake)
+    monkeypatch.setattr(M, "_token", lambda: "t")
+
+    M.sync_rotate([(sid, 1, "wide.ru")], date(2026, 1, 1), date(2026, 6, 20),
+                  chunk=None, max_chunk=30, sources=("visits",), force=True,
+                  timeout_min=999, poll_sec=0)
+
+    spans = [(date.fromisoformat(fake.reqs[r]["date2"])
+              - date.fromisoformat(fake.reqs[r]["date1"])).days + 1
+             for r, _, _ in fake.created]
+    assert spans and max(spans) == 5  # sized from the 90-day probe, not the default
 
 
 def test_sync_rotate_timeout_skips(db, monkeypatch):
