@@ -40,6 +40,9 @@ BRAND_ALIASES = {
     # конкурентские бренды, которых нет у prokompressor (на рассмотрение)
     "xeleron":"xeleron","gmp":"gmp","kaishan":"kaishan","denair":"denair","vortex":"vortex",
     "brestor":"brestor","baldor":"baldor","alup":"alup","compair":"compair",
+    # новые бренды из «тёмной материи» — есть у конкурентов, отсутствовали в алиасах
+    "mikropor":"mikropor","pneumatech":"pneumatech","rotair":"rotair",
+    "ats":"ats","friulair":"friulair",
 }
 
 # --- IP-рейтинг по умолчанию (шум). Остальные IP — сигнал ---

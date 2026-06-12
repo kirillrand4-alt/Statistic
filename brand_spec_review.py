@@ -30,6 +30,11 @@ _STOPW = {"компрессор","компрессора","компрессор�
     "ip","квт","kvt","kw","бар","bar","атм","atm","гц","hz","фаз","ph","шт","мм","кг","до","от",
     "для","с","на","и","в","quot","plus","vsd","ff","pack","silenced","unsilenced","trolley",
     "block","receiver","ресивер","resiver","tm","ас","wc","ac"}
+# Кириллица → латиница для product-кодов: наш каталог пишет ЕКО/КМ/ВК/АА (кириллица),
+# конкуренты — EKO/KM/VK/AA (латиница). Только «чистые» омофоны: в→v, н→n и визуальные
+# а/е/о/к/м/р/т/х. Исключены с→c/s (СБ=SB, неоднозначно) и буквы без аналога.
+_CYR2LAT = str.maketrans('аеокмртхвн', 'aeokmrtxvn')
+
 def gen_series(text, brand):
     s=" "+str(text).lower().replace("_"," ")+" "
     s=re.sub(r"\b(new|новый|новая|нов)\b"," ",s)         # маркетинг-слова не серия (COMARO MD NEW 55)
@@ -46,9 +51,9 @@ def gen_series(text, brand):
         # кириллические одиночки (предлоги «с»/«и») игнорируются.
         # До ДВУХ латинских токенов ПОСЛЕ числа = вариант модели: Ozen OSC 110D/110U/110S,
         # Ekomak DMD 100 C / CR / CRD / C STD — разные заводские sku (доказано V1-артикулами).
-        # Кириллицу (пВ у KraftMachine) не берём.
-        suf="".join(t for t in (m.group(4), m.group(5)) if t and t not in UNITS)
-        return (w+(m.group(2) or "")+suf, float(m.group(3).replace(",",".")))
+        # Кириллицу (пВ у KraftMachine) не берём. «plus»/маркетинг — стоп-слова везде.
+        suf="".join(t for t in (m.group(4), m.group(5)) if t and t not in UNITS and t not in _STOPW)
+        return ((w+(m.group(2) or "")+suf).translate(_CYR2LAT), float(m.group(3).replace(",",".")))
     return None
 
 def ser_of(text, brand):
