@@ -5,7 +5,7 @@ import secrets
 from datetime import date
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -57,66 +57,108 @@ def _same_domain_ids(db: Session, site: Site) -> list[int]:
     return ids or [site.id]
 
 
+# Search engines shown as pickable channels on the dashboard (Metrica is visits,
+# not search clicks, so it's excluded here).
+SEARCH_ENGINES = ("gsc", "yandex_webmaster")
+
+
+def _domains(db: Session) -> list[dict]:
+    """Distinct bare domains across GSC/Yandex sites + which engines each has.
+    https:// and sc-domain: of one domain collapse into a single entry."""
+    rows = db.execute(
+        select(Source.code, Site.property_uri).join(Site, Site.source_id == Source.id)
+    ).all()
+    m: dict[str, set] = {}
+    for code, uri in rows:
+        if code in SEARCH_ENGINES:
+            d = domain_of(uri)
+            if d:
+                m.setdefault(d, set()).add(code)
+    return [{"domain": d, "engines": sorted(m[d])} for d in sorted(m)]
+
+
+def _domain_engine_ids(db: Session, domain: str, engine_codes) -> dict[str, list[int]]:
+    """{engine_code: [site_ids]} for one domain — every same-host property of that
+    engine (so https:// + sc-domain: are merged downstream)."""
+    rows = db.execute(
+        select(Site.id, Site.property_uri, Source.code).join(Source, Site.source_id == Source.id)
+    ).all()
+    out: dict[str, list[int]] = {}
+    for sid, uri, code in rows:
+        if code in engine_codes and domain_of(uri) == domain:
+            out.setdefault(code, []).append(sid)
+    return out
+
+
+def _clean_combined(db, engine_ids, dr, ratio, min_impr) -> dict:
+    """Bot-cleaned totals: de-dup per-URL within an engine (max impressions),
+    then sum across engines."""
+    from app.services.antifraud import clean_values_by_url
+
+    by: dict[str, dict] = {}
+    for ids in engine_ids.values():
+        merged: dict[str, dict] = {}
+        for sid in ids:
+            for url, v in clean_values_by_url(
+                db, sid, dr, ratio_threshold=ratio, min_impressions=min_impr
+            ).items():
+                cur = merged.get(url)
+                if cur is None or v["impressions"] > cur["impressions"]:
+                    merged[url] = v
+        for url, v in merged.items():
+            b = by.setdefault(url, {"clicks": 0, "impressions": 0, "pw": 0.0})
+            b["clicks"] += v["clicks"]
+            b["impressions"] += v["impressions"]
+            b["pw"] += v["position"] * v["impressions"]
+    cl = sum(b["clicks"] for b in by.values())
+    im = sum(b["impressions"] for b in by.values())
+    pw = sum(b["pw"] for b in by.values())
+    return {"clicks": cl, "impressions": im, "ctr": (cl / im) if im else 0.0,
+            "position": (pw / im) if im else 0.0}
+
+
 @router.get("/")
-def dashboard(request: Request, site_id: int | None = None, start: str | None = None,
+def dashboard(request: Request, domain: str | None = None,
+              engines: list[str] | None = Query(None), start: str | None = None,
               end: str | None = None, msg: str | None = None, clean: int = 0,
-              ratio: float = 10.0, min_impr: int = 100, devices: int = 0, merge: int = 0,
+              ratio: float = 10.0, min_impr: int = 100, devices: int = 0,
               db: Session = Depends(get_db)):
-    sites = _sites(db)
-    site = _resolve_site(db, site_id)
+    domains = _domains(db)
+    cur = domain if domain and any(d["domain"] == domain for d in domains) \
+        else (domains[0]["domain"] if domains else None)
+    avail = next((d["engines"] for d in domains if d["domain"] == cur), [])
+    sel = [e for e in (engines or avail) if e in avail] or avail  # default: all the domain has
     dr = parse_date_range(start, end)
     ctx = {
-        "request": request,
-        "msg": msg,
-        "sites": sites,
-        "site": site,
+        "request": request, "msg": msg, "domains": domains, "cur_domain": cur,
+        "engines": sel, "range": dr,
         "projects": db.execute(select(Project).order_by(Project.id)).scalars().all(),
-        "range": dr,
-        "clean": bool(clean), "ratio": ratio, "min_impr": min_impr,
-        "devices": bool(devices), "merge": bool(merge), "merged": None,
-        "totals": None,
-        "daily": [],
-        "top_pages": [],
+        "clean": bool(clean), "ratio": ratio, "min_impr": min_impr, "devices": bool(devices),
+        "totals": None, "daily": [], "top_pages": [], "export_sites": [], "site_ids": [],
         "runs": db.execute(
             select(CollectionRun).order_by(CollectionRun.started_at.desc()).limit(10)
         ).scalars().all(),
         "gsc_site_url": get_settings().gsc_site_url,
     }
-    if site is not None:
-        ids = site.id
-        if merge:
-            mids = _same_domain_ids(db, site)
-            if len(mids) > 1:
-                ids = mids
-                ctx["merged"] = {"count": len(mids), "domain": domain_of(site.property_uri)}
-        ctx["daily"] = totals_svc.site_daily(db, ids, dr)
+    if cur and sel:
+        engine_ids = _domain_engine_ids(db, cur, sel)  # {code: [site_ids]}
+        parts = list(engine_ids.values())
+        labels = {"gsc": "Google", "yandex_webmaster": "Яндекс"}
+        ctx["export_sites"] = [{"id": sid, "label": labels.get(code, code)}
+                               for code, ids in engine_ids.items() for sid in ids]
+        ctx["site_ids"] = [s["id"] for s in ctx["export_sites"]]
+        ctx["daily"] = totals_svc.combine_daily([totals_svc.site_daily(db, ids, dr) for ids in parts])
         if devices:
-            ctx["top_pages"] = totals_svc.per_page_with_devices(db, ids, dr)[:20]
+            ctx["top_pages"] = totals_svc.combine_pages_devices(
+                [totals_svc.per_page_with_devices(db, ids, dr) for ids in parts])
         else:
-            ctx["top_pages"] = totals_svc.per_page_totals(db, ids, dr)[:20]
+            ctx["top_pages"] = totals_svc.combine_pages(
+                [totals_svc.per_page_totals(db, ids, dr) for ids in parts])
         if clean:
-            from app.services.antifraud import clean_values_by_url
-            if isinstance(ids, list):
-                # merge cleaned per-URL values across properties (max impressions wins)
-                merged: dict[str, dict] = {}
-                for sid in ids:
-                    for url, v in clean_values_by_url(
-                        db, sid, dr, ratio_threshold=ratio, min_impressions=min_impr
-                    ).items():
-                        cur = merged.get(url)
-                        if cur is None or v["impressions"] > cur["impressions"]:
-                            merged[url] = v
-                vals = list(merged.values())
-            else:
-                vals = list(clean_values_by_url(
-                    db, site.id, dr, ratio_threshold=ratio, min_impressions=min_impr).values())
-            cl = sum(v["clicks"] for v in vals)
-            im = sum(v["impressions"] for v in vals)
-            pw = sum(v["position"] * v["impressions"] for v in vals)
-            ctx["totals"] = {"clicks": cl, "impressions": im,
-                             "ctr": (cl / im) if im else 0.0, "position": (pw / im) if im else 0.0}
+            ctx["totals"] = _clean_combined(db, engine_ids, dr, ratio, min_impr)
         else:
-            ctx["totals"] = totals_svc.site_totals(db, ids, dr)
+            ctx["totals"] = totals_svc.combine_totals(
+                [totals_svc.site_totals(db, ids, dr) for ids in parts])
     return templates.TemplateResponse(request, "dashboard.html", ctx)
 
 
@@ -169,17 +211,23 @@ async def ui_add_urls(project_id: int, urls_text: str | None = Form(None),
 
 
 @router.post("/ui/collect")
-def ui_collect(site_id: int = Form(...), db: Session = Depends(get_db)):
+def ui_collect(site_id: list[int] = Form(...), domain: str = Form(""),
+               engines: list[str] = Form([]), db: Session = Depends(get_db)):
     from app.scheduler.jobs import collect_site, compute_window
 
-    site = db.get(Site, site_id)
-    if site is not None:
+    for sid in site_id:  # a domain can span several properties / engines
+        site = db.get(Site, sid)
+        if site is None:
+            continue
         dr = compute_window(db, site, date.today(), get_settings().collect_refetch_days)
         try:
             collect_site(db, site, dr)
         except Exception:  # noqa: BLE001 - surfaced via /api/admin/status
             pass
-    return RedirectResponse(url=f"{BP}/?site_id={site_id}", status_code=303)
+    qs = f"?domain={quote(domain)}" if domain else ""
+    for e in engines:
+        qs += ("&" if qs else "?") + f"engines={quote(e)}"
+    return RedirectResponse(url=f"{BP}/{qs}", status_code=303)
 
 
 @router.get("/admin")

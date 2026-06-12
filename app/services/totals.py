@@ -79,6 +79,76 @@ def per_page_with_devices(db, site_id: int, dr: DateRange, page_ids=None) -> lis
     return out
 
 
+# --- combine results across engines (Google + Yandex) ------------------------
+# Each `part` is the result for ONE engine (its same-domain https/sc-domain
+# properties already de-duplicated inside the loaders, max-on-overlap). Across
+# engines the data is independent, so we SUM; position is impression-weighted.
+
+def _derive(clicks: int, impressions: int, pos_weight: float) -> dict:
+    return {"clicks": clicks, "impressions": impressions,
+            "ctr": (clicks / impressions) if impressions else 0.0,
+            "position": (pos_weight / impressions) if impressions else 0.0}
+
+
+def combine_totals(parts: list[dict]) -> dict:
+    cl = sum(p["clicks"] for p in parts)
+    im = sum(p["impressions"] for p in parts)
+    pw = sum(p["position"] * p["impressions"] for p in parts)
+    return _derive(cl, im, pw)
+
+
+def _combine_rows(parts, key: str) -> dict:
+    acc: dict = {}
+    for rows in parts:
+        for r in rows:
+            b = acc.setdefault(r[key], {"clicks": 0, "impressions": 0, "pw": 0.0, "extra": r})
+            b["clicks"] += r["clicks"]
+            b["impressions"] += r["impressions"]
+            b["pw"] += r["position"] * r["impressions"]
+    return acc
+
+
+def combine_daily(parts: list[list[dict]]) -> list[dict]:
+    acc = _combine_rows(parts, "date")
+    return [dict(date=d, **_derive(b["clicks"], b["impressions"], b["pw"]))
+            for d, b in sorted(acc.items())]
+
+
+def combine_pages(parts: list[list[dict]], limit: int = 20) -> list[dict]:
+    acc = _combine_rows(parts, "url")
+    out = [dict(url=u, **_derive(b["clicks"], b["impressions"], b["pw"]))
+           for u, b in acc.items()]
+    out.sort(key=lambda r: r["clicks"], reverse=True)
+    return out[:limit]
+
+
+def combine_pages_devices(parts: list[list[dict]], limit: int = 20) -> list[dict]:
+    """Combine per-page rows that also carry desktop_/mobile_ splits."""
+    add = ("clicks", "impressions", "desktop_impr", "desktop_clicks",
+           "mobile_impr", "mobile_clicks")
+    acc: dict = {}
+    for rows in parts:
+        for r in rows:
+            b = acc.setdefault(r["url"], {k: 0 for k in add} | {"pw": 0.0})
+            for k in add:
+                b[k] += r.get(k, 0)
+            b["pw"] += r["position"] * r["impressions"]
+    out = []
+    for url, b in acc.items():
+        im = b["impressions"]
+        row = {"url": url, "clicks": b["clicks"], "impressions": im,
+               "ctr": (b["clicks"] / im) if im else 0.0,
+               "position": (b["pw"] / im) if im else 0.0}
+        for dev in ("desktop", "mobile"):
+            di = b[f"{dev}_impr"]
+            row[f"{dev}_impr"] = di
+            row[f"{dev}_clicks"] = b[f"{dev}_clicks"]
+            row[f"{dev}_ctr"] = (b[f"{dev}_clicks"] / di) if di else 0.0
+        out.append(row)
+    out.sort(key=lambda r: r["clicks"], reverse=True)
+    return out[:limit]
+
+
 def subset_totals(db, project, dr: DateRange, site_ids=None) -> dict:
     ids = site_ids or project.site_id
     page_ids = project_page_ids(db, ids, project)

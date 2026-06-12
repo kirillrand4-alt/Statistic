@@ -85,12 +85,36 @@ def test_merge_dedups_overlapping_properties(db):
     assert len(daily) == 1 and daily[0]["clicks"] == 16
 
 
-def test_dashboard_merge_toggle_renders(client, db):
+def test_dashboard_picks_domain_and_merges(client, db):
+    # two GSC properties of one domain -> a single bare-domain entry, auto-merged
     _site(db, "sc-domain:example.com")
-    b = _site(db, "https://example.com/")
-    r = client.get(f"/?site_id={b.id}&merge=1")
+    _site(db, "https://example.com/")
+    r = client.get("/?domain=example.com&engines=gsc")
     assert r.status_code == 200
-    assert "Объединено свойств одного домена" in r.text
+    assert "example.com" in r.text          # bare domain in the picker (no protocol)
+    assert "склеены" in r.text              # the auto-merge note
+
+
+def test_combine_across_engines_sums():
+    # within an engine the loaders take max on overlap; ACROSS engines we sum,
+    # with impression-weighted position.
+    g = {"clicks": 100, "impressions": 1000, "ctr": 0.1, "position": 5.0}
+    y = {"clicks": 30, "impressions": 300, "ctr": 0.1, "position": 9.0}
+    c = T.combine_totals([g, y])
+    assert c["clicks"] == 130 and c["impressions"] == 1300
+    assert round(c["position"], 3) == round((5 * 1000 + 9 * 300) / 1300, 3)
+
+    cd = T.combine_daily([
+        [{"date": "2026-06-01", "clicks": 10, "impressions": 100, "ctr": 0.1, "position": 4.0}],
+        [{"date": "2026-06-01", "clicks": 5, "impressions": 50, "ctr": 0.1, "position": 6.0}],
+    ])
+    assert len(cd) == 1 and cd[0]["clicks"] == 15 and cd[0]["impressions"] == 150
+
+    cp = T.combine_pages([
+        [{"url": "u", "clicks": 10, "impressions": 100, "ctr": 0.1, "position": 4.0}],
+        [{"url": "u", "clicks": 5, "impressions": 50, "ctr": 0.1, "position": 6.0}],
+    ])
+    assert cp[0]["url"] == "u" and cp[0]["clicks"] == 15 and cp[0]["impressions"] == 150
 
 
 def _query(db, site_id, text):

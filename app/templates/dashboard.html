@@ -1,33 +1,26 @@
 {% extends "base.html" %}
+{% from "partials/site_selector.html" import picker %}
 {% block title %}Дашборд · SEO Статистика{% endblock %}
 {% block content %}
 <h2>Дашборд</h2>
 
 {% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
 
-{% if not sites %}
+{% if not domains %}
   <article>
     <p>Пока нет ни одного сайта. <a href="{{ base_path }}/admin">Добавьте сайт в Настройках</a>
     или укажите <code>GSC_SITE_URL</code> в <code>.env</code>.</p>
   </article>
 {% else %}
 <form method="get" action="{{ base_path }}/" class="grid">
-  <label>Сайт
-    <select name="site_id" onchange="this.form.submit()">
-      {% for s in sites %}
-      <option value="{{ s.id }}" {% if site and s.id == site.id %}selected{% endif %}>{{ s.source.code|srclabel }} · {{ s.display_name or s.property_uri }}</option>
-      {% endfor %}
-    </select>
-  </label>
+  {{ picker(domains, cur_domain, engines) }}
   <label>С <input type="date" name="start" value="{{ range.start }}"></label>
   <label>По <input type="date" name="end" value="{{ range.end }}"></label>
   <label><input type="checkbox" name="clean" value="1" {% if clean %}checked{% endif %} onchange="this.form.submit()"> Без ботов</label>
   <label><input type="checkbox" name="devices" value="1" {% if devices %}checked{% endif %} onchange="this.form.submit()"> Десктоп/моб отдельно</label>
-  <label><input type="checkbox" name="merge" value="1" {% if merge %}checked{% endif %} onchange="this.form.submit()"> Объединить домен</label>
   <label>&nbsp;<button type="submit">Показать</button></label>
 </form>
-{% if merged %}<p><mark>Объединено свойств одного домена «{{ merged.domain }}»: {{ merged.count }}. Берётся максимум на URL/день — данные из <code>https://</code> и <code>sc-domain:</code> не задваиваются.</mark></p>
-{% elif merge %}<p><small>Для «{{ site.property_uri }}» другого свойства того же домена в этом источнике не нашлось — объединять нечего.</small></p>{% endif %}
+<p><small>Данные домена склеены: <code>https://</code> и <code>sc-domain:</code> не задваиваются (берётся максимум на URL/день), а при выборе обоих поисковиков их клики/показы суммируются.{% if not engines %} <mark>Отметьте хотя бы одну поисковую систему.</mark>{% endif %}</small></p>
 {% if clean %}<p><mark>KPI ниже — «чистые» (вычтено «ботовое» устройство на страницах с перекосом ≥ {{ ratio }}×). График — сырой.</mark></p>{% endif %}
 
 {% if totals %}
@@ -45,18 +38,21 @@
   <p><small>Нет данных за период. Запустите сбор статистики ниже.</small></p>{% endif %}
 </article>
 
+{% if site_ids %}
 <form method="post" action="{{ base_path }}/ui/collect">
-  <input type="hidden" name="site_id" value="{{ site.id }}">
+  {% for sid in site_ids %}<input type="hidden" name="site_id" value="{{ sid }}">{% endfor %}
+  <input type="hidden" name="domain" value="{{ cur_domain }}">
+  {% for e in engines %}<input type="hidden" name="engines" value="{{ e }}">{% endfor %}
   <button type="submit" class="secondary">↻ Собрать статистику сейчас</button>
-  <small>Инкрементально подтянет последние дни. Длинная история — в <a href="{{ base_path }}/admin">Настройках</a> (backfill).</small>
+  <small>Инкрементально подтянет последние дни по всем свойствам домена. Длинная история — в <a href="{{ base_path }}/admin">Настройках</a> (backfill).</small>
 </form>
 
-<p>
-  Экспорт по сайту за период:
-  <a href="{{ base_path }}/api/export?site_id={{ site.id }}&start={{ range.start }}&end={{ range.end }}&level=totals&format=xlsx" role="button" class="outline">Excel (сводка по дням)</a>
-  <a href="{{ base_path }}/api/export?site_id={{ site.id }}&start={{ range.start }}&end={{ range.end }}&level=page&format=xlsx" role="button" class="outline">Excel (по страницам)</a>
-  <a href="{{ base_path }}/api/export?site_id={{ site.id }}&start={{ range.start }}&end={{ range.end }}&level=page&format=csv" role="button" class="outline secondary">CSV</a>
+<p>Экспорт за период (по свойствам домена):
+  {% for s in export_sites %}
+  <a href="{{ base_path }}/api/export?site_id={{ s.id }}&start={{ range.start }}&end={{ range.end }}&level=page&format=xlsx" role="button" class="outline">{{ s.label }}: Excel</a>
+  {% endfor %}
 </p>
+{% endif %}
 
 {% if top_pages %}
 <article>
