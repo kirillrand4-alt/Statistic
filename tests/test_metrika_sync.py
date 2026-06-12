@@ -74,6 +74,54 @@ def test_resolve_targets(db, monkeypatch):
     assert missed == []
 
 
+def test_resolve_targets_merges_domain_twins(db, monkeypatch):
+    """sc-domain: + https:// of one domain collapse into ONE download target —
+    the twin that already holds the visits."""
+    src = ensure_sources(db)["yandex_webmaster"]
+    a = Site(source_id=src.id, property_uri="sc-domain:d.ru", display_name="sc:d.ru")
+    b = Site(source_id=src.id, property_uri="https://d.ru/", display_name="d.ru")
+    db.add_all([a, b])
+    db.commit()
+    db.add(Visit(site_id=b.id, visit_id=1, counter_id=999, date=date(2026, 6, 1)))
+    db.commit()
+    monkeypatch.setattr(M, "_fetch_counters", lambda: [])
+
+    targets, missed = M.resolve_targets()
+    assert targets == [(b.id, 999, "d.ru")] and missed == []
+
+
+def test_merge_domain_dupes_consolidates(db):
+    """Rows already downloaded under a duplicate site move onto the canonical
+    one; overlapping ids are kept once, the dup site ends up empty."""
+    src = ensure_sources(db)["yandex_webmaster"]
+    a = Site(source_id=src.id, property_uri="sc-domain:m.ru", display_name="sc:m.ru")
+    b = Site(source_id=src.id, property_uri="https://m.ru/", display_name="m.ru")
+    db.add_all([a, b])
+    db.commit()
+    db.add_all([
+        Visit(site_id=b.id, visit_id=1, date=date(2026, 6, 1)),
+        Visit(site_id=b.id, visit_id=2, date=date(2026, 6, 1)),
+        Visit(site_id=b.id, visit_id=4, date=date(2026, 6, 2)),
+        Visit(site_id=a.id, visit_id=2, date=date(2026, 6, 1)),   # overlap — kept once
+        Visit(site_id=a.id, visit_id=3, date=date(2026, 6, 2)),   # unique — moved
+        Hit(site_id=a.id, watch_id=7, date=date(2026, 6, 1), url="http://m.ru/x"),
+    ])
+    db.commit()
+
+    moved = M.merge_domain_dupes()
+
+    assert moved == 3  # 2 visits + 1 hit removed from the dup site
+    s = SessionLocal()
+    try:
+        vis = {v for (v,) in s.execute(
+            select(Visit.visit_id).where(Visit.site_id == b.id)).all()}
+        assert vis == {1, 2, 3, 4}
+        assert s.execute(select(func.count()).where(Visit.site_id == a.id)).scalar_one() == 0
+        assert s.execute(select(Hit.site_id).where(Hit.watch_id == 7)).scalar_one() == b.id
+    finally:
+        s.close()
+
+
 # --- mocked Logs API for sync_rotate ----------------------------------------
 class _Resp:
     def __init__(self, data, code=200):

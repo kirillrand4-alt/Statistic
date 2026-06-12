@@ -12,7 +12,9 @@ Readiness is polled every --poll-sec (default 180 s). Transient API errors
 still not ready after --timeout-min minutes is cancelled and skipped (it stays
 a gap; re-run WITHOUT --force to download only what's missing). Counter per
 domain is auto-detected (from existing visits, else by matching the domain in
---list); override with --targets.
+--list); override with --targets. Same-domain twin properties (sc-domain: +
+https://) collapse into one download target, and rows already downloaded under
+such dupes are consolidated onto one site at startup (or run --merge-dupes).
     python scripts/metrika_logs.py --sync-all --force --from 2025-06-01
     python scripts/metrika_logs.py --sync-all                 # only-missing, last 365d
     python scripts/metrika_logs.py --sync-all --no-hits --parallel 3 --chunk 3
@@ -288,12 +290,26 @@ def download(counter: int, site_id: int, d1: date, d2: date, chunk: int, source:
         db.close()
 
 
-def resolve_targets(explicit: str | None = None, only_site: int | None = None):
-    """Map sites (domains) -> Metrica counter. Returns (targets, skipped_labels).
+def _visit_counts(db, site_ids: list[int]) -> dict[int, int]:
+    from sqlalchemy import func, select
 
-    Counter is taken from (1) explicit ``site:counter`` pairs, (2) the most common
-    counter_id among the site's existing visits, (3) a domain match against the
-    account's counter list. Sites with no resolvable counter are skipped.
+    rows = db.execute(
+        select(Visit.site_id, func.count()).where(Visit.site_id.in_(site_ids))
+        .group_by(Visit.site_id)
+    ).all()
+    return dict(rows)
+
+
+def resolve_targets(explicit: str | None = None, only_site: int | None = None):
+    """Map DOMAINS -> Metrica counter. Returns (targets, skipped_labels).
+
+    Same-domain sites (e.g. a GSC ``sc-domain:`` property and its ``https://``
+    twin) collapse into ONE target — the site already holding the most visits
+    (then the lowest id) — so one counter is never downloaded twice. Counter is
+    taken from (1) explicit ``site:counter`` pairs (pinned sites always stay
+    separate targets), (2) the most common counter_id among the site's existing
+    visits, (3) a domain match against the account's counter list. Domains with
+    no resolvable counter are skipped.
     """
     from sqlalchemy import func, select
 
@@ -312,8 +328,27 @@ def resolve_targets(explicit: str | None = None, only_site: int | None = None):
         sites = db.execute(select(Site).where(Site.enabled.is_(True))).scalars().all()
         if only_site:
             sites = [s for s in sites if s.id == only_site]
+        groups: dict[str, list] = {}
         for s in sites:
-            label = s.display_name or s.property_uri or f"site{s.id}"
+            groups.setdefault(domain_of(s.property_uri) or f"#site{s.id}", []).append(s)
+        chosen = []  # (site, label)
+        for dom, group in groups.items():
+            pinned = [s for s in group if s.id in explicit_map]
+            if pinned:  # explicit pins win and stay separate
+                chosen += [(s, s.display_name or s.property_uri or f"site{s.id}")
+                           for s in pinned]
+                continue
+            if len(group) == 1:
+                s = group[0]
+                chosen.append((s, s.display_name or s.property_uri or f"site{s.id}"))
+                continue
+            counts = _visit_counts(db, [s.id for s in group])
+            canon = max(group, key=lambda s: (counts.get(s.id, 0), -s.id))
+            print(f"Дубли домена {dom}: "
+                  + ", ".join(f"site{s.id}" for s in group)
+                  + f" → качаю в site{canon.id}")
+            chosen.append((canon, dom))
+        for s, label in chosen:
             counter = explicit_map.get(s.id)
             if counter is None:
                 counter = db.execute(
@@ -334,6 +369,47 @@ def resolve_targets(explicit: str | None = None, only_site: int | None = None):
             else:
                 skipped.append(label)
         return targets, skipped
+    finally:
+        db.close()
+
+
+def merge_domain_dupes() -> int:
+    """Consolidate already-downloaded rows of same-domain duplicate sites.
+
+    Moves visits and hits from every duplicate onto the domain's canonical site
+    (most visits, then lowest id); rows both sites have are kept once.
+    Idempotent — a no-op once everything lives on one site. Returns rows moved.
+    """
+    from sqlalchemy import select
+
+    from app.db.models import Site
+    from app.services.visits import move_site_rows
+
+    init_db()
+    db = SessionLocal()
+    moved = 0
+    try:
+        sites = db.execute(select(Site).where(Site.enabled.is_(True))).scalars().all()
+        groups: dict[str, list] = {}
+        for s in sites:
+            dom = domain_of(s.property_uri)
+            if dom:
+                groups.setdefault(dom, []).append(s)
+        for dom, group in groups.items():
+            if len(group) < 2:
+                continue
+            counts = _visit_counts(db, [s.id for s in group])
+            canon = max(group, key=lambda s: (counts.get(s.id, 0), -s.id))
+            for s in group:
+                if s.id == canon.id:
+                    continue
+                nv = move_site_rows(db, Visit, "visit_id", s.id, canon.id)
+                nh = move_site_rows(db, Hit, "watch_id", s.id, canon.id)
+                if nv or nh:
+                    moved += nv + nh
+                    print(f"[{dom}] site{s.id} → site{canon.id}: "
+                          f"перенесено визитов {nv}, хитов {nh}", flush=True)
+        return moved
     finally:
         db.close()
 
@@ -487,6 +563,8 @@ def main() -> None:
     ap.add_argument("--import-dir", dest="import_dir")
     ap.add_argument("--sync-all", dest="sync_all", action="store_true",
                     help="качать по всем доменам, ротируя запросы в N потоков")
+    ap.add_argument("--merge-dupes", dest="merge_dupes", action="store_true",
+                    help="перенести визиты/хиты с дублей домена на один сайт и выйти")
     ap.add_argument("--targets", help='явная карта "site:counter,site:counter" (иначе авто)')
     ap.add_argument("--parallel", type=int, default=None,
                     help="одновременных запросов (по умолчанию — все домены сразу)")
@@ -505,6 +583,9 @@ def main() -> None:
 
     if a.list:
         list_counters(); return
+    if a.merge_dupes:
+        print(f"Готово, перенесено строк: {merge_domain_dupes()}")
+        return
     if a.import_dir:
         if not a.site:
             print("Для --import-dir нужен --site."); return
@@ -519,6 +600,7 @@ def main() -> None:
     if a.sync_all:
         sources = ("visits",) if a.no_hits else ("visits", "hits")
         chunk = a.chunk or 10
+        merge_domain_dupes()  # consolidate old same-domain dupes (idempotent)
         targets, missed = resolve_targets(a.targets, a.site)
         if missed:
             print(f"Без счётчика (пропускаю): {', '.join(missed)}")

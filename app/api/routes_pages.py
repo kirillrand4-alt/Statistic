@@ -597,7 +597,24 @@ def metrika_page(request: Request, site_id: int | None = None, start: str | None
     sites = _sites(db)
     site = _resolve_site(db, site_id)
     dr = parse_date_range(start, end)
-    summary = visits.summary(db, site.id, dr) if site is not None else None
+    summary = None
+    if site is not None:
+        # Metrica data belongs to the domain, not to a GSC/Yandex property —
+        # show the same-domain twin (any source) that actually holds the visits.
+        vid = site.id
+        d = domain_of(site.property_uri)
+        mids = [sid for sid, uri in db.execute(select(Site.id, Site.property_uri)).all()
+                if d and domain_of(uri) == d] or [site.id]
+        if len(mids) > 1:
+            from sqlalchemy import func
+
+            from app.db.models import Visit
+            counts = dict(db.execute(
+                select(Visit.site_id, func.count()).where(Visit.site_id.in_(mids))
+                .group_by(Visit.site_id)
+            ).all())
+            vid = max(mids, key=lambda i: (counts.get(i, 0), -i))
+        summary = visits.summary(db, vid, dr)
     return templates.TemplateResponse(
         request,
         "metrika.html",

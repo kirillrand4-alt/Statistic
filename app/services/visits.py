@@ -10,7 +10,7 @@ import tempfile
 import zipfile
 from datetime import date, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, literal, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Hit, Visit
@@ -221,6 +221,32 @@ def import_hits(db: Session, site_id: int, lines, update: bool = False) -> int:
     return _import_rows(db, site_id, lines, model=Hit, field_map=HIT_FIELD_MAP,
                         int_cols=_HIT_INT, key_col="watch_id",
                         what="хита (ym:pv:watchID)", update=update)
+
+
+def move_site_rows(db: Session, model, key_col: str, src_id: int, dst_id: int) -> int:
+    """Re-point all of site ``src_id``'s rows (visits or hits) to site ``dst_id``.
+
+    Set-based: copies the rows under ``dst_id`` with insert-or-ignore (rows the
+    destination already has — same visit/watch id — keep the destination's
+    version), then deletes the source rows. Returns rows removed from the source.
+    Used to consolidate same-domain duplicate sites onto one canonical site.
+    """
+    dialect = db.get_bind().dialect.name
+    if dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+    elif dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:  # pragma: no cover
+        raise RuntimeError(f"Unsupported dialect {dialect!r}")
+    t = model.__table__
+    cols = [c.name for c in t.columns if c.name != "id"]
+    sel = select(*[literal(dst_id).label("site_id") if c == "site_id" else t.c[c]
+                   for c in cols]).where(t.c.site_id == src_id)
+    db.execute(insert(model).from_select(cols, sel)
+               .on_conflict_do_nothing(index_elements=["site_id", key_col]))
+    n = db.execute(delete(model).where(t.c.site_id == src_id)).rowcount or 0
+    db.commit()
+    return n
 
 
 def import_fileobj(db: Session, site_id: int, fileobj, name: str) -> int:
