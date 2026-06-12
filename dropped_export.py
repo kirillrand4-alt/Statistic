@@ -7,7 +7,7 @@ csv.field_size_limit(sys.maxsize)
 from collections import Counter
 from atlas_need_specs import load_universe, is_product_url, slug, dm, COMPETITORS
 from matcher import brand_of, brand_from_text, BRAND_ALIASES
-from spec_match import (is_compressor, num, sane_kw, bar_value, flow_value, bar_flow_pairs, series_num)
+from spec_match import (is_compressor, num, sane_kw, bar_value, flow_value, bar_flow_pairs, series_num, is_flow_key)
 from brand_spec_review import (load_comp_all, ser_of, SPECS_CSV, PROKO_CSV)
 from category_spec_review import cat_of, load_comp_cat
 
@@ -19,7 +19,7 @@ def specs_kbf(d):
         kl=k.lower()
         if kw is None and "мощ" in kl and "шум" not in kl and "звук" not in kl: kw=sane_kw(num(v))
         if rb is None and "давлен" in kl: rb=v
-        if rf is None and ("произв" in kl or "пропускн" in kl): rf=v; fk=kl
+        if rf is None and is_flow_key(k): rf=v; fk=kl
     pairs=bar_flow_pairs(rb, rf, (fk or "")+" "+str(rf or ""))
     bar,fl=(pairs[0] if pairs else (None,None))
     return kw, bar, fl

@@ -16,7 +16,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, PatternFill
 from collections import defaultdict, Counter
 from matcher import brand_of, BRAND_ALIASES, brand_from_text
-from spec_match import num, sane_bar, bar_value, flow_value, agree, agree_num, is_compressor
+from spec_match import num, sane_bar, bar_value, flow_value, agree, agree_num, is_compressor, is_flow_key
 from atlas_need_specs import is_product_url, slug, dm, load_universe
 from brand_spec_review import gen_series, _styles, _hdr, COMPETITORS
 from scrape_files import U
@@ -170,7 +170,7 @@ def load_comp_cat():
         for k,v in d.items():
             kl=k.lower()
             if bar is None and "давлен" in kl: bar=bar_value(v)
-            if rfl is None and ("производ" in kl or "пропускн" in kl): rfl=v; fk=kl
+            if rfl is None and is_flow_key(k): rfl=v; fk=kl
         c=dict(sn=sn, name=nm or slug(u), url=u, site=dm(u), price=price.get(u),
                status=status.get(u,""), bar=bar,
                fl=flow_value(rfl, fk+" "+str(rfl or "")))

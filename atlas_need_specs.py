@@ -59,7 +59,9 @@ def has_kw(d):
     return any("мощ" in k.lower() and "шум" not in k.lower() and "звук" not in k.lower() and _hasnum(v)
               for k,v in d.items())
 def has_bar(d):  return any("давлен" in k.lower() and _hasnum(v) for k,v in d.items())
-def has_flow(d): return any("произв" in k.lower() and _hasnum(v) for k,v in d.items())
+def has_flow(d):
+    from spec_match import is_flow_key   # «Производитель»/«Производство» ≠ производительность
+    return any(is_flow_key(k) and _hasnum(v) for k,v in d.items())
 
 def best_name(cur, nm):
     """Длинное имя без Excel-битья (.46xxx) — приоритет."""

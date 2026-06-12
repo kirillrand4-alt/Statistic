@@ -12,7 +12,7 @@ from collections import defaultdict, Counter
 from matcher import brand_of, BRAND_ALIASES, brand_from_text
 from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value, bar_flow_pairs,
                         series_num, text_flags, is_compressor, match, receiver_filter, ff_filter,
-                        ip_filter, ip_class, card_issue)
+                        ip_filter, ip_class, is_flow_key, card_issue)
 from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
 from scrape_files import U
 
@@ -187,7 +187,7 @@ def load_comp_all():
             kl=k.lower()
             if kw is None and "мощ" in kl and "шум" not in kl and "звук" not in kl: kw=sane_kw(num(v))
             if raw_bar is None and "давлен" in kl: raw_bar=v
-            if raw_flow is None and "произв" in kl: raw_flow=v; fkey=kl
+            if raw_flow is None and is_flow_key(k): raw_flow=v; fkey=kl
             if oil is None and "безмасл" in kl: oil=oil_of(v)
         ff,vsd,rv = text_flags(nm) if nm else text_flags(slug(u))
         ff,rv = suffix_flags(nm or slug(u), b, ff, rv)
