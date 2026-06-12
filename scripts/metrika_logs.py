@@ -156,13 +156,13 @@ _eval_warn.done = False
 def _window_days(counter: int, source: str, d1: date, d2: date,
                  fixed: int | None, max_chunk: int) -> int:
     """Pick the window size (days): a user-fixed ``--chunk`` wins; otherwise ask
-    the API how big a request is safe and cap it to ``max_chunk``."""
+    the Logs API how big a request is safe and cap it to ``max_chunk``. evaluate
+    refuses ranges over a year, so it's probed over the last ~year of the period
+    (enough to gauge data density)."""
     if fixed:
         return fixed
-    n = _evaluate(counter, source, d1, d2)
-    if n is None and (d2 - d1).days >= 90:
-        # a year+ range can be rejected outright — estimate from a recent 90 days
-        n = _evaluate(counter, source, d2 - timedelta(days=89), d2)
+    probe_from = max(d1, d2 - timedelta(days=360))  # evaluate: max 1 year per call
+    n = _evaluate(counter, source, probe_from, d2)
     return max(1, min(n or 10, max_chunk))
 
 

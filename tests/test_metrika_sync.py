@@ -325,27 +325,28 @@ def test_sync_rotate_evaluate_capped_by_max_chunk(db, monkeypatch):
     assert max(spans) == 7 and len(fake.created) == 3  # 20 days / 7 -> 7+7+6
 
 
-def test_sync_rotate_evaluate_probes_recent_on_wide_range(db, monkeypatch):
-    """A year+ range that evaluate won't size falls back to probing a recent
-    ~90-day window instead of dropping to the default 10."""
+def test_sync_rotate_evaluate_clamps_to_under_a_year(db, monkeypatch):
+    """evaluate refuses ranges over a year ('Max range for one request is one
+    year'), so a multi-year period is probed over the most recent ~year and the
+    window sized from that instead of dropping to the default 10."""
     sid = _mksite(db, "wide.ru")
 
-    def ev(d1, d2):  # the wide range returns nothing; a <=90-day probe gives 5
+    def ev(d1, d2):  # mimic Yandex: a span over a year is rejected
         span = (date.fromisoformat(d2) - date.fromisoformat(d1)).days + 1
-        return None if span > 90 else 5
+        return 8 if span <= 365 else None
 
     fake = FakeHTTP(status="processed", eval_days=ev, counters=[])
     monkeypatch.setattr(M, "httpx", fake)
     monkeypatch.setattr(M, "_token", lambda: "t")
 
-    M.sync_rotate([(sid, 1, "wide.ru")], date(2026, 1, 1), date(2026, 6, 20),
+    M.sync_rotate([(sid, 1, "wide.ru")], date(2025, 1, 1), date(2026, 6, 20),
                   chunk=None, max_chunk=30, sources=("visits",), force=True,
                   timeout_min=999, poll_sec=0)
 
     spans = [(date.fromisoformat(fake.reqs[r]["date2"])
               - date.fromisoformat(fake.reqs[r]["date1"])).days + 1
              for r, _, _ in fake.created]
-    assert spans and max(spans) == 5  # sized from the 90-day probe, not the default
+    assert spans and max(spans) == 8  # sized from the clamped probe, not the default 10
 
 
 def test_sync_rotate_timeout_skips(db, monkeypatch):
