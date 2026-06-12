@@ -173,8 +173,10 @@ def _rid(url):
 class FakeHTTP:
     """Minimal stand-in for the Logs API: create -> status -> download -> clean."""
 
-    def __init__(self, status="processed"):
+    def __init__(self, status="processed", eval_days=None, counters=None):
         self.status = status
+        self.eval_days = eval_days       # what /evaluate reports
+        self.counters = counters or []   # what /counters reports (for create dates)
         self.reqs: dict[int, dict] = {}
         self.nid = 0
         self.created, self.cleaned, self.cancelled = [], [], []
@@ -194,7 +196,11 @@ class FakeHTTP:
             self.cancelled.append(_rid(url))
         return _Resp({})
 
-    def get(self, url, headers=None, timeout=None):
+    def get(self, url, headers=None, params=None, timeout=None):
+        if url.endswith("/counters"):
+            return _Resp({"counters": self.counters})
+        if url.endswith("/evaluate"):
+            return _Resp({"log_request_evaluation": {"max_possible_day_quantity": self.eval_days}})
         return _Resp({"log_request": {"status": self.status, "parts": [{"part_number": 0}]}})
 
     def stream(self, method, url, headers=None, timeout=None):
@@ -277,6 +283,43 @@ def test_sync_rotate_survives_rate_limit(db, monkeypatch):
         assert s.execute(select(func.count()).select_from(Visit)).scalar_one() == 1
     finally:
         s.close()
+
+
+def test_sync_rotate_adaptive_window(db, monkeypatch):
+    """With no --chunk the window size comes from the API's evaluate
+    (max_possible_day_quantity), and the period is clipped to the counter's
+    create date."""
+    sid = _mksite(db, "ad.ru")
+    fake = FakeHTTP(status="processed", eval_days=4,
+                    counters=[{"id": 777, "create_time": "2026-06-05 00:00:00"}])
+    monkeypatch.setattr(M, "httpx", fake)
+    monkeypatch.setattr(M, "_token", lambda: "t")
+
+    # asked for 06-01..06-11, but counter starts 06-05 and evaluate caps at 4 days
+    M.sync_rotate([(sid, 777, "ad.ru")], date(2026, 6, 1), date(2026, 6, 11),
+                  chunk=None, max_chunk=30, sources=("visits",), force=True,
+                  timeout_min=999, poll_sec=0)
+
+    windows = [(fake.reqs[r]["date1"], fake.reqs[r]["date2"]) for r, _, _ in fake.created]
+    assert windows == [("2026-06-08", "2026-06-11"), ("2026-06-05", "2026-06-07")]
+
+
+def test_sync_rotate_evaluate_capped_by_max_chunk(db, monkeypatch):
+    """A huge evaluate result is capped at --max-chunk so one request can't
+    cover an unbounded span."""
+    sid = _mksite(db, "cap.ru")
+    fake = FakeHTTP(status="processed", eval_days=999, counters=[])
+    monkeypatch.setattr(M, "httpx", fake)
+    monkeypatch.setattr(M, "_token", lambda: "t")
+
+    M.sync_rotate([(sid, 1, "cap.ru")], date(2026, 6, 1), date(2026, 6, 20),
+                  chunk=None, max_chunk=7, sources=("visits",), force=True,
+                  timeout_min=999, poll_sec=0)
+
+    spans = [(date.fromisoformat(fake.reqs[r]["date2"])
+              - date.fromisoformat(fake.reqs[r]["date1"])).days + 1
+             for r, _, _ in fake.created]
+    assert max(spans) == 7 and len(fake.created) == 3  # 20 days / 7 -> 7+7+6
 
 
 def test_sync_rotate_timeout_skips(db, monkeypatch):

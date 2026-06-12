@@ -5,12 +5,15 @@ List counters (id + domain):
 
 Rotated multi-domain sync (the main mode): downloads visits AND hits for every
 site that has a counter. One Logs API request per domain is kept in flight — by
-default for ALL domains at once (cap with --parallel) — each a --chunk-day
-window (default 10), windows go newest -> oldest from --to (default yesterday).
-Readiness is polled every --poll-sec (default 180 s). Transient API errors
-(429 rate limit, 5xx, network) are retried — they don't abort the run. A window
-still not ready after --timeout-min minutes is cancelled and skipped (it stays
-a gap; re-run WITHOUT --force to download only what's missing). Counter per
+default for ALL domains at once (cap with --parallel) — windows go newest ->
+oldest from --to (default yesterday). The window size is chosen per domain+
+source from the Logs API ``evaluate`` (data volume -> max safe days, capped at
+--max-chunk 30), so dense domains get small windows and quiet ones large; pass
+--chunk N to force a fixed size instead. The period is clipped to each counter's
+create date. Readiness is polled every --poll-sec (default 180 s). Transient API
+errors (429 rate limit, 5xx, network) are retried — they don't abort the run. A
+window still not ready after --timeout-min minutes is cancelled and skipped (it
+stays a gap; re-run WITHOUT --force to download only what's missing). Counter per
 domain is auto-detected (from existing visits, else by matching the domain in
 --list); override with --targets. Same-domain twin properties (sc-domain: +
 https://) collapse into one download target, and rows already downloaded under
@@ -100,6 +103,47 @@ def _fetch_counters() -> list[dict]:
 def list_counters() -> None:
     for c in _fetch_counters():
         print(f"  id={c.get('id'):<10} {str(c.get('site')):<40} {c.get('name')}")
+
+
+def _counter_start_dates() -> dict[int, date]:
+    """counter_id -> the counter's create date (earliest period worth requesting)."""
+    out: dict[int, date] = {}
+    for c in _fetch_counters():
+        ct = str(c.get("create_time") or "")[:10]
+        try:
+            out[int(c["id"])] = date.fromisoformat(ct)
+        except (KeyError, ValueError, TypeError):
+            continue
+    return out
+
+
+def _evaluate(counter: int, source: str, d1: date, d2: date) -> int | None:
+    """Max days the Logs API will accept in ONE request for this counter/source/
+    period — Yandex sizes it from the estimated data volume. None if unknown."""
+    try:
+        r = httpx.get(
+            f"{API}/management/v1/counter/{counter}/logrequests/evaluate",
+            headers=_headers(),
+            params={"date1": d1.isoformat(), "date2": d2.isoformat(),
+                    "fields": _fields_for(source), "source": source},
+            timeout=60,
+        )
+    except Exception:  # noqa: BLE001 — fall back to the fixed window
+        return None
+    if r.status_code != 200:
+        return None
+    n = r.json().get("log_request_evaluation", {}).get("max_possible_day_quantity")
+    return int(n) if isinstance(n, int) and n > 0 else None
+
+
+def _window_days(counter: int, source: str, d1: date, d2: date,
+                 fixed: int | None, max_chunk: int) -> int:
+    """Pick the window size (days): a user-fixed ``--chunk`` wins; otherwise ask
+    the API how big a request is safe and cap it to ``max_chunk``."""
+    if fixed:
+        return fixed
+    n = _evaluate(counter, source, d1, d2)
+    return max(1, min(n or 10, max_chunk))
 
 
 def _chunks(d1: date, d2: date, days: int, newest_first: bool = False):
@@ -414,35 +458,42 @@ def merge_domain_dupes() -> int:
         db.close()
 
 
-def sync_rotate(targets, d1: date, d2: date, chunk: int = 10, parallel: int | None = None,
+def sync_rotate(targets, d1: date, d2: date, chunk: int | None = None,
+                max_chunk: int = 30, parallel: int | None = None,
                 sources=("visits", "hits"), force: bool = True,
                 timeout_min: int = 40, poll_sec: int = 180) -> None:
     """Download missing windows across many domains, one request per domain.
 
     Keeps one Logs API request in flight per domain — by default for *every*
-    domain at once (cap with ``parallel``) — each a ``chunk``-day window, going
-    newest -> oldest from ``d2``. Readiness is polled every ``poll_sec`` seconds;
-    when a request is ready it's downloaded, imported and cleaned, and that
-    domain's next (older) window starts. Transient API errors (429/5xx/network)
-    are retried and never abort the run. A request still not ready after
-    ``timeout_min`` minutes is cancelled and its window skipped (it stays a gap —
-    re-run later without --force to download only what's missing).
+    domain at once (cap with ``parallel``) — going newest -> oldest from ``d2``.
+    The window size is chosen per domain+source: ``chunk`` forces a fixed number
+    of days, otherwise the Logs API ``evaluate`` endpoint sizes it from the data
+    volume (capped at ``max_chunk``) so dense domains get small windows and quiet
+    ones get large ones. The requested period is also clipped to each counter's
+    create date. Readiness is polled every ``poll_sec`` seconds; when a request is
+    ready it's downloaded, imported and cleaned, and that domain's next (older)
+    window starts. Transient API errors (429/5xx/network) are retried and never
+    abort the run. A request still not ready after ``timeout_min`` minutes is
+    cancelled and its window skipped (it stays a gap — re-run later without
+    --force to download only what's missing).
     """
     init_db()
     db = SessionLocal()
     parallel = parallel or len(targets)
-    chunks = list(_chunks(d1, d2, chunk, newest_first=True))
+    starts = _counter_start_dates() if not chunk else {}  # only needed for clipping
     queues: dict[str, deque] = {}
     meta: dict[str, tuple[int, int]] = {}  # label -> (site_id, counter)
     skipped = []
     try:
         for site_id, counter, label in targets:
+            lo = max(d1, starts.get(counter, d1))  # don't ask before the counter existed
             items = deque()
             for source in sources:
-                have = set() if force else _covered_dates(db, site_id, d1, d2, _MODEL[source])
-                for c1, c2 in chunks:
-                    days = {c1 + timedelta(days=i) for i in range((c2 - c1).days + 1)}
-                    if force or not (days <= have):
+                days = _window_days(counter, source, lo, d2, chunk, max_chunk)
+                have = set() if force else _covered_dates(db, site_id, lo, d2, _MODEL[source])
+                for c1, c2 in _chunks(lo, d2, days, newest_first=True):
+                    win = {c1 + timedelta(days=i) for i in range((c2 - c1).days + 1)}
+                    if force or not (win <= have):
                         items.append((source, c1, c2, 0))  # 0 = create attempts
             if items:
                 queues[label] = items
@@ -451,8 +502,10 @@ def sync_rotate(targets, d1: date, d2: date, chunk: int = 10, parallel: int | No
             print("Нечего качать — за период всё уже покрыто.")
             return
         total_items = sum(len(q) for q in queues.values())
+        window = (f"{chunk} дн. (фикс.)" if chunk
+                  else f"подбор по объёму, до {max_chunk} дн.")
         print(f"К закачке: {total_items} запросов по {len(queues)} доменам · "
-              f"параллельно {parallel} · окно {chunk} дн. (от новых к старым) · "
+              f"параллельно {parallel} · окно {window} (от новых к старым) · "
               f"период {d1}..{d2} · опрос раз в {poll_sec} с. · "
               f"таймаут {timeout_min} мин.", flush=True)
 
@@ -577,7 +630,10 @@ def main() -> None:
     ap.add_argument("--site", type=int)
     ap.add_argument("--from", dest="d1")
     ap.add_argument("--to", dest="d2")
-    ap.add_argument("--chunk", type=int, default=None)
+    ap.add_argument("--chunk", type=int, default=None,
+                    help="фикс. размер окна, дн. (по умолчанию — автоподбор по объёму)")
+    ap.add_argument("--max-chunk", dest="max_chunk", type=int, default=30,
+                    help="потолок окна при автоподборе, дн. (по умолчанию 30)")
     ap.add_argument("--source", default="visits")
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
@@ -600,7 +656,6 @@ def main() -> None:
 
     if a.sync_all:
         sources = ("visits",) if a.no_hits else ("visits", "hits")
-        chunk = a.chunk or 10
         merge_domain_dupes()  # consolidate old same-domain dupes (idempotent)
         targets, missed = resolve_targets(a.targets, a.site)
         if missed:
@@ -612,9 +667,9 @@ def main() -> None:
         print("Домены → счётчики: " + ", ".join(f"{lbl}={c}" for _, c, lbl in targets))
         d2 = date.fromisoformat(a.d2) if a.d2 else date.today() - timedelta(days=1)
         d1 = date.fromisoformat(a.d1) if a.d1 else d2 - timedelta(days=365)
-        sync_rotate(targets, d1, d2, chunk=chunk, parallel=a.parallel,
-                    sources=sources, force=a.force, timeout_min=a.timeout_min,
-                    poll_sec=a.poll_sec)
+        sync_rotate(targets, d1, d2, chunk=a.chunk, max_chunk=a.max_chunk,
+                    parallel=a.parallel, sources=sources, force=a.force,
+                    timeout_min=a.timeout_min, poll_sec=a.poll_sec)
         return
 
     if not (a.counter and a.site):
