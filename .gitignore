@@ -8,6 +8,7 @@ gap_reports/
 unmatched/
 dropped/
 our_pages/
+matching/
 *.txt
 !requirements.txt
 night_run/
