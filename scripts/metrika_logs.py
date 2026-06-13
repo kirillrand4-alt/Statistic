@@ -534,6 +534,47 @@ def merge_domain_dupes() -> int:
         db.close()
 
 
+# (table, partition key) — a real visit/hit is one row per these fields; the
+# rounded-id and exact-id copies of the same visit share them, so we keep the
+# newest (exact-id) row per group and drop the rest.
+_DEDUP_KEYS = {
+    "visit": "site_id, date_time, client_id, start_url",
+    "hit": "site_id, date_time, url, client_id",
+}
+
+
+def dedup_rows(apply: bool = False) -> dict:
+    """Remove duplicate visit/hit rows left by the id-rounding fix: the old
+    importer stored int(float(id)) (rounding 18-19-digit ids), then a --force
+    re-download added the exact-id rows — so each visit/hit got a twin. Keeps the
+    newest row per real visit/hit. ``apply=False`` only reports the counts."""
+    from sqlalchemy import text
+
+    init_db()
+    db = SessionLocal()
+    out = {}
+    try:
+        for table, parts in _DEDUP_KEYS.items():
+            dups = f"""
+                SELECT id FROM (
+                  SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY {parts} ORDER BY id DESC) AS rn
+                  FROM {table} WHERE date_time IS NOT NULL AND date_time <> ''
+                ) t WHERE t.rn > 1
+            """
+            if apply:
+                n = db.execute(text(f"DELETE FROM {table} WHERE id IN ({dups})")).rowcount or 0
+                db.commit()
+            else:
+                n = db.execute(text(f"SELECT COUNT(*) FROM ({dups}) d")).scalar() or 0
+            out[table] = int(n)
+            verb = "удалено" if apply else "дублей найдено"
+            print(f"  {table}: {verb} {out[table]}", flush=True)
+        return out
+    finally:
+        db.close()
+
+
 def sync_rotate(targets, d1: date, d2: date, chunk: int | None = None,
                 max_chunk: int = 30, parallel: int | None = None,
                 sources=("visits", "hits"), force: bool = True,
@@ -723,6 +764,9 @@ def main() -> None:
                     help="качать по всем доменам, ротируя запросы в N потоков")
     ap.add_argument("--merge-dupes", dest="merge_dupes", action="store_true",
                     help="перенести визиты/хиты с дублей домена на один сайт и выйти")
+    ap.add_argument("--dedup", action="store_true",
+                    help="убрать дубли визитов/хитов от округления id (предпросмотр; для удаления добавьте --apply)")
+    ap.add_argument("--apply", action="store_true", help="с --dedup: реально удалить дубли")
     ap.add_argument("--targets", help='явная карта "site:counter,site:counter" (иначе авто)')
     ap.add_argument("--parallel", type=int, default=None,
                     help="одновременных запросов (по умолчанию — все домены сразу)")
@@ -750,6 +794,14 @@ def main() -> None:
         list_counters(); return
     if a.merge_dupes:
         print(f"Готово, перенесено строк: {merge_domain_dupes()}")
+        return
+    if a.dedup:
+        res = dedup_rows(apply=a.apply)
+        if a.apply:
+            print(f"Готово. Удалено дублей: визиты {res['visit']}, хиты {res['hit']}.")
+        else:
+            print(f"Найдено дублей: визиты {res['visit']}, хиты {res['hit']}. "
+                  f"Для удаления повторите с --apply.")
         return
     if a.import_dir:
         if not a.site:

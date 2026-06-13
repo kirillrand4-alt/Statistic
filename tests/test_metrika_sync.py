@@ -437,3 +437,37 @@ def test_sync_rotate_timeout_skips(db, monkeypatch):
         assert s.execute(select(func.count()).select_from(Visit)).scalar_one() == 0
     finally:
         s.close()
+
+
+def test_dedup_rows_removes_rounded_id_twins(db):
+    """Old import stored int(float(id)) (rounded); --force later added exact-id
+    rows -> each visit/hit got a twin. dedup_rows keeps one per real visit/hit."""
+    src = ensure_sources(db)["yandex_webmaster"]
+    s = Site(source_id=src.id, property_uri="https://d.ru/", display_name="d")
+    db.add(s)
+    db.commit()
+    db.add_all([
+        # same visit: exact + rounded id, identical date_time/client/start_url
+        Visit(site_id=s.id, visit_id="17012345678901234", date=date(2026, 6, 1),
+              date_time="2026-06-01 10:00:00", client_id="c1", start_url="https://d.ru/p"),
+        Visit(site_id=s.id, visit_id="17012345678901232", date=date(2026, 6, 1),
+              date_time="2026-06-01 10:00:00", client_id="c1", start_url="https://d.ru/p"),
+        # a genuinely different visit -> must stay
+        Visit(site_id=s.id, visit_id="999", date=date(2026, 6, 1),
+              date_time="2026-06-01 11:00:00", client_id="c2", start_url="https://d.ru/x"),
+        # hit twin
+        Hit(site_id=s.id, watch_id="500000000000000001", date=date(2026, 6, 1),
+            date_time="2026-06-01 10:00:00", url="https://d.ru/p", client_id="c1"),
+        Hit(site_id=s.id, watch_id="500000000000000000", date=date(2026, 6, 1),
+            date_time="2026-06-01 10:00:00", url="https://d.ru/p", client_id="c1"),
+    ])
+    db.commit()
+
+    assert M.dedup_rows(apply=False) == {"visit": 1, "hit": 1}  # preview, nothing deleted yet
+    M.dedup_rows(apply=True)
+    s2 = SessionLocal()
+    try:
+        assert s2.execute(select(func.count()).select_from(Visit)).scalar_one() == 2
+        assert s2.execute(select(func.count()).select_from(Hit)).scalar_one() == 1
+    finally:
+        s2.close()
