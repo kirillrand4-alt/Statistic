@@ -11,5 +11,6 @@ our_pages/
 matching/
 *.txt
 !requirements.txt
+GAP_почти_матч.csv
 night_run/
 specs/
