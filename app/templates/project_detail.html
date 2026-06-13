@@ -50,6 +50,48 @@
   <p><small>Нет данных за период.</small></p>{% endif %}
 </article>
 
+{% if goals %}
+<article>
+  <header>Избранные цели (Метрика) — по странице входа</header>
+  {% if goals.stats.available %}
+  <form method="post" action="{{ base_path }}/ui/projects/{{ project.id }}/goals">
+    <p><small>Отметьте цели, которые отслеживаем, и сохраните. Считаются достижения этих
+    целей визитами, <b>зашедшими</b> на URL проекта (за выбранный период {{ range.start }}…{{ range.end }}).</small></p>
+    <div class="grid">
+    {% for g in goals.stats.available %}
+      <label><input type="checkbox" name="goal" value="{{ g.id }}"
+        {% if g.id in goals.favorites or not goals.favorites %}checked{% endif %}>
+        {{ goals.names.get(g.id, 'Цель ' ~ g.id) }} <small>({{ g.visits|numfmt }})</small></label>
+    {% endfor %}
+    </div>
+    <button type="submit" class="secondary">★ Сохранить избранные</button>
+    <small>{% if goals.favorites %}Сейчас отслеживаются выбранные цели.{% else %}Сейчас считаются все цели (избранные не заданы).{% endif %}</small>
+  </form>
+
+  {% if goals.stats.total %}
+  <p style="margin-top:1rem;"><strong>{{ goals.stats.total|numfmt }}</strong> достижений
+  {% if goals.favorites %}избранных{% endif %} целей через страницы входа проекта · на
+  {{ goals.stats.pages_with_goals|numfmt }} URL.</p>
+  <div class="grid">
+    <article>
+      <header>По целям</header>
+      <table class="sortable"><thead><tr><th>Цель</th><th>Достижений</th></tr></thead>
+        <tbody>{% for g in goals.stats.by_goal %}<tr><td>{{ goals.names.get(g.id, 'Цель ' ~ g.id) }}</td><td>{{ g.count|numfmt }}</td></tr>{% endfor %}</tbody></table>
+    </article>
+    <article>
+      <header>По страницам входа</header>
+      <table class="sortable"><thead><tr><th>URL входа</th><th>Достижений</th></tr></thead>
+        <tbody>{% for r in goals.stats.by_url %}<tr><td><small>{{ r.url }}</small></td><td>{{ r.count|numfmt }}</td></tr>{% endfor %}</tbody></table>
+    </article>
+  </div>
+  {% else %}<p><small>За период достижений выбранных целей через страницы входа проекта нет.</small></p>{% endif %}
+  {% else %}
+  <p><small>За период по страницам входа проекта достижений целей не найдено — проверьте,
+  что качаются визиты этого домена (в выгрузке есть <code>ym:s:goalsID</code>) и что цели настроены в Метрике.</small></p>
+  {% endif %}
+</article>
+{% endif %}
+
 <article>
   <header>Экспорт за период</header>
   <form method="get" action="{{ base_path }}/api/export" class="grid">

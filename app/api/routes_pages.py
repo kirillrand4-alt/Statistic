@@ -432,8 +432,39 @@ def project_page(request: Request, project_id: int, start: str | None = None,
             "subset_totals": totals_svc.subset_totals(db, project, dr, site_ids=site_ids),
             "daily": totals_svc.bucket_series(
                 totals_svc.subset_daily(db, project, dr, site_ids=site_ids), gran),
+            "goals": _project_goals(db, project, site, dr),
         },
     )
+
+
+def _project_goals(db, project, site, dr):
+    """Metrica goal completions on the project's entrance pages (favourites)."""
+    from app.services import goals as goals_svc
+
+    if site is None:
+        return None
+    vids, _ = _same_domain_site_ids(db, site)  # sites of this domain holding visits
+    url_for_key = {}
+    for (u,) in db.execute(
+        select(ProjectUrl.url).where(ProjectUrl.project_id == project.id)
+    ).all():
+        url_for_key.setdefault(goals_svc.page_key(u), u)
+    if not url_for_key:
+        return None
+    favs = goals_svc.parse_favorites(project.favorite_goals)
+    stats = goals_svc.goal_stats(db, vids, dr, url_for_key, favorites=(favs or None))
+    return {"stats": stats, "names": goals_svc.goal_names(db, vids), "favorites": favs}
+
+
+@router.post("/ui/projects/{project_id}/goals")
+def ui_project_goals(project_id: int, goal: list[int] = Form(default=[]),
+                     db: Session = Depends(get_db)):
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "project not found")
+    project.favorite_goals = ",".join(str(g) for g in goal) if goal else None
+    db.commit()
+    return RedirectResponse(url=f"{BP}/projects/{project_id}", status_code=303)
 
 
 @router.get("/projects/{project_id}/compare")

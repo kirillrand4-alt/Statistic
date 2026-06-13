@@ -74,6 +74,8 @@ class Project(Base):
     name: Mapped[str] = mapped_column(String(256))
     site_id: Mapped[int] = mapped_column(ForeignKey("site.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # comma-separated Metrica goal ids to track on this project (empty = all)
+    favorite_goals: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     site: Mapped[Site] = relationship(back_populates="projects")
     urls: Mapped[list["ProjectUrl"]] = relationship(
