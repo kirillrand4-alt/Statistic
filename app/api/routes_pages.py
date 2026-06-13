@@ -465,7 +465,11 @@ async def ui_project_brands(project_id: int, file: UploadFile = File(...),
         raise HTTPException(404, "project not found")
     try:
         res = brands_svc.import_brand_csv(db, await file.read())
-        msg = f"Загружено брендов: {res['brands']}, URL: {res['rows']}"
+        site = db.get(Site, project.site_id)
+        dom = domain_of(site.property_uri) if site else ""
+        added = brands_svc.sync_project_urls(db, project, dom)
+        msg = (f"Загружено брендов: {res['brands']}, URL: {res['rows']}. "
+               f"В проект добавлено URL: {added}.")
     except Exception as exc:  # noqa: BLE001
         msg = f"Ошибка: {exc}"
     finally:

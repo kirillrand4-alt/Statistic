@@ -13,9 +13,9 @@ import io
 from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import UrlBrand
+from app.db.models import ProjectUrl, UrlBrand
 from app.services.goals import page_key
-from app.utils import domain_of
+from app.utils import domain_of, normalize_url
 
 
 def _decode(raw: bytes) -> str:
@@ -74,6 +74,28 @@ def list_brands(db: Session, domain: str) -> list[dict]:
         .order_by(func.count(distinct(UrlBrand.url_key)).desc())
     ).all()
     return [{"brand": b, "urls": int(c)} for b, c in rows]
+
+
+def sync_project_urls(db: Session, project, domain: str) -> int:
+    """Add the domain's brand URLs to ``project`` (so per-URL stats/goals work).
+    Returns how many new URLs were added. Existing URLs are left as-is."""
+    if not domain:
+        return 0
+    rows = db.execute(
+        select(distinct(UrlBrand.url)).where(UrlBrand.domain == domain)
+    ).all()
+    existing = {u.normalized_url for u in project.urls}
+    batch = []
+    for (url,) in rows:
+        nu = normalize_url(url)
+        if nu in existing:
+            continue
+        existing.add(nu)
+        batch.append({"project_id": project.id, "url": url, "normalized_url": nu})
+    for i in range(0, len(batch), 1000):
+        db.execute(ProjectUrl.__table__.insert(), batch[i:i + 1000])
+    db.commit()
+    return len(batch)
 
 
 def brand_url_keys(db: Session, domain: str, brands: list[str]) -> set[str]:

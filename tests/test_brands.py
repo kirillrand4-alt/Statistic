@@ -35,6 +35,25 @@ def test_import_brand_csv_cp1251_and_listing(db):
     assert keys == {"prokompressor.ru/catalog/berg-1"}
 
 
+def test_sync_project_urls_populates_empty_project(db):
+    """Uploading brands fills the project's URL list, so a dedicated (empty)
+    brand project gets per-URL stats/goals instead of nothing."""
+    s = _site(db)
+    B.import_brand_csv(db, (
+        "Abac\thttps://prokompressor.ru/a/\n"
+        "Berg\thttps://prokompressor.ru/b/?utm=x\n"
+        "Berg\thttps://prokompressor.ru/b/\n").encode("utf-8"))  # dup key -> one
+    proj = Project(name="бренды", site_id=s.id)
+    db.add(proj)
+    db.commit()
+
+    added = B.sync_project_urls(db, proj, "prokompressor.ru")
+    db.refresh(proj)
+    assert added == 2 and len(proj.urls) == 2          # /a and /b (UTM dup collapsed)
+    # idempotent: a second sync adds nothing
+    assert B.sync_project_urls(db, proj, "prokompressor.ru") == 0
+
+
 def test_brand_filter_restricts_project_subset(db):
     s = _site(db)
     B.import_brand_csv(db, (
