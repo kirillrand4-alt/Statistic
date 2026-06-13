@@ -405,7 +405,7 @@ def gsc_oauth_callback(request: Request, code: str = "", state: str = "", error:
 @router.get("/projects/{project_id}")
 def project_page(request: Request, project_id: int, start: str | None = None,
                  end: str | None = None, order_by: str = "clicks", merge: int = 0,
-                 db: Session = Depends(get_db)):
+                 gran: str = "day", db: Session = Depends(get_db)):
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(404, "project not found")
@@ -426,10 +426,12 @@ def project_page(request: Request, project_id: int, start: str | None = None,
             "site": site,
             "range": dr,
             "order_by": order_by,
-            "merge": bool(merge), "merged": merged,
+            "merge": bool(merge), "merged": merged, "gran": gran,
             "top_keywords": top_keywords_for_project(db, project, dr, order_by, site_ids=site_ids),
             "ctr": ctr_for_project(db, project, dr, site_ids=site_ids),
             "subset_totals": totals_svc.subset_totals(db, project, dr, site_ids=site_ids),
+            "daily": totals_svc.bucket_series(
+                totals_svc.subset_daily(db, project, dr, site_ids=site_ids), gran),
         },
     )
 

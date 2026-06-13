@@ -73,6 +73,7 @@ def test_full_flow(client):
     # 8. pages render
     assert client.get("/").status_code == 200
     assert client.get(f"/projects/{project_id}?{qp}").status_code == 200
+    assert client.get(f"/projects/{project_id}?{qp}&gran=month").status_code == 200  # trend chart
     assert client.get(f"/compare?site_id={site_id}").status_code == 200
     assert client.get(f"/metrika?site_id={site_id}").status_code == 200
     assert client.get(f"/errors?{qp}").status_code == 200            # overview

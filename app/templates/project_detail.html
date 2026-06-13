@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/site_selector.html" import gran_select %}
 {% block title %}{{ project.name }} · SEO Статистика{% endblock %}
 {% block content %}
 <hgroup>
@@ -29,6 +30,7 @@
       <option value="position" {% if order_by=='position' %}selected{% endif %}>позиции</option>
     </select>
   </label>
+  {{ gran_select(gran) }}
   <label><input type="checkbox" name="merge" value="1" {% if merge %}checked{% endif %}> Объединить домен</label>
   <label>&nbsp;<button type="submit">Обновить</button></label>
 </form>
@@ -41,6 +43,12 @@
   <article><hgroup><h3>{{ subset_totals.ctr|ctr }}</h3><p>CTR</p></hgroup></article>
   <article><hgroup><h3>{{ subset_totals.position|pos }}</h3><p>Ср. позиция</p></hgroup></article>
 </div>
+
+<article>
+  <header>Динамика по подмножеству URL{% if gran == 'week' %} — по неделям{% elif gran == 'month' %} — по месяцам{% else %} — по дням{% endif %}</header>
+  {% if daily %}<canvas id="projTrend" height="90"></canvas>{% else %}
+  <p><small>Нет данных за период.</small></p>{% endif %}
+</article>
 
 <article>
   <header>Экспорт за период</header>
@@ -101,4 +109,22 @@
   </table>
   </figure>
 </article>
+{% endblock %}
+
+{% block scripts %}
+{% if daily %}
+<script>
+  const pd = {{ daily|tojson }};
+  new Chart(document.getElementById('projTrend'), {
+    type: 'line',
+    data: {labels: pd.map(d => d.date), datasets: [
+      {label: 'Клики', data: pd.map(d => d.clicks), borderColor: '#1095c1', yAxisID: 'y', tension: 0},
+      {label: 'Показы', data: pd.map(d => d.impressions), borderColor: '#d93526', yAxisID: 'y1', tension: 0}
+    ]},
+    options: {interaction: {mode: 'index', intersect: false},
+              scales: {y: {position: 'left', title: {display: true, text: 'Клики'}},
+                       y1: {position: 'right', grid: {drawOnChartArea: false}, title: {display: true, text: 'Показы'}}}}
+  });
+</script>
+{% endif %}
 {% endblock %}

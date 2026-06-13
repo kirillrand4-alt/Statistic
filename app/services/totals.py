@@ -203,3 +203,19 @@ def subset_totals(db, project, dr: DateRange, site_ids=None) -> dict:
     page_ids = project_page_ids(db, ids, project)
     df = load_page_metrics_df(db, ids, dr, page_ids=page_ids)
     return totals_from_df(df)
+
+
+def subset_daily(db, project, dr: DateRange, site_ids=None) -> list[dict]:
+    """Daily totals for the project's URL subset (for a time-series chart)."""
+    ids = site_ids or project.site_id
+    page_ids = project_page_ids(db, ids, project)
+    agg = agg_metrics(load_page_metrics_df(db, ids, dr, page_ids=page_ids), ["date"])
+    if agg.empty:
+        return []
+    agg = agg.sort_values("date")
+    return [
+        {"date": d.isoformat() if hasattr(d, "isoformat") else str(d),
+         "clicks": int(r["clicks"]), "impressions": int(r["impressions"]),
+         "ctr": float(r["ctr"]), "position": float(r["position"])}
+        for d, r in zip(agg["date"], agg.to_dict("records"))
+    ]
