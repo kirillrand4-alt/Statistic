@@ -432,12 +432,46 @@ def project_page(request: Request, project_id: int, start: str | None = None,
             "subset_totals": totals_svc.subset_totals(db, project, dr, site_ids=site_ids),
             "daily": totals_svc.bucket_series(
                 totals_svc.subset_daily(db, project, dr, site_ids=site_ids), gran),
-            "goals": _project_goals(db, project, site, dr),
+            "goals": _project_goals(db, project, site, dr, gran),
         },
     )
 
 
-def _project_goals(db, project, site, dr):
+def _goals_chart(stats: dict, names: dict, dr, gran: str, top: int = 8) -> dict | None:
+    """Time series (at ``gran``) of favourite-goal completions across the
+    project's URLs: a line per top goal + 'Прочие' for the rest."""
+    from datetime import timedelta
+
+    daily = stats.get("daily") or {}
+    if not daily:
+        return None
+    span = (dr.end - dr.start).days
+
+    def buckets(daymap):
+        series = [{"date": (dr.start + timedelta(days=i)).isoformat(),
+                   "count": daymap.get((dr.start + timedelta(days=i)).isoformat(), 0)}
+                  for i in range(span + 1)]
+        return totals_svc.bucket_series(series, gran)
+
+    ranked = [g["id"] for g in stats["by_goal"]]
+    labels, series = None, []
+    for gid in ranked[:top]:
+        b = buckets(daily.get(gid, {}))
+        labels = [x["date"] for x in b]
+        series.append({"name": names.get(gid, f"Цель {gid}"), "data": [x["count"] for x in b]})
+    rest = ranked[top:]
+    if rest:
+        merged: dict[str, int] = {}
+        for gid in rest:
+            for d2, c in daily.get(gid, {}).items():
+                merged[d2] = merged.get(d2, 0) + c
+        b = buckets(merged)
+        labels = labels or [x["date"] for x in b]
+        series.append({"name": "Прочие", "data": [x["count"] for x in b]})
+    return {"labels": labels or [], "series": series} if series else None
+
+
+def _project_goals(db, project, site, dr, gran):
     """Metrica goal completions on the project's entrance pages (favourites)."""
     from app.services import goals as goals_svc
 
@@ -453,7 +487,9 @@ def _project_goals(db, project, site, dr):
         return None
     favs = goals_svc.parse_favorites(project.favorite_goals)
     stats = goals_svc.goal_stats(db, vids, dr, url_for_key, favorites=(favs or None))
-    return {"stats": stats, "names": goals_svc.goal_names(db, vids), "favorites": favs}
+    names = goals_svc.goal_names(db, vids)
+    return {"stats": stats, "names": names, "favorites": favs,
+            "chart": _goals_chart(stats, names, dr, gran)}
 
 
 @router.post("/ui/projects/{project_id}/goals")

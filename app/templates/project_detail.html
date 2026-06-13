@@ -57,14 +57,16 @@
   <form method="post" action="{{ base_path }}/ui/projects/{{ project.id }}/goals">
     <p><small>Отметьте цели, которые отслеживаем, и сохраните. Считаются достижения этих
     целей визитами, <b>зашедшими</b> на URL проекта (за выбранный период {{ range.start }}…{{ range.end }}).</small></p>
-    <div class="grid">
+    <div style="columns: 280px auto; column-gap: 1.5rem;">
     {% for g in goals.stats.available %}
-      <label><input type="checkbox" name="goal" value="{{ g.id }}"
-        {% if g.id in goals.favorites or not goals.favorites %}checked{% endif %}>
-        {{ goals.names.get(g.id, 'Цель ' ~ g.id) }} <small>({{ g.visits|numfmt }})</small></label>
+      <label style="display:flex; align-items:center; gap:.45rem; break-inside:avoid; margin:.15rem 0;">
+        <input type="checkbox" name="goal" value="{{ g.id }}" style="flex:0 0 auto; margin:0;"
+          {% if g.id in goals.favorites or not goals.favorites %}checked{% endif %}>
+        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ goals.names.get(g.id, 'Цель ' ~ g.id) }} <small>({{ g.visits|numfmt }})</small></span>
+      </label>
     {% endfor %}
     </div>
-    <button type="submit" class="secondary">★ Сохранить избранные</button>
+    <button type="submit" class="secondary" style="margin-top:.6rem;">★ Сохранить избранные</button>
     <small>{% if goals.favorites %}Сейчас отслеживаются выбранные цели.{% else %}Сейчас считаются все цели (избранные не заданы).{% endif %}</small>
   </form>
 
@@ -72,6 +74,12 @@
   <p style="margin-top:1rem;"><strong>{{ goals.stats.total|numfmt }}</strong> достижений
   {% if goals.favorites %}избранных{% endif %} целей через страницы входа проекта · на
   {{ goals.stats.pages_with_goals|numfmt }} URL.</p>
+  {% if goals.chart %}
+  <article>
+    <header>Достижения целей по проекту{% if gran == 'week' %} — по неделям{% elif gran == 'month' %} — по месяцам{% else %} — по дням{% endif %}</header>
+    <canvas id="goalsChart" height="90"></canvas>
+  </article>
+  {% endif %}
   <div class="grid">
     <article>
       <header>По целям</header>
@@ -166,6 +174,19 @@
     options: {interaction: {mode: 'index', intersect: false},
               scales: {y: {position: 'left', title: {display: true, text: 'Клики'}},
                        y1: {position: 'right', grid: {drawOnChartArea: false}, title: {display: true, text: 'Показы'}}}}
+  });
+</script>
+{% endif %}
+{% if goals and goals.chart %}
+<script>
+  const gc = {{ goals.chart|tojson }};
+  const gpal = ['#1095c1','#d93526','#208a3c','#b8860b','#6f42c1','#e8590c','#0aa6a6','#c2185b','#888'];
+  new Chart(document.getElementById('goalsChart'), {
+    type: 'line',
+    data: {labels: gc.labels, datasets: gc.series.map((s, i) => ({
+      label: s.name, data: s.data, borderColor: gpal[i % gpal.length], tension: 0, pointRadius: 0}))},
+    options: {interaction: {mode: 'index', intersect: false},
+              scales: {y: {beginAtZero: true, ticks: {precision: 0}}}}
   });
 </script>
 {% endif %}

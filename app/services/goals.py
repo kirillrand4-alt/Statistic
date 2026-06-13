@@ -70,7 +70,7 @@ def goal_stats(db, site_ids, dr: DateRange, url_for_key: dict[str, str],
     A completion = (visit reached goal); a visit reaching N favourite goals adds
     N. ``favorites=None`` counts every goal (the default when none are saved)."""
     rows = db.execute(
-        select(Visit.start_url, Visit.extra).where(
+        select(Visit.start_url, Visit.date, Visit.extra).where(
             Visit.site_id.in_(_ids(site_ids)), Visit.date >= dr.start, Visit.date <= dr.end,
             Visit.extra.isnot(None), Visit.extra.like("%goalsID%"),
         )
@@ -78,8 +78,9 @@ def goal_stats(db, site_ids, dr: DateRange, url_for_key: dict[str, str],
     available: dict[int, int] = {}
     by_goal: dict[int, int] = {}
     by_url: dict[str, int] = {}
+    daily: dict[int, dict[str, int]] = {}  # goal_id -> {date_iso: completions}
     total = 0
-    for start_url, extra in rows:
+    for start_url, d, extra in rows:
         k = page_key(start_url)
         if k not in url_for_key:
             continue
@@ -93,8 +94,11 @@ def goal_stats(db, site_ids, dr: DateRange, url_for_key: dict[str, str],
             continue
         by_url[k] = by_url.get(k, 0) + len(sel)
         total += len(sel)
+        diso = d.isoformat() if d is not None else None
         for g in sel:
             by_goal[g] = by_goal.get(g, 0) + 1
+            if diso:
+                daily.setdefault(g, {})[diso] = daily.setdefault(g, {}).get(diso, 0) + 1
     return {
         "available": sorted(({"id": g, "visits": v} for g, v in available.items()),
                             key=lambda r: r["visits"], reverse=True),
@@ -102,6 +106,7 @@ def goal_stats(db, site_ids, dr: DateRange, url_for_key: dict[str, str],
                           key=lambda r: r["count"], reverse=True),
         "by_url": sorted(({"url": url_for_key[k], "count": c} for k, c in by_url.items()),
                          key=lambda r: r["count"], reverse=True)[:top],
+        "daily": daily,
         "total": total,
         "pages_with_goals": len(by_url),
     }
