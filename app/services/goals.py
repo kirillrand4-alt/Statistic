@@ -70,7 +70,7 @@ def goal_stats(db, site_ids, dr: DateRange, url_for_key: dict[str, str],
     A completion = (visit reached goal); a visit reaching N favourite goals adds
     N. ``favorites=None`` counts every goal (the default when none are saved)."""
     rows = db.execute(
-        select(Visit.start_url, Visit.date, Visit.extra).where(
+        select(Visit.visit_id, Visit.start_url, Visit.date, Visit.extra).where(
             Visit.site_id.in_(_ids(site_ids)), Visit.date >= dr.start, Visit.date <= dr.end,
             Visit.extra.isnot(None), Visit.extra.like("%goalsID%"),
         )
@@ -80,7 +80,11 @@ def goal_stats(db, site_ids, dr: DateRange, url_for_key: dict[str, str],
     by_url: dict[str, int] = {}
     daily: dict[int, dict[str, int]] = {}  # goal_id -> {date_iso: completions}
     total = 0
-    for start_url, d, extra in rows:
+    seen: set = set()  # one visit can sit under several same-domain properties
+    for vid, start_url, d, extra in rows:
+        if vid in seen:  # count each Metrica visit once, not per property
+            continue
+        seen.add(vid)
         k = page_key(start_url)
         if k not in url_for_key:
             continue

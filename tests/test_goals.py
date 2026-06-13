@@ -63,3 +63,21 @@ def test_goal_stats_by_entrance_page_and_favorites(db):
     assert fav["total"] == 2
     assert {g["id"]: g["count"] for g in fav["by_goal"]} == {20: 2}
     assert {r["url"]: r["count"] for r in fav["by_url"]} == {"https://shop.ru/a": 1, "https://shop.ru/b": 1}
+
+
+def test_goal_stats_dedups_visit_across_properties(db):
+    """A domain's visits can sit under several same-domain properties
+    (https:// + sc-domain:). Each visit must be counted ONCE, not per property."""
+    src = ensure_sources(db)["yandex_webmaster"]
+    a = Site(source_id=src.id, property_uri="https://shop.ru/", display_name="a")
+    b = Site(source_id=src.id, property_uri="sc-domain:shop.ru", display_name="b")
+    db.add_all([a, b])
+    db.commit()
+    ufk = {page_key("https://shop.ru/p"): "https://shop.ru/p"}
+    _visit(db, a.id, 1, "https://shop.ru/p", [10])   # same visit id 1 under BOTH
+    _visit(db, b.id, 1, "https://shop.ru/p", [10])
+    db.commit()
+
+    s = goal_stats(db, [a.id, b.id], DR, ufk)
+    assert s["total"] == 1
+    assert {g["id"]: g["count"] for g in s["by_goal"]} == {10: 1}
