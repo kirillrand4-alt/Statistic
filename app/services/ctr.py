@@ -11,9 +11,10 @@ from app.services.loaders import (
 from app.utils import normalize_url
 
 
-def ctr_for_project(db, project, dr: DateRange, site_ids=None) -> dict:
+def ctr_for_project(db, project, dr: DateRange, site_ids=None, only_norms=None) -> dict:
     ids = site_ids or project.site_id
-    df = load_page_metrics_df(db, ids, dr, page_ids=project_page_ids(db, ids, project))
+    df = load_page_metrics_df(
+        db, ids, dr, page_ids=project_page_ids(db, ids, project, only_norms=only_norms))
 
     by_norm: dict[str, dict] = {}
     if not df.empty:

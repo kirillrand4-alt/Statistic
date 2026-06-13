@@ -13,11 +13,12 @@ _SORT = {
 
 
 def top_keywords_for_project(db, project, dr: DateRange, order_by: str = "clicks",
-                             site_ids=None) -> list[dict]:
+                             site_ids=None, only_norms=None) -> list[dict]:
     if order_by not in _SORT:
         order_by = "clicks"
     ids = site_ids or project.site_id
-    df = load_query_metrics_df(db, ids, dr, page_ids=project_page_ids(db, ids, project))
+    df = load_query_metrics_df(
+        db, ids, dr, page_ids=project_page_ids(db, ids, project, only_norms=only_norms))
 
     best_by_norm: dict[str, dict] = {}
     if not df.empty:

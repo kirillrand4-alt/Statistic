@@ -198,17 +198,17 @@ def combine_pages_devices(parts: list[list[dict]], limit: int = 20) -> list[dict
     return out[:limit]
 
 
-def subset_totals(db, project, dr: DateRange, site_ids=None) -> dict:
+def subset_totals(db, project, dr: DateRange, site_ids=None, only_norms=None) -> dict:
     ids = site_ids or project.site_id
-    page_ids = project_page_ids(db, ids, project)
+    page_ids = project_page_ids(db, ids, project, only_norms=only_norms)
     df = load_page_metrics_df(db, ids, dr, page_ids=page_ids)
     return totals_from_df(df)
 
 
-def subset_daily(db, project, dr: DateRange, site_ids=None) -> list[dict]:
+def subset_daily(db, project, dr: DateRange, site_ids=None, only_norms=None) -> list[dict]:
     """Daily totals for the project's URL subset (for a time-series chart)."""
     ids = site_ids or project.site_id
-    page_ids = project_page_ids(db, ids, project)
+    page_ids = project_page_ids(db, ids, project, only_norms=only_norms)
     agg = agg_metrics(load_page_metrics_df(db, ids, dr, page_ids=page_ids), ["date"])
     if agg.empty:
         return []

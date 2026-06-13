@@ -57,10 +57,14 @@ def project_page_id_map(db: Session, site_id: int, project: Project) -> dict[str
     return {n: pid for n, pid in rows}
 
 
-def project_page_ids(db: Session, site_id, project: Project) -> list[int]:
+def project_page_ids(db: Session, site_id, project: Project, only_norms=None) -> list[int]:
     """All Page ids matching the project's URLs across one or several sites
-    (so a project resolves to its pages in every merged same-domain property)."""
+    (so a project resolves to its pages in every merged same-domain property).
+    ``only_norms`` (a set of normalized URLs) restricts to that subset — used to
+    filter the project by brand."""
     norms = [u.normalized_url for u in project.urls]
+    if only_norms is not None:
+        norms = [n for n in norms if n in only_norms]
     if not norms:
         return []
     rows = db.execute(

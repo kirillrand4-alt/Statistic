@@ -99,6 +99,25 @@ class ProjectUrl(Base):
     project: Mapped[Project] = relationship(back_populates="urls")
 
 
+class UrlBrand(Base):
+    """Per-domain URL -> brand map (uploaded CSV), to filter a project by brand.
+
+    ``url_key`` is host+path (scheme/www/query-agnostic), the same key the goals
+    matcher uses, so it lines up with project URLs regardless of UTM tags."""
+
+    __tablename__ = "url_brand"
+    __table_args__ = (
+        UniqueConstraint("domain", "url_key", "brand", name="uq_url_brand"),
+        Index("ix_url_brand_dom_brand", "domain", "brand"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    domain: Mapped[str] = mapped_column(String(255), index=True)
+    url_key: Mapped[str] = mapped_column(String(512))
+    brand: Mapped[str] = mapped_column(String(128))
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class Page(Base):
     """A unique page within a site; dedupes URLs across daily metric rows."""
 

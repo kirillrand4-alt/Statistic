@@ -19,23 +19,52 @@
 </article>
 
 <p><a href="{{ base_path }}/projects/{{ project.id }}/compare" role="button" class="contrast">⚖ Сравнение периодов: Google + Яндекс</a></p>
+{% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
 
-<form method="get" action="{{ base_path }}/projects/{{ project.id }}" class="grid">
-  <label>С <input type="date" name="start" value="{{ range.start }}"></label>
-  <label>По <input type="date" name="end" value="{{ range.end }}"></label>
-  <label>ТОП-1 по
-    <select name="order_by">
-      <option value="clicks" {% if order_by=='clicks' %}selected{% endif %}>кликам</option>
-      <option value="impressions" {% if order_by=='impressions' %}selected{% endif %}>показам</option>
-      <option value="position" {% if order_by=='position' %}selected{% endif %}>позиции</option>
-    </select>
-  </label>
-  {{ gran_select(gran) }}
-  <label><input type="checkbox" name="merge" value="1" {% if merge %}checked{% endif %}> Объединить домен</label>
-  <label>&nbsp;<button type="submit">Обновить</button></label>
+<form method="get" action="{{ base_path }}/projects/{{ project.id }}">
+  <div class="grid">
+    <label>С <input type="date" name="start" value="{{ range.start }}"></label>
+    <label>По <input type="date" name="end" value="{{ range.end }}"></label>
+    <label>ТОП-1 по
+      <select name="order_by">
+        <option value="clicks" {% if order_by=='clicks' %}selected{% endif %}>кликам</option>
+        <option value="impressions" {% if order_by=='impressions' %}selected{% endif %}>показам</option>
+        <option value="position" {% if order_by=='position' %}selected{% endif %}>позиции</option>
+      </select>
+    </label>
+    {{ gran_select(gran) }}
+    <label><input type="checkbox" name="merge" value="1" {% if merge %}checked{% endif %}> Объединить домен</label>
+    <label>&nbsp;<button type="submit">Обновить</button></label>
+  </div>
+  {% if brands %}
+  <details {% if sel_brands %}open{% endif %} style="margin-top:.5rem;">
+    <summary><strong>Бренды</strong> ({{ brands|length }}){% if sel_brands %} · выбрано {{ sel_brands|length }}{% endif %} — отметьте и нажмите «Обновить»</summary>
+    <div style="columns: 230px auto; column-gap: 1.5rem; margin-top:.5rem;">
+    {% for b in brands %}
+      <label style="display:flex; align-items:center; gap:.45rem; break-inside:avoid; margin:.15rem 0;">
+        <input type="checkbox" name="brand" value="{{ b.brand }}" style="flex:0 0 auto; margin:0;" {% if b.brand in sel_brands %}checked{% endif %}>
+        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ b.brand }} <small>({{ b.urls|numfmt }})</small></span>
+      </label>
+    {% endfor %}
+    </div>
+    <small>Статистика и цели пересчитаются только по URL выбранных брендов (пересечение с URL проекта). Пусто = весь проект.</small>
+  </details>
+  {% endif %}
 </form>
+{% if sel_brands %}<p><mark>Фильтр по брендам: {{ sel_brands|join(', ') }}.</mark></p>{% endif %}
 {% if merged %}<p><mark>Объединено свойств домена «{{ merged.domain }}»: {{ merged.count }} (макс. на URL/день, без задвоения https:// и sc-domain:).</mark></p>
 {% elif merge %}<p><small>Другого свойства того же домена не нашлось — объединять нечего.</small></p>{% endif %}
+
+<article>
+  <header>Бренды сайта (CSV: «бренд; ссылка»)</header>
+  <form method="post" action="{{ base_path }}/ui/projects/{{ project.id }}/brands" enctype="multipart/form-data">
+    <div class="grid">
+      <label>Файл со списком «бренд → URL» <input type="file" name="file" accept=".csv,.tsv,.txt" required></label>
+      <label>&nbsp;<button type="submit" class="secondary">Загрузить бренды</button></label>
+    </div>
+    <small>Две колонки: бренд и URL (таб/запятая/точка-с-запятой, cp1251 или utf-8). Повторная загрузка заменяет карту брендов домена. После загрузки бренды появятся в фильтре выше.</small>
+  </form>
+</article>
 
 <div class="grid">
   <article><hgroup><h3>{{ subset_totals.clicks|numfmt }}</h3><p>Клики (подмножество)</p></hgroup></article>

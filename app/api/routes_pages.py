@@ -405,7 +405,11 @@ def gsc_oauth_callback(request: Request, code: str = "", state: str = "", error:
 @router.get("/projects/{project_id}")
 def project_page(request: Request, project_id: int, start: str | None = None,
                  end: str | None = None, order_by: str = "clicks", merge: int = 0,
-                 gran: str = "day", db: Session = Depends(get_db)):
+                 gran: str = "day", brand: list[str] | None = Query(None),
+                 msg: str | None = None, db: Session = Depends(get_db)):
+    from app.services import brands as brands_svc
+    from app.services.goals import page_key
+
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(404, "project not found")
@@ -417,6 +421,16 @@ def project_page(request: Request, project_id: int, start: str | None = None,
         if len(ids) > 1:
             site_ids = ids
             merged = {"count": len(ids), "domain": domain_of(site.property_uri)}
+
+    # Brand filter: restrict the project's URLs to the chosen brands of its domain
+    domain = domain_of(site.property_uri) if site else ""
+    brand_list = brands_svc.list_brands(db, domain) if domain else []
+    sel_brands = [b for b in (brand or []) if any(x["brand"] == b for x in brand_list)]
+    only_norms, brand_keys = None, None
+    if sel_brands:
+        brand_keys = brands_svc.brand_url_keys(db, domain, sel_brands)
+        only_norms = {u.normalized_url for u in project.urls if page_key(u.url) in brand_keys}
+
     return templates.TemplateResponse(
         request,
         "project_detail.html",
@@ -424,17 +438,39 @@ def project_page(request: Request, project_id: int, start: str | None = None,
             "request": request,
             "project": project,
             "site": site,
-            "range": dr,
+            "range": dr, "msg": msg,
             "order_by": order_by,
             "merge": bool(merge), "merged": merged, "gran": gran,
-            "top_keywords": top_keywords_for_project(db, project, dr, order_by, site_ids=site_ids),
-            "ctr": ctr_for_project(db, project, dr, site_ids=site_ids),
-            "subset_totals": totals_svc.subset_totals(db, project, dr, site_ids=site_ids),
+            "brands": brand_list, "sel_brands": sel_brands,
+            "top_keywords": top_keywords_for_project(db, project, dr, order_by,
+                                                     site_ids=site_ids, only_norms=only_norms),
+            "ctr": ctr_for_project(db, project, dr, site_ids=site_ids, only_norms=only_norms),
+            "subset_totals": totals_svc.subset_totals(db, project, dr, site_ids=site_ids,
+                                                      only_norms=only_norms),
             "daily": totals_svc.bucket_series(
-                totals_svc.subset_daily(db, project, dr, site_ids=site_ids), gran),
-            "goals": _project_goals(db, project, site, dr, gran),
+                totals_svc.subset_daily(db, project, dr, site_ids=site_ids,
+                                        only_norms=only_norms), gran),
+            "goals": _project_goals(db, project, site, dr, gran, brand_keys=brand_keys),
         },
     )
+
+
+@router.post("/ui/projects/{project_id}/brands")
+async def ui_project_brands(project_id: int, file: UploadFile = File(...),
+                            db: Session = Depends(get_db)):
+    from app.services import brands as brands_svc
+
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(404, "project not found")
+    try:
+        res = brands_svc.import_brand_csv(db, await file.read())
+        msg = f"Загружено брендов: {res['brands']}, URL: {res['rows']}"
+    except Exception as exc:  # noqa: BLE001
+        msg = f"Ошибка: {exc}"
+    finally:
+        await file.close()
+    return RedirectResponse(url=f"{BP}/projects/{project_id}?msg={quote(msg)}", status_code=303)
 
 
 def _goals_chart(stats: dict, names: dict, dr, gran: str, top: int = 8) -> dict | None:
@@ -471,8 +507,9 @@ def _goals_chart(stats: dict, names: dict, dr, gran: str, top: int = 8) -> dict 
     return {"labels": labels or [], "series": series} if series else None
 
 
-def _project_goals(db, project, site, dr, gran):
-    """Metrica goal completions on the project's entrance pages (favourites)."""
+def _project_goals(db, project, site, dr, gran, brand_keys=None):
+    """Metrica goal completions on the project's entrance pages (favourites),
+    optionally restricted to the URLs of the selected brands."""
     from app.services import goals as goals_svc
 
     if site is None:
@@ -482,7 +519,9 @@ def _project_goals(db, project, site, dr, gran):
     for (u,) in db.execute(
         select(ProjectUrl.url).where(ProjectUrl.project_id == project.id)
     ).all():
-        url_for_key.setdefault(goals_svc.page_key(u), u)
+        k = goals_svc.page_key(u)
+        if brand_keys is None or k in brand_keys:
+            url_for_key.setdefault(k, u)
     if not url_for_key:
         return None
     favs = goals_svc.parse_favorites(project.favorite_goals)
