@@ -240,7 +240,8 @@ class Visit(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     site_id: Mapped[int] = mapped_column(ForeignKey("site.id"), index=True)
-    visit_id: Mapped[int] = mapped_column(BigInteger)
+    visit_id: Mapped[str] = mapped_column(String(32))  # Metrica id, kept as text
+                                                        # (some exceed 64-bit int)
     counter_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     date: Mapped[date_type | None] = mapped_column(Date, nullable=True)
     date_time: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -280,7 +281,8 @@ class Hit(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     site_id: Mapped[int] = mapped_column(ForeignKey("site.id"), index=True)
-    watch_id: Mapped[int] = mapped_column(BigInteger)
+    watch_id: Mapped[str] = mapped_column(String(32))  # Metrica id, kept as text
+                                                        # (some exceed 64-bit int)
     counter_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     date: Mapped[date_type | None] = mapped_column(Date, nullable=True)
     date_time: Mapped[str | None] = mapped_column(String(32), nullable=True)

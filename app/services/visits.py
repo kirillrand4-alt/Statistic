@@ -41,7 +41,7 @@ FIELD_MAP = {
     "ym:s:ipAddress": "ip",
     "ym:s:watchIDs": "watch_ids",
 }
-_VISIT_INT = {"visit_id", "counter_id", "page_views", "duration", "bounce"}
+_VISIT_INT = {"counter_id", "page_views", "duration", "bounce"}
 
 # Full set of visit fields to REQUEST from the Logs API (a superset of the typed
 # columns above; the rest is stored as JSON in ``extra``). Curated to fields that
@@ -90,7 +90,7 @@ HIT_FIELD_MAP = {
     "ym:pv:link": "is_link",
     "ym:pv:notBounce": "not_bounce",
 }
-_HIT_INT = {"watch_id", "counter_id", "is_page_view", "is_download", "is_link", "not_bounce"}
+_HIT_INT = {"counter_id", "is_page_view", "is_download", "is_link", "not_bounce"}
 
 HIT_FIELDS = [
     "ym:pv:watchID", "ym:pv:counterID", "ym:pv:date", "ym:pv:dateTime", "ym:pv:URL",
@@ -116,9 +116,9 @@ def _toint(v):
             return 0
 
 
-# Signed 64-bit range — the limit of a BIGINT / SQLite INTEGER column. A Metrica
-# id past this can't be stored, so such a row is skipped rather than crashing the
-# whole batch with "Python int too large to convert to SQLite INTEGER".
+# Signed 64-bit range — the limit of an INTEGER column. The visit/watch id (the
+# key) is stored as TEXT so huge Metrica ids are kept; this only clamps the
+# numeric value columns, so one stray oversized value can't crash the batch.
 _INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1
 
 
@@ -188,7 +188,7 @@ def _import_rows(db: Session, site_id: int, lines, *, model, field_map: dict,
         template[c] = 0
     conflict = ["site_id", key_col]
 
-    written, payload, oob = 0, [], 0
+    written, payload = 0, []
     for row in reader:
         rec = dict(template)
         rec["site_id"] = site_id
@@ -201,20 +201,16 @@ def _import_rows(db: Session, site_id: int, lines, *, model, field_map: dict,
                 rec[col] = val
             elif val not in ("", None):
                 extra[short] = val
-        if not rec.get(key_col):
+        if not rec.get(key_col):  # the id (kept as text) is required
             continue
-        for c in int_cols:
-            rec[c] = _toint(rec.get(c))
-        if not (_INT64_MIN <= rec[key_col] <= _INT64_MAX):
-            oob += 1  # id doesn't fit the column — skip just this row
-            continue
-        for c in int_cols:  # clamp non-key ints so a stray huge value can't crash
-            if c != key_col and not (_INT64_MIN <= rec[c] <= _INT64_MAX):
+        for c in int_cols:  # numeric value columns; clamp so a stray huge value
+            rec[c] = _toint(rec.get(c))  # can't crash the batch (key isn't here)
+            if not (_INT64_MIN <= rec[c] <= _INT64_MAX):
                 rec[c] = _INT64_MAX if rec[c] > 0 else _INT64_MIN
         if "date" in template:
             rec["date"] = _todate(rec.get("date"))
         for c in all_cols:
-            if c not in int_cols and c != "date" and rec.get(c) == "":
+            if c not in int_cols and c != "date" and c != key_col and rec.get(c) == "":
                 rec[c] = None
         rec["extra"] = json.dumps(extra, ensure_ascii=False) if extra else None
         payload.append(rec)
@@ -224,8 +220,6 @@ def _import_rows(db: Session, site_id: int, lines, *, model, field_map: dict,
     if payload:
         written += _insert_rows(db, model, payload, conflict, update)
     db.commit()
-    if oob:
-        print(f"   пропущено строк с id вне диапазона BIGINT: {oob}", flush=True)
     return written
 
 

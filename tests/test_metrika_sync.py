@@ -61,21 +61,21 @@ def test_visit_extra_and_upsert(db):
     assert db.execute(select(Visit.device).where(Visit.visit_id == 100)).scalar_one() == "mobile"
 
 
-def test_import_handles_huge_ids(db):
-    """A Metrica id past the signed-64-bit column limit is skipped (not a crash),
-    while the max valid id is stored EXACTLY (parsing must not round via float)."""
+def test_import_keeps_huge_ids_as_text(db):
+    """A Metrica id past the signed-64-bit limit is now KEPT (stored as text),
+    not dropped — it's only a dedup key, never used in arithmetic."""
     sid = _mksite(db, "big.ru")
-    maxok = 2**63 - 1          # fits exactly — int(float(id)) would round this up
-    huge = 2**63 + 100         # past the limit — row skipped, no OverflowError
+    maxok = 2**63 - 1
+    huge = 2**63 + 100         # past 64-bit — must be stored, not skipped
     n = V.import_tsv(db, sid, _lines(
         VHDR,
         f"{maxok}\t2026-06-01\tdesktop\t1\tg",
         f"{huge}\t2026-06-01\tmobile\t2\ty",
     ))
-    assert n == 1
-    ids = {v for (v,) in db.execute(
+    assert n == 2
+    ids = {str(v) for (v,) in db.execute(
         select(Visit.visit_id).where(Visit.site_id == sid)).all()}
-    assert ids == {maxok}
+    assert ids == {str(maxok), str(huge)}
 
 
 def test_resolve_targets(db, monkeypatch):
@@ -130,9 +130,9 @@ def test_merge_domain_dupes_consolidates(db):
     assert moved == 3  # 2 visits + 1 hit removed from the dup site
     s = SessionLocal()
     try:
-        vis = {v for (v,) in s.execute(
+        vis = {str(v) for (v,) in s.execute(
             select(Visit.visit_id).where(Visit.site_id == b.id)).all()}
-        assert vis == {1, 2, 3, 4}
+        assert vis == {"1", "2", "3", "4"}  # ids are text now
         assert s.execute(select(func.count()).where(Visit.site_id == a.id)).scalar_one() == 0
         assert s.execute(select(Hit.site_id).where(Hit.watch_id == 7)).scalar_one() == b.id
     finally:
