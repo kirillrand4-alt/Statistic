@@ -7,6 +7,7 @@ brand_reports/
 gap_reports/
 unmatched/
 dropped/
+our_pages/
 *.txt
 !requirements.txt
 night_run/
