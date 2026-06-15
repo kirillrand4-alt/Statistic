@@ -263,7 +263,7 @@ async def ui_serp_run(domain: str = Form(""), se: list[int] = Form(default=[]),
                       yandex_region: int = Form(213), google_region: int = Form(1011969),
                       depth: int = Form(10), min_clicks: int = Form(1),
                       max_keywords: int = Form(500), period_days: int = Form(90),
-                      snippets: int = Form(1), phrases: str = Form(""),
+                      batch: int = Form(1000), snippets: int = Form(1), phrases: str = Form(""),
                       file: UploadFile | None = File(None), db: Session = Depends(get_db)):
     from datetime import timedelta
 
@@ -307,7 +307,8 @@ async def ui_serp_run(domain: str = Form(""), se: list[int] = Form(default=[]),
         src = "ключевые слова из статистики"
     if not words:
         return back("Не нашлось фраз: вставь свои или ослабь фильтр «мин. кликов».")
-    serp_run.launch_run(words, se_list, token=token, depth=depth, snippets=bool(snippets))
+    serp_run.launch_run(words, se_list, token=token, depth=depth, snippets=bool(snippets),
+                        batch=max(1, min(batch, 5000)), timeout_min=120)
     return back(f"Запущено ({src}): {len(words)} фраз × {len(se_list)} ПС "
                 f"(~{len(words) * len(se_list)} лимитов). Обновляйте страницу — результаты появятся.")
 
