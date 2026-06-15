@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Страницы: устройства · SEO Статистика{% endblock %}
+
+{% macro dnum(a, b, delta) %}
+<span title="было {{ b|numfmt }}">{{ a|numfmt }}</span>
+{%- if delta %} <small style="color:{{ 'green' if delta > 0 else 'crimson' }}">{{ '+' if delta > 0 else '' }}{{ delta|numfmt }}</small>{% endif %}
+{% endmacro %}
+
+{% macro dctr(a, b, delta) %}
+<span title="было {{ (b*100)|round(2) }}%">{{ (a*100)|round(2) }}%</span>
+{%- if delta and (delta*100)|round(2) != 0 %} <small style="color:{{ 'green' if delta > 0 else 'crimson' }}">{{ '+' if delta > 0 else '' }}{{ (delta*100)|round(2) }}pp</small>{% endif %}
+{% endmacro %}
+
+{% block content %}
+<h2>Страницы: десктоп / мобайл и динамика</h2>
+<style>article table td { vertical-align: top; }</style>
+<p><small>По каждой странице — клики, показы и CTR отдельно для <strong>десктопа</strong> и
+<strong>мобайла</strong>, с изменением за период. Главное число — текущий период
+(<strong>{{ range_a.start }} … {{ range_a.end }}</strong>), в скобке «было» — предыдущий
+(<strong>{{ range_b.start }} … {{ range_b.end }}</strong>), <span style="color:green">+рост</span> /
+<span style="color:crimson">−падение</span>.</small></p>
+
+<form method="get" action="{{ base_path }}/pages" class="grid">
+  <label>Домен
+    <select name="domain" onchange="this.form.submit()">
+      {% for d in domains %}<option value="{{ d.domain }}" {% if d.domain==cur_domain %}selected{% endif %}>{{ d.domain }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Источник
+    <select name="engine" onchange="this.form.submit()">
+      {% for e in engines_avail %}<option value="{{ e }}" {% if e==engine %}selected{% endif %}>{{ 'Google (GSC)' if e=='gsc' else 'Яндекс' }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Период с <input type="date" name="start" value="{{ range_a.start }}"></label>
+  <label>по <input type="date" name="end" value="{{ range_a.end }}"></label>
+  <label>Поиск по URL <input type="search" name="q" value="{{ q }}"></label>
+  <label>Показов ≥ <input type="number" name="min_impr" value="{{ min_impr }}" min="0"></label>
+  <label>Сортировка
+    <select name="sort">
+      <option value="clicks" {% if sort=='clicks' %}selected{% endif %}>Клики (текущие) ↓</option>
+      <option value="growth" {% if sort=='growth' %}selected{% endif %}>Рост кликов ↓</option>
+      <option value="drop" {% if sort=='drop' %}selected{% endif %}>Падение кликов ↓</option>
+      <option value="impr" {% if sort=='impr' %}selected{% endif %}>Показы ↓</option>
+    </select>
+  </label>
+  <label>&nbsp;<button type="submit">Показать</button></label>
+</form>
+
+{% if not has_data %}
+<article><p>⚠️ Нет данных по устройствам для этого домена/источника. Они собираются автоматически
+для подключённых сайтов (Google Search Console / Яндекс) — проверьте подключение в
+<a href="{{ base_path }}/admin">Настройках</a>.</p></article>
+{% endif %}
+
+{% set qs = 'domain=' ~ cur_domain ~ '&engine=' ~ engine ~ '&start=' ~ range_a.start ~ '&end=' ~ range_a.end ~ '&q=' ~ q ~ '&min_impr=' ~ min_impr ~ '&sort=' ~ sort %}
+<p>Найдено страниц: <strong>{{ total|numfmt }}</strong>{% if total > shown %} (показано {{ shown|numfmt }} — полный список в выгрузке){% endif %}.
+  Выгрузить:
+  <a href="{{ base_path }}/pages/export?{{ qs }}&format=xlsx" role="button" class="outline">Excel</a>
+  <a href="{{ base_path }}/pages/export?{{ qs }}&format=csv" role="button" class="outline secondary">CSV</a>
+</p>
+
+<article>
+  <figure>
+  <table class="sortable">
+    <thead><tr>
+      <th>URL</th>
+      <th>💻 клики</th><th>💻 показы</th><th>💻 CTR</th>
+      <th>📱 клики</th><th>📱 показы</th><th>📱 CTR</th>
+      <th>Итого клики</th>
+    </tr></thead>
+    <tbody>
+    {% for r in rows %}
+      {% set dk = r.dev.desktop %}{% set mb = r.dev.mobile %}{% set t = r.total %}
+      <tr>
+        <td><small title="{{ r.url }}">{{ (r.url|truncate(60))[:60] }}</small></td>
+        <td>{{ dnum(dk.clicks_a, dk.clicks_b, dk.clicks_delta) }}</td>
+        <td><small>{{ dnum(dk.impr_a, dk.impr_b, dk.impr_delta) }}</small></td>
+        <td><small>{{ dctr(dk.ctr_a, dk.ctr_b, dk.ctr_delta) }}</small></td>
+        <td>{{ dnum(mb.clicks_a, mb.clicks_b, mb.clicks_delta) }}</td>
+        <td><small>{{ dnum(mb.impr_a, mb.impr_b, mb.impr_delta) }}</small></td>
+        <td><small>{{ dctr(mb.ctr_a, mb.ctr_b, mb.ctr_delta) }}</small></td>
+        <td><strong>{{ dnum(t.clicks_a, t.clicks_b, t.clicks_delta) }}</strong></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8"><small>Нет страниц по фильтру (или нет device-данных за период).</small></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </figure>
+  <small>💻 — десктоп, 📱 — мобайл. «Итого» — сумма по всем устройствам (вкл. планшеты).
+  Наведи на число — увидишь значение за прошлый период.</small>
+</article>
+{% endblock %}

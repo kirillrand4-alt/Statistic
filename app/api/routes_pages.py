@@ -660,6 +660,59 @@ def cannibalization_export(domain: str | None = None, period_days: int = 90,
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
+def _pages_inputs(db, domain, engine, start, end, b_start, b_end):
+    """Resolve domain/engine -> site_ids (one engine, to avoid double-count) and
+    periods A (current) and B (previous)."""
+    domains = _domains(db)
+    cur = domain if domain and any(d["domain"] == domain for d in domains) \
+        else (domains[0]["domain"] if domains else None)
+    avail = next((d["engines"] for d in domains if d["domain"] == cur), [])
+    eng = engine if engine in avail else (avail[0] if avail else "gsc")
+    ids = (_domain_engine_ids(db, cur, (eng,)).get(eng, []) if cur
+           else _keyword_site_ids(db, "", (eng,)))
+    dr_a = parse_date_range(start, end)
+    dr_b = resolve_period_b(dr_a, b_start, b_end)
+    return domains, cur, avail, eng, ids, dr_a, dr_b
+
+
+@router.get("/pages")
+def pages_page(request: Request, domain: str | None = None, engine: str = "gsc",
+               start: str | None = None, end: str | None = None, b_start: str | None = None,
+               b_end: str | None = None, q: str | None = None, min_impr: str | None = None,
+               sort: str = "clicks", db: Session = Depends(get_db)):
+    from app.services import page_devices as PD
+
+    domains, cur, avail, eng, ids, dr_a, dr_b = _pages_inputs(
+        db, domain, engine, start, end, b_start, b_end)
+    show = 500
+    res = PD.page_device_compare(db, ids, dr_a, dr_b, search=(q or None),
+                                 min_impressions=_qint(min_impr) or 0, sort=sort, limit=show)
+    return templates.TemplateResponse(request, "pages.html", {
+        "request": request, "domains": domains, "cur_domain": cur or "",
+        "engines_avail": avail, "engine": eng, "range_a": dr_a, "range_b": dr_b,
+        "rows": res["rows"], "total": res["total"], "shown": show, "devices": res["devices"],
+        "q": q or "", "min_impr": _qint(min_impr) or "", "sort": sort,
+        "has_data": bool(ids),
+    })
+
+
+@router.get("/pages/export")
+def pages_export(domain: str | None = None, engine: str = "gsc", start: str | None = None,
+                 end: str | None = None, b_start: str | None = None, b_end: str | None = None,
+                 q: str | None = None, min_impr: str | None = None, sort: str = "clicks",
+                 format: str = "csv", db: Session = Depends(get_db)):
+    from app.services import page_devices as PD
+
+    _domains_, cur, _avail, _eng, ids, dr_a, dr_b = _pages_inputs(
+        db, domain, engine, start, end, b_start, b_end)
+    res = PD.page_device_compare(db, ids, dr_a, dr_b, search=(q or None),
+                                 min_impressions=_qint(min_impr) or 0, sort=sort, limit=None)
+    fname, buf, media = PD.build_export(res["rows"], res["devices"], cur or "all",
+                                        fmt=("xlsx" if format == "xlsx" else "csv"))
+    return StreamingResponse(buf, media_type=media,
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 @router.post("/ui/backfill")
 def ui_backfill(site_id: int = Form(...), days: int = Form(90), db: Session = Depends(get_db)):
     from app.scheduler.jobs import run_backfill
