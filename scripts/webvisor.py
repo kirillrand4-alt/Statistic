@@ -164,24 +164,42 @@ def cmd_discover(counter) -> None:
             print("  ", u)
 
 
+def _shape(d, depth=0):
+    if isinstance(d, dict):
+        if depth >= 2:
+            return "{…}"
+        items = list(d.items())[:10]
+        return "{" + ",".join(f"{k}:{_shape(v, depth + 1)}" for k, v in items) + ("…}" if len(d) > 10 else "}")
+    if isinstance(d, list):
+        return f"[{len(d)}×{_shape(d[0], depth + 1)}]" if d else "[]"
+    return "str" if isinstance(d, str) else type(d).__name__
+
+
 def cmd_inspect() -> None:
-    """Read the JSON bodies saved by --discover and print field names + a sample,
-    so we can map the session list to visit_id/user_id_hash without shell-escaping."""
-    pat = re.compile(r'"([A-Za-z_]*(?:hash|visit|watch|uid|user|client|uniq|durat|counter)[A-Za-z_]*)"', re.I)
+    """Inspect JSON bodies saved by --discover (no shell special chars): print each
+    file's shape, hash/visit-ish field names, where our known visit_id/user_id_hash
+    sit, and a snippet after the first "data" so we can read a real session row."""
+    pat = re.compile(r'"([A-Za-z_]*(?:hash|visit|watch|uid|user|client|uniq|durat)[A-Za-z_]*)"', re.I)
+    needles = ["3320642230537945170", "212544696", "3320726018304245762", "3663266546"]
     files = sorted(glob.glob(os.path.join(DEBUG_DIR, "api_*.json")))
     if not files:
         print("Нет файлов api_*.json — сначала запусти --discover.")
         return
     for f in files:
         t = open(f, encoding="utf-8").read()
+        try:
+            shape = _shape(json.loads(t))
+        except Exception:
+            shape = "<не JSON>"
         names = sorted(set(pat.findall(t)), key=str.lower)
-        print(f"\n{os.path.basename(f)} (len={len(t)}): {names}")
-        for key in ("userIDHash", "userIdHash", "user_id_hash", "uniqID",
-                    "visitID", "visitId", "watchIDs"):
-            j = t.find('"' + key + '"')
+        print(f"\n{os.path.basename(f)} (len={len(t)})\n  shape: {shape[:500]}\n  поля: {names}")
+        for nd in needles:
+            j = t.find(nd)
             if j >= 0:
-                print(f"   sample {key}: {t[j:j + 200]}")
-                break
+                print(f"  нашёл {nd}: …{t[max(0, j - 90):j + 50]}…")
+        k = t.find('"data"')
+        if k >= 0 and len(t) > 3000:
+            print(f"  после data: …{t[k:k + 240]}…")
 
 
 def _done_ids() -> set[str]:
