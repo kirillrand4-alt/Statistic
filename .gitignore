@@ -12,5 +12,6 @@ matching/
 *.txt
 !requirements.txt
 GAP_почти_матч.csv
+Бренды_конкурентов_нет_у_нас.csv
 night_run/
 specs/
