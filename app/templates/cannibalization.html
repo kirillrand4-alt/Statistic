@@ -2,6 +2,7 @@
 {% block title %}Каннибализация · SEO Статистика{% endblock %}
 {% block content %}
 <h2>Каннибализация страниц</h2>
+<style>article table td { vertical-align: top; }</style>
 <p><small>Несколько ваших страниц конкурируют за один запрос. <strong>GSC</strong> — по реальным
 показам/кликам (все запросы, история). <strong>Выдача</strong> — ≥2 ваших URL в живом ТОПе
 (arsenkin, оба ПС). Главная <code>/</code> {{ 'исключена' if exclude_home else 'учитывается' }}.</small></p>
@@ -27,7 +28,7 @@
 
 {% set qs = 'domain=' ~ cur_domain ~ '&period_days=' ~ period_days ~ '&min_query_impr=' ~ min_query_impr ~ '&min_page_impr=' ~ min_page_impr ~ '&max_position=' ~ max_position ~ '&exclude_home=' ~ (1 if exclude_home else 0) %}
 <article>
-  <header>По данным GSC (за {{ period_days }} дн.) — найдено {{ gsc_rows|length|numfmt }} запросов
+  <header>По данным GSC (за {{ period_days }} дн.) — найдено <strong>{{ gsc_total|numfmt }}</strong> запросов{% if gsc_total > shown %} (показано {{ shown|numfmt }} — полный список в выгрузке){% endif %}
     {% if gsc_rows %}· <a href="{{ base_path }}/cannibalization/export?{{ qs }}&format=xlsx" role="button" class="outline">Excel</a>
     <a href="{{ base_path }}/cannibalization/export?{{ qs }}&format=csv" role="button" class="outline secondary">CSV</a>{% endif %}
   </header>
@@ -58,7 +59,7 @@
 </article>
 
 <article>
-  <header>По выдаче (arsenkin)
+  <header>По выдаче (arsenkin){% if serp_total %} — найдено {{ serp_total|numfmt }}{% if serp_total > shown %} (показано {{ shown|numfmt }}){% endif %}{% endif %}
     {% if captures %}— срез
       <form method="get" action="{{ base_path }}/cannibalization" style="display:inline">
         <input type="hidden" name="domain" value="{{ cur_domain }}">

@@ -613,21 +613,23 @@ def cannibalization_page(request: Request, domain: str | None = None,
                           end.isoformat())
     mqi = _qint(min_query_impr); mpi = _qint(min_page_impr); mpos = _qint(max_position)
     home = bool(exclude_home)
-    gsc_rows = C.gsc_cannibalization(
+    show = 500  # rows rendered on the page; export is unlimited
+    gsc_all = C.gsc_cannibalization(
         db, gsc_ids, dr, min_query_impr=(mqi if mqi is not None else 30),
         min_page_impr=(mpi if mpi is not None else 10),
-        max_position=(float(mpos) if mpos else None), exclude_home=home, limit=500)
+        max_position=(float(mpos) if mpos else None), exclude_home=home, limit=None)
 
     caps = S.captures(db)
     cap_sel = cap or (caps[0] if caps else None)
     own = {cur} if cur else {d["domain"] for d in _domains(db)}
-    serp_rows = C.serp_cannibalization(db, cap_sel, own, se=(list(se) if se else None),
-                                       exclude_home=home, limit=500)
+    serp_all = C.serp_cannibalization(db, cap_sel, own, se=(list(se) if se else None),
+                                      exclude_home=home, limit=None)
     return templates.TemplateResponse(request, "cannibalization.html", {
         "request": request, "domains": domains, "cur_domain": cur or "",
         "period_days": period_days, "min_query_impr": mqi if mqi is not None else 30,
         "min_page_impr": mpi if mpi is not None else 10, "max_position": mpos or "",
-        "exclude_home": home, "gsc_rows": gsc_rows, "serp_rows": serp_rows,
+        "exclude_home": home, "gsc_rows": gsc_all[:show], "serp_rows": serp_all[:show],
+        "gsc_total": len(gsc_all), "serp_total": len(serp_all), "shown": show,
         "has_gsc": bool(gsc_ids), "captures": caps, "cap": cap_sel,
         "se_sel": [int(x) for x in se] if se else [],
     })
