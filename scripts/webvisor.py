@@ -278,30 +278,41 @@ def cmd_harvest(counter, d1, d2) -> None:
             print("Не залогинен — сначала пройди --login."); ctx.close(); return
         if not key["v"]:
             print("Не удалось получить ключ API (список не загрузился)."); ctx.close(); return
-        print(f"Ключ получен. Собираю сессии {d1}…{d2} постранично:")
-        offset = 1
-        while offset < 200000:
-            args = json.dumps([{"offset": offset, "limit": 200, "date1": d1, "date2": d2,
-                                "sort": "-ym:s:dateTime", "id": str(counter),
-                                "dimensions": _HARVEST_DIMS}])
-            try:
-                r = ctx.request.post(getlist, form={"args": args, "key": key["v"], "lang": "ru"},
-                                     headers={"x-requested-with": "XMLHttpRequest", "referer": list_url})
-                data = r.json()
-            except Exception as e:
-                print(f"  offset {offset}: ошибка {e}"); break
-            rows = (data.get("result") or {}).get("data") or []
-            for row in rows:
-                dn = row.get("dimensions") or []
-                vid = dn[0].get("name") if len(dn) > 0 else None
-                uh = dn[4].get("name") if len(dn) > 4 else None
-                if vid and uh and vid not in seen:
-                    seen.add(vid)
-                    sessions.append({"visit_id": vid, "user_id_hash": uh})
-            print(f"  offset {offset}: +{len(rows)} (итого {len(sessions)})", flush=True)
-            if len(rows) < 200:
-                break
-            offset += 200
+        days, a, b = [], date.fromisoformat(d1), date.fromisoformat(d2)
+        while a <= b:
+            days.append(a.isoformat()); a += timedelta(days=1)
+        print(f"Ключ получен. Собираю по дням {d1}…{d2} ({len(days)} дн.):")
+        headers = {"x-requested-with": "XMLHttpRequest", "origin": "https://metrika.yandex.ru",
+                   "referer": list_url}
+        diag = True
+        for day in reversed(days):  # newest day first
+            offset, day_n = 1, 0
+            while offset < 200000:
+                args = json.dumps([{"offset": offset, "limit": 200, "date1": day, "date2": day,
+                                    "sort": "-ym:s:dateTime", "id": str(counter),
+                                    "dimensions": _HARVEST_DIMS}])
+                try:
+                    r = ctx.request.post(getlist, form={"args": args, "key": key["v"], "lang": "ru"},
+                                         headers=headers)
+                    data = r.json()
+                except Exception as e:
+                    print(f"  {day} offset {offset}: ошибка {e}"); break
+                rows = (data.get("result") or {}).get("data") or []
+                if diag:  # show what the very first call actually returned
+                    diag = False
+                    print(f"  [диагностика] HTTP {r.status}; ключи: {list(data.keys())[:6]}; "
+                          f"строк: {len(rows)}; фрагмент: {str(data)[:220]}")
+                for row in rows:
+                    dn = row.get("dimensions") or []
+                    vid = dn[0].get("name") if len(dn) > 0 else None
+                    uh = dn[4].get("name") if len(dn) > 4 else None
+                    if vid and uh and vid not in seen:
+                        seen.add(vid)
+                        sessions.append({"visit_id": vid, "user_id_hash": uh}); day_n += 1
+                if len(rows) < 200:
+                    break
+                offset += 200
+            print(f"  {day}: +{day_n} (итого {len(sessions)})", flush=True)
         ctx.close()
 
     os.makedirs(DATA_DIR, exist_ok=True)
