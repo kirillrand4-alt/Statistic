@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}ТОП-10 выдачи · SEO Статистика{% endblock %}
+{% block content %}
+<h2>ТОП-10 выдачи (arsenkin)</h2>
+
+{% if not captures %}
+<article><p>Пока нет результатов. Запусти парсинг:
+<code>python scripts/arsenkin_top.py --domain ДОМЕН --min-clicks 1 --apply</code>
+(токен — в <a href="{{ base_path }}/admin">Настройках</a>). Результаты появятся здесь.</p></article>
+{% else %}
+<form method="get" action="{{ base_path }}/serp" class="grid">
+  <label>Срез (дата)
+    <select name="captured_on" onchange="this.form.submit()">
+      {% for c in captures %}<option value="{{ c }}" {% if c==cap %}selected{% endif %}>{{ c }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Свой домен (свои позиции)
+    <select name="domain" onchange="this.form.submit()">
+      <option value="">— любой —</option>
+      {% for d in domains %}<option value="{{ d.domain }}" {% if d.domain==domain %}selected{% endif %}>{{ d.domain }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Поиск по фразе <input type="search" name="q" value="{{ q }}"></label>
+  <fieldset style="margin:0;"><legend><small>ПС</small></legend>
+    <label style="display:inline-flex;gap:.3rem;margin-right:.8rem;"><input type="checkbox" name="se" value="2" {% if 2 in se_sel or not se_sel %}checked{% endif %}> Яндекс</label>
+    <label style="display:inline-flex;gap:.3rem;margin-right:.8rem;"><input type="checkbox" name="se" value="11" {% if 11 in se_sel or not se_sel %}checked{% endif %}> Google</label>
+    <label style="display:inline-flex;gap:.3rem;margin-right:.8rem;"><input type="checkbox" name="se" value="3" {% if 3 in se_sel %}checked{% endif %}> Яндекс моб</label>
+    <label style="display:inline-flex;gap:.3rem;"><input type="checkbox" name="se" value="12" {% if 12 in se_sel %}checked{% endif %}> Google моб</label>
+  </fieldset>
+  <label>&nbsp;<button type="submit">Показать</button></label>
+</form>
+
+{% set qs = 'captured_on=' ~ (cap or '') ~ '&domain=' ~ domain ~ '&q=' ~ q %}
+{% for s in se_sel %}{% set qs = qs ~ '&se=' ~ s %}{% endfor %}
+<p>Срез <strong>{{ cap }}</strong>. Выгрузить (с учётом фильтров):
+  <a href="{{ base_path }}/serp/export?{{ qs }}&format=xlsx" role="button" class="outline">Excel</a>
+  <a href="{{ base_path }}/serp/export?{{ qs }}&format=csv" role="button" class="outline secondary">CSV</a>
+  <small>Свои домены в таблице — <mark>подсвечены</mark>.</small>
+</p>
+
+<article>
+  <header>ТОП по фразам (показано до {{ shown_limit|numfmt }} строк) — полный список в выгрузке</header>
+  <figure>
+  <table class="sortable">
+    <thead><tr><th>Запрос</th><th>ПС</th><th>Поз.</th><th>URL</th><th>Домен</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr{% if r.url_domain in own_domains %} style="background:#fff7cc"{% endif %}>
+        <td>{{ r.keyword }}</td><td><small>{{ r.se_label }}</small></td><td>{{ r.position }}</td>
+        <td><small>{{ r.url }}</small></td><td><small>{{ r.url_domain }}</small></td></tr>
+    {% else %}
+      <tr><td colspan="5"><small>Нет данных по фильтру.</small></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </figure>
+</article>
+{% endif %}
+{% endblock %}

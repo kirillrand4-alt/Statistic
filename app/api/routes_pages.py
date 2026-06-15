@@ -225,6 +225,41 @@ def keywords_export(domain: str | None = None, engines: list[str] | None = Query
                              headers={"Content-Disposition": f'attachment; filename="{fn}"'})
 
 
+@router.get("/serp")
+def serp_page(request: Request, captured_on: str | None = None,
+              se: list[int] | None = Query(None), domain: str | None = None,
+              q: str | None = None, db: Session = Depends(get_db)):
+    from app.services import serp as S
+
+    caps = S.captures(db)
+    cap = captured_on or (caps[0] if caps else None)
+    se_sel = list(se) if se else []
+    rows = S.serp_rows(db, captured_on=cap, se=(se_sel or None), domain=(domain or None),
+                       search=(q or None), limit=2000)
+    own = {d["domain"] for d in _domains(db)}
+    return templates.TemplateResponse(request, "serp.html", {
+        "request": request, "captures": caps, "cap": cap, "rows": rows,
+        "se_sel": se_sel, "domain": domain or "", "q": q or "",
+        "domains": _domains(db), "own_domains": own, "shown_limit": 2000,
+    })
+
+
+@router.get("/serp/export")
+def serp_export(captured_on: str | None = None, se: list[int] | None = Query(None),
+                domain: str | None = None, q: str | None = None, format: str = "csv",
+                db: Session = Depends(get_db)):
+    from app.services import serp as S
+
+    caps = S.captures(db)
+    cap = captured_on or (caps[0] if caps else None)
+    rows = S.serp_rows(db, captured_on=cap, se=(list(se) if se else None),
+                       domain=(domain or None), search=(q or None), limit=None)
+    fmt = "csv" if format == "csv" else "xlsx"
+    fn, buf, media = S.build_serp_export(rows, cap or "all", fmt)
+    return StreamingResponse(buf, media_type=media,
+                             headers={"Content-Disposition": f'attachment; filename="{fn}"'})
+
+
 @router.get("/upload")
 def upload_page(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
