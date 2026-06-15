@@ -441,8 +441,7 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0) -> None:
                 except Exception:
                     pass
             man.flush()
-            if i % 25 == 0 or i == len(todo):
-                print(f"  [{i}/{len(todo)}] ok={ok} fail={fail}", flush=True)
+            print(f"  [{i}/{len(todo)}] visit={vid} ok={ok} fail={fail}", flush=True)
         ctx.close()
     man.close()
     print(f"Готово: записано {ok}, ошибок {fail}. Видео в {OUT_DIR}")
