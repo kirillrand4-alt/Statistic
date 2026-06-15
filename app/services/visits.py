@@ -40,15 +40,16 @@ FIELD_MAP = {
     "ym:s:regionCity": "region_city",
     "ym:s:ipAddress": "ip",
     "ym:s:watchIDs": "watch_ids",
+    "ym:s:isRobot": "is_robot",
 }
-_VISIT_INT = {"counter_id", "page_views", "duration", "bounce"}
+_VISIT_INT = {"counter_id", "page_views", "duration", "bounce", "is_robot"}
 
 # Full set of visit fields to REQUEST from the Logs API (a superset of the typed
 # columns above; the rest is stored as JSON in ``extra``). Curated to fields that
 # are valid for any counter — one invalid field makes the whole request fail.
 VISIT_FIELDS = [
     "ym:s:visitID", "ym:s:counterID", "ym:s:watchIDs", "ym:s:date", "ym:s:dateTime",
-    "ym:s:isNewUser", "ym:s:startURL", "ym:s:endURL", "ym:s:pageViews",
+    "ym:s:isNewUser", "ym:s:isRobot", "ym:s:startURL", "ym:s:endURL", "ym:s:pageViews",
     "ym:s:visitDuration", "ym:s:bounce", "ym:s:ipAddress", "ym:s:regionCountry",
     "ym:s:regionCity", "ym:s:clientID", "ym:s:lastTrafficSource", "ym:s:lastAdvEngine",
     "ym:s:lastReferalSource", "ym:s:lastSearchEngine", "ym:s:lastSearchEngineRoot",

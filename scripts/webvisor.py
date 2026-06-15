@@ -42,6 +42,10 @@ def main() -> None:
     ap.add_argument("--to", dest="d2", help="дата по (по умолч. сегодня)")
     ap.add_argument("--source", help="фильтр по источнику трафика (напр. organic/ad/direct)")
     ap.add_argument("--min-pageviews", dest="min_pv", type=int, default=0)
+    ap.add_argument("--min-duration", dest="min_dur", type=int, default=0,
+                    help="только сессии длиннее N секунд (например 10)")
+    ap.add_argument("--no-bots", dest="no_bots", action="store_true",
+                    help="исключить роботов (ym:s:isRobot; нужна пере-синхронизация визитов)")
     ap.add_argument("--count", action="store_true", help="сколько сессий за период")
     ap.add_argument("--list", action="store_true", help="вывести visit_id сессий")
     ap.add_argument("--limit", type=int, default=0)
@@ -64,15 +68,21 @@ def main() -> None:
         d2 = date.fromisoformat(a.d2) if a.d2 else date.today()
         d1 = date.fromisoformat(a.d1) if a.d1 else d2 - timedelta(days=13)
         dr = DateRange(start=d1, end=d2)
-        kw = {"source": a.source, "min_page_views": a.min_pv}
+        kw = {"source": a.source, "min_page_views": a.min_pv,
+              "min_duration": a.min_dur, "exclude_bots": a.no_bots}
 
         if a.record:
             print(_SETUP)
             return
+        if a.no_bots and not W.has_robot_flag(db, sid):
+            print("⚠ Флаг робота ещё не синхронизирован для этого сайта — --no-bots ничего не отсечёт.")
+            print("  Пере-синкни визиты за период, потом повтори (см. scripts/metrika_logs.py).")
         n = W.count_sessions(db, sid, dr, **kw)
         print(f"Сессий к записи: {n} (сайт {sid}, {d1}…{d2}"
               + (f", источник {a.source}" if a.source else "")
-              + (f", ≥{a.min_pv} стр." if a.min_pv else "") + ")")
+              + (f", ≥{a.min_pv} стр." if a.min_pv else "")
+              + (f", >{a.min_dur}с" if a.min_dur else "")
+              + (", без ботов" if a.no_bots else "") + ")")
         if a.list:
             for s in W.sessions_for_period(db, sid, dr, limit=(a.limit or None), **kw):
                 print(f"  {s['date']}  visit={s['visit_id']}  стр={s['page_views']}  "
