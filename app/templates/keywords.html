@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% from "partials/site_selector.html" import picker %}
+{% block title %}Ключевые слова · SEO Статистика{% endblock %}
+{% block content %}
+<h2>Ключевые слова</h2>
+
+{% if not domains %}<article><p>Сначала добавьте сайт и соберите статистику.</p></article>{% else %}
+<form method="get" action="{{ base_path }}/keywords" class="grid">
+  {{ picker(domains, cur_domain, engines, all_label='— Все домены —') }}
+  <label>С <input type="date" name="start" value="{{ range.start }}"></label>
+  <label>По <input type="date" name="end" value="{{ range.end }}"></label>
+  <label>Поиск по фразе <input type="search" name="q" value="{{ q }}" placeholder="часть запроса"></label>
+  <label>Мин. кликов <input type="number" name="min_clicks" value="{{ min_clicks }}" min="0" style="max-width:7rem"></label>
+  <label>&nbsp;<button type="submit">Показать</button></label>
+</form>
+<small>Источник — запросы из Google Search Console и Яндекс.Вебмастера (срез
+«страница × запрос × день»), агрегировано по фразе. Поисковики не отдают
+сверхредкие/анонимизированные запросы, поэтому «все» = всё, что вернули ПС за
+период. При выборе обоих ПС клики/показы суммируются.</small>
+
+{% if summary %}
+<div class="grid">
+  <article><hgroup><h3>{{ summary.keywords|numfmt }}</h3><p>Ключевых фраз</p></hgroup></article>
+  <article><hgroup><h3>{{ summary.clicks|numfmt }}</h3><p>Клики</p></hgroup></article>
+  <article><hgroup><h3>{{ summary.impressions|numfmt }}</h3><p>Показы</p></hgroup></article>
+  <article><hgroup><h3>{{ (100 * summary.clicks / summary.impressions)|round(2) if summary.impressions else 0 }}%</h3><p>CTR</p></hgroup></article>
+</div>
+
+{% set qs = 'domain=' ~ (cur_domain or '') ~ '&start=' ~ range.start ~ '&end=' ~ range.end ~ '&q=' ~ q ~ '&min_clicks=' ~ min_clicks %}
+{% for e in engines %}{% set qs = qs ~ '&engines=' ~ e %}{% endfor %}
+<p>Выгрузить <strong>все {{ summary.keywords|numfmt }}</strong> фраз:
+  <a href="{{ base_path }}/keywords/export?{{ qs }}&format=xlsx" role="button" class="outline">Excel</a>
+  <a href="{{ base_path }}/keywords/export?{{ qs }}&format=csv" role="button" class="outline secondary">CSV</a>
+</p>
+
+<article>
+  <header>Ключевые слова (показаны топ {{ shown_limit|numfmt }} по кликам{% if q %}, фильтр «{{ q }}»{% endif %}) — полный список в выгрузке</header>
+  <figure>
+  <table class="sortable">
+    <thead><tr><th>Запрос</th><th>Клики</th><th>Показы</th><th>CTR</th><th>Позиция</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr><td>{{ r.query }}</td><td>{{ r.clicks|numfmt }}</td><td>{{ r.impressions|numfmt }}</td>
+          <td>{{ r.ctr|ctr }}</td><td>{{ r.position|pos }}</td></tr>
+    {% else %}
+      <tr><td colspan="5"><small>Нет запросов за период (или фильтр слишком строгий).</small></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </figure>
+</article>
+{% endif %}
+{% endif %}
+{% endblock %}

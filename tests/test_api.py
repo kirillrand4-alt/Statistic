@@ -82,6 +82,9 @@ def test_full_flow(client):
     assert client.get("/?gran=week").status_code == 200
     assert client.get(f"/?gran=month").status_code == 200
     assert client.get("/errors?gran=week").status_code == 200
+    assert client.get("/keywords").status_code == 200
+    assert client.get(f"/keywords?domain=example.com&{qp}").status_code == 200
+    assert client.get(f"/keywords/export?domain=example.com&{qp}&format=csv").status_code == 200
     assert client.get(f"/indexing?site_id={site_id}&gran=month").status_code == 200
 
     # 9. two-engine project comparison (JSON, page, CSV export)

@@ -14,9 +14,10 @@
 </label>
 {% endmacro %}
 
-{% macro picker(domains, cur_domain, engines) %}
+{% macro picker(domains, cur_domain, engines, all_label=None) %}
 <label style="min-width:340px;">Домен
   <select name="domain" onchange="this.form.submit()">
+    {% if all_label %}<option value="" {% if cur_domain == "" %}selected{% endif %}>{{ all_label }}</option>{% endif %}
     {% for d in domains %}<option value="{{ d.domain }}" {% if d.domain == cur_domain %}selected{% endif %}>{{ d.domain }}</option>{% endfor %}
   </select>
 </label>

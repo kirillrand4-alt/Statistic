@@ -6,7 +6,7 @@ from datetime import date
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -75,6 +75,18 @@ def _domains(db: Session) -> list[dict]:
             if d:
                 m.setdefault(d, set()).add(code)
     return [{"domain": d, "engines": sorted(m[d])} for d in sorted(m)]
+
+
+def _keyword_site_ids(db: Session, domain: str | None, engine_codes) -> list[int]:
+    """site_ids for the keyword view: one domain's properties, or — when
+    ``domain`` is "" (all) — every search-engine property."""
+    if domain:
+        return [sid for ids in _domain_engine_ids(db, domain, engine_codes).values()
+                for sid in ids]
+    rows = db.execute(
+        select(Site.id, Source.code).join(Source, Site.source_id == Source.id)
+    ).all()
+    return [sid for sid, code in rows if code in engine_codes]
 
 
 def _domain_engine_ids(db: Session, domain: str, engine_codes) -> dict[str, list[int]]:
@@ -161,6 +173,56 @@ def dashboard(request: Request, domain: str | None = None,
             ctx["totals"] = totals_svc.combine_totals(
                 [totals_svc.site_totals(db, ids, dr) for ids in parts])
     return templates.TemplateResponse(request, "dashboard.html", ctx)
+
+
+def _kw_resolve(db, domain, engines):
+    """(domains, cur, selected_engines, site_ids) for the keyword views.
+    ``domain`` None -> first domain; "" -> all domains."""
+    domains = _domains(db)
+    cur = (domains[0]["domain"] if domains else None) if domain is None else domain
+    avail = (list(SEARCH_ENGINES) if cur == "" else
+             next((d["engines"] for d in domains if d["domain"] == cur), []))
+    sel = [e for e in (engines or avail) if e in avail] or avail
+    ids = _keyword_site_ids(db, cur, sel) if cur is not None and sel else []
+    return domains, cur, sel, ids
+
+
+@router.get("/keywords")
+def keywords_page(request: Request, domain: str | None = None,
+                  engines: list[str] | None = Query(None), start: str | None = None,
+                  end: str | None = None, q: str | None = None,
+                  min_clicks: int = 0, min_impr: int = 0, db: Session = Depends(get_db)):
+    from app.services import keywords as kw
+
+    domains, cur, sel, ids = _kw_resolve(db, domain, engines)
+    dr = parse_date_range(start, end)
+    rows, summary = [], None
+    if ids:
+        summary = kw.keyword_summary(db, ids, dr)
+        rows = kw.keyword_rows(db, ids, dr, min_clicks=min_clicks, min_impr=min_impr,
+                               search=(q or None), limit=2000)
+    return templates.TemplateResponse(request, "keywords.html", {
+        "request": request, "domains": domains, "cur_domain": cur, "engines": sel,
+        "range": dr, "rows": rows, "summary": summary, "shown_limit": 2000,
+        "q": q or "", "min_clicks": min_clicks, "min_impr": min_impr,
+    })
+
+
+@router.get("/keywords/export")
+def keywords_export(domain: str | None = None, engines: list[str] | None = Query(None),
+                    start: str | None = None, end: str | None = None, q: str | None = None,
+                    min_clicks: int = 0, min_impr: int = 0, format: str = "csv",
+                    db: Session = Depends(get_db)):
+    from app.services import keywords as kw
+
+    _, cur, _, ids = _kw_resolve(db, domain, engines)
+    dr = parse_date_range(start, end)
+    rows = kw.keyword_rows(db, ids, dr, min_clicks=min_clicks, min_impr=min_impr,
+                           search=(q or None), limit=None)  # ALL keywords
+    fmt = "csv" if format == "csv" else "xlsx"
+    fn, buf, media = kw.build_keyword_export(rows, cur or "all", dr, fmt)
+    return StreamingResponse(buf, media_type=media,
+                             headers={"Content-Disposition": f'attachment; filename="{fn}"'})
 
 
 @router.get("/upload")
