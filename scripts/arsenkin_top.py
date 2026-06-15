@@ -133,6 +133,42 @@ def _store(db, rows, task_id) -> int:
     return len(payload)
 
 
+def dump(path: str, captured_on=None, only_domain: str | None = None,
+         se_types: list[int] | None = None) -> None:
+    """Write stored SERP results to a CSV (long format: one row per position)."""
+    import csv
+
+    from sqlalchemy import func, select
+
+    from app.db.models import SerpResult
+
+    init_db()
+    db = SessionLocal()
+    try:
+        cap = (date.fromisoformat(captured_on) if captured_on
+               else db.execute(select(func.max(SerpResult.captured_on))).scalar())
+        if cap is None:
+            print("В базе нет результатов ТОП (serp_result пуст). Сначала запусти парсинг.")
+            return
+        stmt = select(SerpResult).where(SerpResult.captured_on == cap)
+        if se_types:
+            stmt = stmt.where(SerpResult.se.in_(se_types))
+        if only_domain:
+            stmt = stmt.where(SerpResult.url_domain == only_domain)
+        stmt = stmt.order_by(SerpResult.keyword, SerpResult.se, SerpResult.position)
+        rows = db.execute(stmt).scalars().all()
+        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["Запрос", "ПС", "Регион", "Позиция", "URL", "Домен", "Заголовок", "Дата"])
+            for r in rows:
+                w.writerow([r.keyword, SE_LABELS.get(r.se, r.se), r.region, r.position,
+                            r.url, r.url_domain, r.title, r.captured_on])
+        print(f"Выгружено строк: {len(rows)} → {path} (срез {cap}"
+              + (f", домен {only_domain}" if only_domain else "") + ")")
+    finally:
+        db.close()
+
+
 def run(keywords, se, *, token, base, depth, snippets, batch, parallel, poll_sec,
         timeout_min, max_per_min) -> None:
     init_db()
@@ -204,7 +240,16 @@ def main() -> None:
     api.add_argument("--timeout-min", dest="timeout_min", type=int, default=30)
     api.add_argument("--rpm", type=int, default=28, help="запросов/мин (лимит arsenkin 30)")
     ap.add_argument("--apply", action="store_true", help="реально запустить (иначе только смета)")
+    dmp = ap.add_argument_group("выгрузка из базы")
+    dmp.add_argument("--dump", help="выгрузить сохранённый ТОП в CSV по этому пути и выйти")
+    dmp.add_argument("--captured-on", dest="captured_on", help="дата среза (по умолч. последняя)")
+    dmp.add_argument("--only-domain", dest="only_domain", help="только строки этого домена (свои позиции)")
     a = ap.parse_args()
+
+    if a.dump:
+        se_types = [s["type"] for s in _parse_se(a.se)] if a.se else None
+        dump(a.dump, captured_on=a.captured_on, only_domain=a.only_domain, se_types=se_types)
+        return
 
     token = a.token or get_cred("arsenkin_token")
     if not token:

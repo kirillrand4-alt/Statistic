@@ -86,3 +86,25 @@ def test_run_stores_serp(db, monkeypatch):
         assert s.execute(select(func.count()).select_from(SerpResult)).scalar_one() == 2
     finally:
         s.close()
+
+
+def test_dump_writes_csv(db, tmp_path):
+    from datetime import date
+
+    from app.db.models import SerpResult
+    db.add_all([
+        SerpResult(keyword="k1", se=2, region=213, position=1, url="https://shop.ru/p",
+                   url_domain="shop.ru", title="T", captured_on=date(2026, 6, 1)),
+        SerpResult(keyword="k1", se=2, region=213, position=2, url="https://rival.ru/x",
+                   url_domain="rival.ru", captured_on=date(2026, 6, 1)),
+    ])
+    db.commit()
+    out = tmp_path / "serp.csv"
+    A.dump(str(out))
+    body = out.read_text(encoding="utf-8-sig")
+    assert "Запрос" in body and "k1" in body and "shop.ru" in body and "Яндекс" in body
+    # only-domain filter keeps just your rows
+    out2 = tmp_path / "mine.csv"
+    A.dump(str(out2), only_domain="shop.ru")
+    b2 = out2.read_text(encoding="utf-8-sig")
+    assert "shop.ru" in b2 and "rival.ru" not in b2
