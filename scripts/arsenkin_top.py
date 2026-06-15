@@ -20,8 +20,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import time
-from collections import deque
 from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,6 +36,7 @@ from app.providers.arsenkin import (  # noqa: E402
 )
 from app.providers.base import DateRange  # noqa: E402
 from app.services.keywords import keyword_rows  # noqa: E402
+from app.services.serp_run import run_top10  # noqa: E402
 from app.utils import domain_of  # noqa: E402
 
 SEARCH_ENGINES = ("gsc", "yandex_webmaster")
@@ -96,43 +95,6 @@ def _keywords_from_file(path: str) -> list[str]:
     return out
 
 
-def _store(db, rows, task_id) -> int:
-    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
-    from app.db.models import SerpResult
-
-    today = date.today()
-    payload = []
-    for r in rows:
-        if not r.get("query") or r.get("se") is None:
-            continue
-        payload.append({
-            "keyword": r["query"], "se": int(r["se"]),
-            "region": r.get("region") if isinstance(r.get("region"), int) else None,
-            "position": int(r["position"]), "url": r.get("url"),
-            "url_domain": domain_of(r.get("url") or "") or None,
-            "title": r.get("title"), "captured_on": today, "task_id": str(task_id),
-        })
-    if not payload:
-        return 0
-    dialect = db.get_bind().dialect.name
-    if dialect == "postgresql":
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
-        ins = pg_insert
-    else:
-        ins = sqlite_insert
-    for i in range(0, len(payload), 500):
-        chunk = payload[i:i + 500]
-        stmt = ins(SerpResult).values(chunk)
-        upd = {c: getattr(stmt.excluded, c) for c in chunk[0]
-               if c not in ("keyword", "se", "region", "position", "captured_on")}
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["keyword", "se", "region", "position", "captured_on"], set_=upd)
-        db.execute(stmt)
-    db.commit()
-    return len(payload)
-
-
 def dump(path: str, captured_on=None, only_domain: str | None = None,
          se_types: list[int] | None = None) -> None:
     """Write stored SERP results to a CSV (long format: one row per position)."""
@@ -171,49 +133,40 @@ def dump(path: str, captured_on=None, only_domain: str | None = None,
 
 def run(keywords, se, *, token, base, depth, snippets, batch, parallel, poll_sec,
         timeout_min, max_per_min) -> None:
-    init_db()
-    client = Arsenkin(token, base=base, max_per_min=max_per_min)
-    db = SessionLocal()
-    batches = deque(keywords[i:i + batch] for i in range(0, len(keywords), batch))
-    total_batches = len(batches)
     se_label = ", ".join(f"{SE_LABELS.get(s['type'], s['type'])}({s.get('region')})" for s in se)
     print(f"К отправке: {len(keywords)} фраз × {len(se)} ПС [{se_label}] = "
-          f"{len(keywords) * len(se)} лимитов · {total_batches} задач по {batch} фраз · "
-          f"{parallel} параллельно · глубина {depth}", flush=True)
+          f"{len(keywords) * len(se)} лимитов · по {batch} фраз · ≤{min(parallel, 5)} параллельно · "
+          f"глубина {depth}", flush=True)
+    res = run_top10(keywords, se, token=token, base=base, depth=depth, snippets=snippets,
+                    batch=batch, parallel=parallel, poll_sec=poll_sec, timeout_min=timeout_min,
+                    max_per_min=max_per_min, log=lambda m: print(m, flush=True))
+    print(f"\nГотово. Строк ТОП сохранено: {res['stored']}. Пропущено фраз: {res['skipped']}.")
 
-    inflight: dict = {}
-    done_batches = stored = skipped = 0
-    while batches or inflight:
-        while len(inflight) < parallel and batches:
-            b = list(batches.popleft())
-            resp = client.set_task(b, se, depth=depth, is_snippet=snippets)
-            tid = resp.get("task_id")
-            if not tid:
-                # queue full / limits / error — wait and requeue once at the back
-                print(f"   set FAILED: {str(resp)[:200]} — верну в очередь", flush=True)
-                batches.append(b)
-                time.sleep(poll_sec)
-                break
-            inflight[tid] = {"batch": b, "started": time.monotonic()}
-            print(f"[задача {tid}] {len(b)} фраз (в работе {len(inflight)}/{parallel})", flush=True)
-        if not inflight:
-            continue
-        time.sleep(poll_sec)
-        for tid, it in list(inflight.items()):
-            payload = client.get(tid)
-            if is_done(payload):
-                n = _store(db, list(parse_result(payload)), tid)
-                stored += n
-                done_batches += 1
-                del inflight[tid]
-                print(f"[задача {tid}] готово · +{n} строк ТОП · готово {done_batches}/{total_batches}, "
-                      f"всего +{stored}", flush=True)
-            elif (time.monotonic() - it["started"]) / 60.0 >= timeout_min:
-                del inflight[tid]
-                skipped += len(it["batch"])
-                print(f"[задача {tid}] >{timeout_min} мин — пропускаю ({len(it['batch'])} фраз)", flush=True)
-    db.close()
-    print(f"\nГотово. Строк ТОП сохранено: {stored}. Пропущено фраз: {skipped}.")
+
+def probe(phrase: str, se, *, token, base, depth, snippets, poll_sec=10, timeout_min=10) -> None:
+    """Run ONE phrase end-to-end and print the raw set/get + parsed rows — for
+    verifying the live API (token, fields, result shape)."""
+    import time as _t
+
+    client = Arsenkin(token, base=base)
+    resp = client.set_task([phrase], se, depth=depth, is_snippet=snippets)
+    print("set ->", resp)
+    tid = resp.get("task_id")
+    if not tid:
+        print("Нет task_id — проверь токен/тариф/доступ (ответ выше).")
+        return
+    deadline = _t.monotonic() + timeout_min * 60
+    while _t.monotonic() < deadline:
+        _t.sleep(poll_sec)
+        payload = client.get(tid)
+        if is_done(payload):
+            rows = list(parse_result(payload))
+            print(f"get -> TASK_RESULT, распарсено строк: {len(rows)}")
+            for r in rows[:30]:
+                print(f"  se={r['se']} #{r['position']}  {r['url']}")
+            return
+        print("  ... ещё не готово:", str(payload)[:160])
+    print("Не дождался результата за лимит времени.")
 
 
 def main() -> None:
@@ -239,6 +192,7 @@ def main() -> None:
     api.add_argument("--poll-sec", dest="poll_sec", type=int, default=15)
     api.add_argument("--timeout-min", dest="timeout_min", type=int, default=30)
     api.add_argument("--rpm", type=int, default=28, help="запросов/мин (лимит arsenkin 30)")
+    api.add_argument("--probe", help="проверить ОДНУ фразу и показать сырой ответ (диагностика API)")
     ap.add_argument("--apply", action="store_true", help="реально запустить (иначе только смета)")
     dmp = ap.add_argument_group("выгрузка из базы")
     dmp.add_argument("--dump", help="выгрузить сохранённый ТОП в CSV по этому пути и выйти")
@@ -256,6 +210,10 @@ def main() -> None:
         print("Нет токена arsenkin. Вставьте его в Настройках (arsenkin_token) или --token.")
         sys.exit(1)
     se = _parse_se(a.se)
+
+    if a.probe:
+        probe(a.probe, se, token=token, base=a.base, depth=a.depth, snippets=a.snippets)
+        return
 
     if a.file:
         keywords = _keywords_from_file(a.file)

@@ -69,12 +69,13 @@ class _FakeHTTP:
 
 
 def test_run_stores_serp(db, monkeypatch):
+    import app.services.serp_run as SR
     monkeypatch.setattr(ARS, "httpx", _FakeHTTP())
-    monkeypatch.setattr(A.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(SR.time, "sleep", lambda *_: None)
 
-    A.run(["k1"], [{"type": 2, "region": 213}], token="t",
-          base="https://x/api/tools", depth=10, snippets=False, batch=100,
-          parallel=5, poll_sec=0, timeout_min=999, max_per_min=999)
+    SR.run_top10(["k1"], [{"type": 2, "region": 213}], token="t",
+                 base="https://x/api/tools", depth=10, snippets=False, batch=100,
+                 parallel=5, poll_sec=0, timeout_min=999, max_per_min=999)
 
     s = SessionLocal()
     try:
