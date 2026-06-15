@@ -152,6 +152,22 @@ def cmd_probe(sessions, tmpl) -> None:
                                     ("speed", "rate", "playback", "скорост", "x2", "x4", "x8")) else "    "
                 print(f"{star}<{c['tag']}> t='{c['t']}' title='{c['title']}' "
                       f"aria='{c['aria']}' cls='{c['cls']}'")
+        try:  # role-based scan pierces shadow DOM, where player controls may live
+            btns = page.get_by_role("button")
+            n = btns.count()
+            print(f"  role=button (сквозь shadow): {n}")
+            for i in range(min(n, 70)):
+                b = btns.nth(i)
+                txt = ((b.text_content() or "").strip())[:24]
+                aria = b.get_attribute("aria-label") or ""
+                title = b.get_attribute("title") or ""
+                if txt or aria or title:
+                    blob = (txt + aria + title).lower()
+                    star = "  ⭐" if any(k in blob for k in
+                                        ("speed", "скорост", "x2", "x4", "x8", "×")) else "    "
+                    print(f"{star}btn[{i}] '{txt}' aria='{aria}' title='{title}'")
+        except Exception as e:
+            print("  role-scan:", e)
         ctx.close()
 
 
@@ -360,7 +376,7 @@ def _done_ids() -> set[str]:
     return {f[:-5] for f in os.listdir(OUT_DIR) if f.endswith(".webm")}
 
 
-def cmd_record(sessions, tmpl, speed, buffer_s, limit) -> None:
+def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0) -> None:
     hashes = _load_hashes()
     if not hashes:
         sys.exit("Нет собранных user_id_hash — сначала запусти --harvest.")
@@ -370,10 +386,16 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit) -> None:
     todo = [s for s in with_hash if s["visit_id"] not in done]
     if limit:
         todo = todo[:limit]
-    rec_secs = sum(math.ceil((s["duration"] or 0) / speed) + buffer_s for s in todo)
+
+    def _secs(dur):
+        n = math.ceil((dur or 0) / speed) + buffer_s
+        return min(n, max_sec) if max_sec else n
+
+    rec_secs = sum(_secs(s["duration"]) for s in todo)
     print(f"К записи: {len(todo)} (уже есть {len(done)}; "
-          f"без записи в Вебвизоре: {len(sessions) - len(with_hash)}). Скорость x{speed}. "
-          f"Ориентир: ~{rec_secs // 60} мин, ~{rec_secs * 0.3 / 1024:.1f} ГБ (грубо).")
+          f"без записи в Вебвизоре: {len(sessions) - len(with_hash)}). Скорость x{speed}"
+          + (f", кап {max_sec}с" if max_sec else "")
+          + f". Ориентир: ~{rec_secs // 60} мин, ~{rec_secs * 0.06 / 1024:.1f} ГБ (грубо).")
     man = open(os.path.join(DATA_DIR, "manifest.csv"), "a", encoding="utf-8")
     ok = fail = 0
     with _pw()() as p:
@@ -391,7 +413,7 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit) -> None:
         for i, s in enumerate(todo, 1):
             vid = s["visit_id"]
             url = _replay_url(s.get("counter_id"), vid, s.get("date"), hashes[str(vid)], tmpl)
-            secs = math.ceil((s["duration"] or 0) / speed) + buffer_s
+            secs = _secs(s["duration"])
             page = ctx.new_page()
             video = page.video
             try:
@@ -451,6 +473,8 @@ def main() -> None:
     ap.add_argument("--replay-url", dest="replay", default="", help="шаблон URL реплея ({counter},{visit_id})")
     ap.add_argument("--speed", type=float, default=1.0, help="множитель скорости плеера (бюджет времени)")
     ap.add_argument("--buffer", type=int, default=4, help="доп. секунд на сессию (загрузка/буфер)")
+    ap.add_argument("--max-seconds", dest="max_sec", type=int, default=0,
+                    help="кап записи на сессию, сек (0 = без капа; бережёт место/время)")
     a = ap.parse_args()
 
     if a.login:  # no DB needed to log in
@@ -504,7 +528,7 @@ def main() -> None:
             cmd_probe(sessions, a.replay)
             return
         if a.record:
-            cmd_record(sessions, a.replay, a.speed, a.buffer, a.limit)
+            cmd_record(sessions, a.replay, a.speed, a.buffer, a.limit, a.max_sec)
             return
 
         n = W.count_sessions(db, sid, dr, **kw)
