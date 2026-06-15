@@ -22,9 +22,11 @@ Metrica keeps Webvisor recordings ≈15 days, so older visits can't be replayed.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import math
 import os
+import re
 import sys
 import time
 from datetime import date, timedelta
@@ -162,6 +164,26 @@ def cmd_discover(counter) -> None:
             print("  ", u)
 
 
+def cmd_inspect() -> None:
+    """Read the JSON bodies saved by --discover and print field names + a sample,
+    so we can map the session list to visit_id/user_id_hash without shell-escaping."""
+    pat = re.compile(r'"([A-Za-z_]*(?:hash|visit|watch|uid|user|client|uniq|durat|counter)[A-Za-z_]*)"', re.I)
+    files = sorted(glob.glob(os.path.join(DEBUG_DIR, "api_*.json")))
+    if not files:
+        print("Нет файлов api_*.json — сначала запусти --discover.")
+        return
+    for f in files:
+        t = open(f, encoding="utf-8").read()
+        names = sorted(set(pat.findall(t)), key=str.lower)
+        print(f"\n{os.path.basename(f)} (len={len(t)}): {names}")
+        for key in ("userIDHash", "userIdHash", "user_id_hash", "uniqID",
+                    "visitID", "visitId", "watchIDs"):
+            j = t.find('"' + key + '"')
+            if j >= 0:
+                print(f"   sample {key}: {t[j:j + 200]}")
+                break
+
+
 def _done_ids() -> set[str]:
     if not os.path.isdir(OUT_DIR):
         return set()
@@ -240,6 +262,7 @@ def main() -> None:
     ap.add_argument("--login", action="store_true", help="войти в Яндекс (headful, через VNC)")
     ap.add_argument("--probe", action="store_true", help="открыть 1 сессию: скриншот+html+URL (рекон)")
     ap.add_argument("--discover", action="store_true", help="найти внутренний API списка Вебвизора (перехват сети)")
+    ap.add_argument("--inspect", action="store_true", help="разобрать сохранённые ответы --discover (имена полей)")
     ap.add_argument("--record", action="store_true", help="записать видео сессий")
     ap.add_argument("--replay-url", dest="replay", default="", help="шаблон URL реплея ({counter},{visit_id})")
     ap.add_argument("--speed", type=float, default=1.0, help="множитель скорости плеера (бюджет времени)")
@@ -248,6 +271,9 @@ def main() -> None:
 
     if a.login:  # no DB needed to log in
         cmd_login()
+        return
+    if a.inspect:  # no DB needed — just reads files saved by --discover
+        cmd_inspect()
         return
 
     init_db()
