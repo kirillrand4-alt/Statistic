@@ -356,6 +356,22 @@ class SerpResult(Base):
     task_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
+class SerpTask(Base):
+    """A submitted ARSENKIN check-top task, tracked so an interrupted web run can
+    be resumed ('догрузить недостающие') without re-paying limits. Readiness and
+    results are fetched later by ``task_id`` via /check + /get."""
+
+    __tablename__ = "serp_task"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending | done
+    phrases: Mapped[int] = mapped_column(Integer, default=0)
+    stored: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class DonorSite(Base):
     """A guest-post donor site from the Miralinks catalog.
 

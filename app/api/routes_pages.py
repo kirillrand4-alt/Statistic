@@ -231,7 +231,7 @@ def serp_page(request: Request, captured_on: str | None = None,
               q: str | None = None, msg: str | None = None, db: Session = Depends(get_db)):
     from app.credentials import get_cred
     from app.services import serp as S
-    from app.services.serp_run import current_status
+    from app.services.serp_run import current_status, pending_count
 
     caps = S.captures(db)
     cap = captured_on or (caps[0] if caps else None)
@@ -245,6 +245,7 @@ def serp_page(request: Request, captured_on: str | None = None,
         "domains": _domains(db), "own_domains": own, "shown_limit": 2000,
         "own_summary": S.own_positions(db, cap, own, se=(se_sel or None)),
         "status": current_status(), "has_token": bool(get_cred("arsenkin_token")),
+        "pending": pending_count(db),
     })
 
 
@@ -311,6 +312,25 @@ async def ui_serp_run(domain: str = Form(""), se: list[int] = Form(default=[]),
                         batch=max(1, min(batch, 5000)), timeout_min=120)
     return back(f"Запущено ({src}): {len(words)} фраз × {len(se_list)} ПС "
                 f"(~{len(words) * len(se_list)} лимитов). Обновляйте страницу — результаты появятся.")
+
+
+@router.post("/ui/serp/fetch_pending")
+def ui_serp_fetch_pending(db: Session = Depends(get_db)):
+    from app.credentials import get_cred
+    from app.services import serp_run
+
+    def back(m: str):
+        return RedirectResponse(url=f"{BP}/serp?msg={quote(m)}", status_code=303)
+
+    token = get_cred("arsenkin_token")
+    if not token:
+        return back("Сначала вставьте токен arsenkin в Настройках.")
+    if serp_run.current_status().get("running"):
+        return back("Идёт другой прогон — дождитесь завершения.")
+    if serp_run.pending_count(db) == 0:
+        return back("Недостающих задач нет — всё уже загружено.")
+    serp_run.launch_fetch_pending(token=token)
+    return back("Догрузка недостающих задач запущена. Обновляйте страницу.")
 
 
 @router.get("/serp/export")

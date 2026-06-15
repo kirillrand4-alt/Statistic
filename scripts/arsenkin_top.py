@@ -233,6 +233,8 @@ def main() -> None:
     api.add_argument("--rpm", type=int, default=28, help="запросов/мин (лимит arsenkin 30)")
     api.add_argument("--probe", help="проверить ОДНУ фразу и показать сырой ответ (диагностика API)")
     api.add_argument("--fetch", help="забрать ГОТОВЫЕ задачи по task_id (через запятую) и сохранить")
+    api.add_argument("--fetch-pending", dest="fetch_pending", action="store_true",
+                     help="догрузить все незавершённые задачи веб-прогона (из базы)")
     api.add_argument("--status", action="store_true",
                      help="показать лимиты/очередь/список задач arsenkin (искать task_id)")
     ap.add_argument("--apply", action="store_true", help="реально запустить (иначе только смета)")
@@ -264,6 +266,12 @@ def main() -> None:
     if a.fetch:
         ids = [x for x in a.fetch.replace(" ", ",").split(",") if x.strip()]
         fetch_tasks(ids, token=token, base=a.base)
+        return
+
+    if a.fetch_pending:
+        from app.services.serp_run import fetch_pending
+        res = fetch_pending(token=token, base=a.base, log=lambda m: print(m, flush=True))
+        print(f"Догружено задач: {res['done']}, строк: {res['stored']}, осталось: {res['pending']}.")
         return
 
     if a.file:

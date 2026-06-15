@@ -86,6 +86,36 @@ def test_run_stores_serp(db, monkeypatch):
         assert rows[0].position == 1 and rows[0].url == "https://shop.ru/p"
         assert rows[0].url_domain == "shop.ru"
         assert s.execute(select(func.count()).select_from(SerpResult)).scalar_one() == 2
+        # the submitted task is recorded and marked done -> nothing left to resume
+        from app.db.models import SerpTask
+        t = s.execute(select(SerpTask)).scalars().one()
+        assert t.status == "done" and t.stored == 2
+        assert SR.pending_count(s) == 0
+    finally:
+        s.close()
+
+
+def test_fetch_pending_recovers_interrupted_run(db, monkeypatch):
+    import app.services.serp_run as SR
+    from app.db.models import SerpTask
+    monkeypatch.setattr(ARS, "httpx", _FakeHTTP())
+
+    s = SessionLocal()
+    try:
+        SR.record_task(s, "777", 1)          # simulate a task left pending by a crash
+        assert SR.pending_count(s) == 1
+    finally:
+        s.close()
+
+    res = SR.fetch_pending(token="t", base="https://x/api/tools")
+    assert res["done"] == 1 and res["stored"] == 2 and res["pending"] == 0
+
+    s = SessionLocal()
+    try:
+        assert SR.pending_count(s) == 0
+        t = s.execute(select(SerpTask).where(SerpTask.task_id == "777")).scalar_one()
+        assert t.status == "done" and t.stored == 2
+        assert s.execute(select(func.count()).select_from(SerpResult)).scalar_one() == 2
     finally:
         s.close()
 

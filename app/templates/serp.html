@@ -13,6 +13,14 @@
   <p><progress></progress> Идёт проверка: <strong>{{ status.done }}/{{ status.total }}</strong> задач,
   сохранено {{ status.stored|numfmt }} строк. <small>{{ status.msg }}</small> — обновите страницу.</p>
   {% elif status.msg %}<p><small>Последний прогон: {{ status.msg }}.</small></p>{% endif %}
+  {% if pending and not status.running %}
+  <p>⏳ Есть незабранные задачи: <strong>{{ pending|numfmt }}</strong> — прогон, видимо, оборвался
+    (рестарт/сеть). Результаты уже посчитаны на arsenkin, лимиты повторно не тратятся.
+    <form method="post" action="{{ base_path }}/ui/serp/fetch_pending" style="display:inline;margin:0">
+      <button type="submit" class="outline" {% if not has_token %}disabled{% endif %}>Догрузить недостающие ({{ pending }})</button>
+    </form>
+  </p>
+  {% endif %}
 
   <form method="post" action="{{ base_path }}/ui/serp/run" enctype="multipart/form-data">
     <div class="grid">

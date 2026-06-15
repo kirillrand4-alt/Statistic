@@ -27,6 +27,45 @@ def current_status() -> dict:
     return dict(_STATUS)
 
 
+def _ins(db):
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    if db.get_bind().dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        return pg_insert
+    return sqlite_insert
+
+
+def record_task(db, task_id, phrases: int) -> None:
+    """Persist a submitted task as pending (insert-or-ignore) so it can be
+    recovered after a crash/restart."""
+    from app.db.models import SerpTask
+    stmt = _ins(db)(SerpTask).values(task_id=str(task_id), status="pending", phrases=int(phrases))
+    db.execute(stmt.on_conflict_do_nothing(index_elements=["task_id"]))
+    db.commit()
+
+
+def mark_task_done(db, task_id, stored: int) -> None:
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from app.db.models import SerpTask
+    row = db.execute(select(SerpTask).where(SerpTask.task_id == str(task_id))).scalar_one_or_none()
+    if row is not None:
+        row.status, row.stored = "done", int(stored)
+        row.finished_at = datetime.now(timezone.utc)
+        db.commit()
+
+
+def pending_count(db) -> int:
+    from sqlalchemy import func, select
+
+    from app.db.models import SerpTask
+    return int(db.execute(
+        select(func.count()).select_from(SerpTask).where(SerpTask.status != "done")
+    ).scalar_one())
+
+
 def store_rows(db, rows, task_id) -> int:
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -89,6 +128,7 @@ def run_top10(keywords, se, *, token, base=DEFAULT_BASE, depth=10, snippets=Fals
                     time.sleep(poll_sec)
                     break
                 inflight[tid] = {"batch": b, "started": time.monotonic()}
+                record_task(db, tid, len(b))  # persist so an interrupted run can resume
                 log(f"[задача {tid}] {len(b)} фраз (в работе {len(inflight)}/{min(parallel, 5)})")
             if not inflight:
                 continue
@@ -97,6 +137,7 @@ def run_top10(keywords, se, *, token, base=DEFAULT_BASE, depth=10, snippets=Fals
                 age = time.monotonic() - it["started"]
                 if check_done(client.check(tid)):  # ready per /check -> fetch result
                     n = store_rows(db, list(parse_result(client.get(tid))), tid)
+                    mark_task_done(db, tid, n)
                     stored += n
                     done += 1
                     del inflight[tid]
@@ -125,6 +166,60 @@ def launch_run(keywords, se, **kw) -> bool:
         try:
             run_top10(keywords, se, **kw)
             _STATUS["msg"] = f"готово: сохранено {_STATUS['stored']} строк"
+        except Exception as exc:  # noqa: BLE001
+            _STATUS["msg"] = f"ошибка: {exc.__class__.__name__}: {exc}"
+        finally:
+            _STATUS["running"] = False
+
+    threading.Thread(target=_bg, daemon=True).start()
+    return True
+
+
+def fetch_pending(*, token, base=DEFAULT_BASE, max_per_min=28, log=lambda *_: None) -> dict:
+    """Re-check every still-pending task and store the ones arsenkin has finished.
+    Recovers a web run that was interrupted (restart/network) — no extra cost."""
+    from sqlalchemy import select
+
+    from app.db.models import SerpTask
+    init_db()
+    client = Arsenkin(token, base=base, max_per_min=max_per_min)
+    db = SessionLocal()
+    done = stored = 0
+    try:
+        tasks = db.execute(
+            select(SerpTask).where(SerpTask.status != "done").order_by(SerpTask.id)
+        ).scalars().all()
+        total = len(tasks)
+        _STATUS.update(total=total, done=0, stored=0)
+        for t in tasks:
+            if check_done(client.check(t.task_id)):
+                n = store_rows(db, list(parse_result(client.get(t.task_id))), t.task_id)
+                mark_task_done(db, t.task_id, n)
+                stored += n
+                done += 1
+                _STATUS.update(done=done, stored=stored)
+                log(f"[задача {t.task_id}] готово · +{n} строк ({done}/{total})")
+            else:
+                log(f"[задача {t.task_id}] ещё не готова — оставляю в очереди")
+        log(f"Готово. Догружено задач: {done}/{total}, строк: {stored}.")
+        return {"checked": total, "done": done, "stored": stored, "pending": total - done}
+    finally:
+        db.close()
+
+
+def launch_fetch_pending(**kw) -> bool:
+    """Run :func:`fetch_pending` in a background thread (shares the run status)."""
+    with _LOCK:
+        if _STATUS.get("running"):
+            return False
+        _STATUS.update(running=True, started=time.time(), total=0, done=0, stored=0,
+                       msg="догрузка недостающих…")
+
+    def _bg():
+        try:
+            res = fetch_pending(**kw)
+            _STATUS["msg"] = (f"догружено: {res['done']} задач, {res['stored']} строк"
+                              + (f" (осталось {res['pending']})" if res["pending"] else ""))
         except Exception as exc:  # noqa: BLE001
             _STATUS["msg"] = f"ошибка: {exc.__class__.__name__}: {exc}"
         finally:
