@@ -370,6 +370,17 @@ def cmd_harvest(counters, d1, d2) -> None:
     print(f"\nСобрано сессий: {len(sessions)} (с user_id_hash) -> {out}")
 
 
+def _clear_profile_lock() -> None:
+    """Remove stale Chromium Singleton* locks left by an orphaned browser (e.g. after
+    Ctrl+C) so launch_persistent_context doesn't hang waiting for the profile lock.
+    Safe while no other webvisor browser command runs at the same time."""
+    for f in glob.glob(os.path.join(PROFILE_DIR, "Singleton*")):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+
+
 def _done_ids() -> set[str]:
     if not os.path.isdir(OUT_DIR):
         return set()
@@ -395,9 +406,11 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0) -> None:
     print(f"К записи: {len(todo)} (уже есть {len(done)}; "
           f"без записи в Вебвизоре: {len(sessions) - len(with_hash)}). Скорость x{speed}"
           + (f", кап {max_sec}с" if max_sec else "")
-          + f". Ориентир: ~{rec_secs // 60} мин, ~{rec_secs * 0.06 / 1024:.1f} ГБ (грубо).")
+          + f". Ориентир: ~{rec_secs // 60} мин, ~{rec_secs * 0.06 / 1024:.1f} ГБ (грубо).",
+          flush=True)
     man = open(os.path.join(DATA_DIR, "manifest.csv"), "a", encoding="utf-8")
     ok = fail = 0
+    _clear_profile_lock()
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(
             PROFILE_DIR, headless=True, viewport=VIEWPORT,
