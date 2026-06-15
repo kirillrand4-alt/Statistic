@@ -57,39 +57,73 @@ def sites_with_visits(db) -> list[dict]:
     return out
 
 
-def _where(site_id, dr: DateRange, source, min_page_views, min_duration):
-    w = [Visit.site_id == site_id, Visit.date >= dr.start, Visit.date <= dr.end]
+def distinct_counters(db, site_id=None) -> list[int]:
+    """Metrica counter ids that have synced visits (optionally for one site)."""
+    stmt = select(Visit.counter_id).where(Visit.counter_id.isnot(None)).distinct()
+    if site_id is not None:
+        stmt = stmt.where(Visit.site_id == site_id)
+    return sorted({int(c) for (c,) in db.execute(stmt).all() if c})
+
+
+def counters_matching(db, substr) -> list[int]:
+    """Counter ids whose site domain contains ``substr`` (case-insensitive) — for --exclude."""
+    if not substr:
+        return []
+    sub = substr.lower()
+    sids = [sid for sid, uri in db.execute(select(Site.id, Site.property_uri)).all()
+            if sub in (domain_of(uri) or "").lower()]
+    if not sids:
+        return []
+    return sorted({int(c) for (c,) in db.execute(
+        select(Visit.counter_id).where(Visit.counter_id.isnot(None), Visit.site_id.in_(sids)).distinct()
+    ).all() if c})
+
+
+def _where(site_id, dr: DateRange, source, min_page_views, min_duration, exclude_counters):
+    w = [Visit.date >= dr.start, Visit.date <= dr.end]
+    if site_id is not None:                                  # None = все домены
+        w.append(Visit.site_id == site_id)
     if source:
         w.append(Visit.traffic_source == source)
     if min_page_views:
         w.append(Visit.page_views >= min_page_views)
     if min_duration:
-        w.append(Visit.duration > min_duration)            # «длиннее N секунд» (strictly >)
+        w.append(Visit.duration > min_duration)              # «длиннее N секунд» (strictly >)
+    if exclude_counters:
+        w.append(Visit.counter_id.notin_(list(exclude_counters)))
     return w
 
 
 def count_sessions(db, site_id, dr: DateRange, *, source=None, min_page_views=0,
-                   min_duration=0) -> int:
+                   min_duration=0, exclude_counters=None) -> int:
     return int(db.execute(
-        select(func.count()).select_from(Visit)
-        .where(*_where(site_id, dr, source, min_page_views, min_duration))
+        select(func.count(func.distinct(Visit.visit_id))).select_from(Visit)
+        .where(*_where(site_id, dr, source, min_page_views, min_duration, exclude_counters))
     ).scalar_one())
 
 
 def sessions_for_period(db, site_id, dr: DateRange, *, source=None, min_page_views=0,
-                        min_duration=0, limit: int | None = None) -> list[dict]:
-    """Visits to record, newest first: visit_id (+ context for naming/filtering)."""
+                        min_duration=0, exclude_counters=None, oldest=False,
+                        limit: int | None = None) -> list[dict]:
+    """Visits to record (+ context). ``oldest=True`` = oldest first (Webvisor keeps
+    recordings ~15 days, so old ones expire soonest). ``site_id=None`` = all domains
+    (deduped by visit_id across same-domain twins)."""
+    order = ((Visit.date.asc(), Visit.visit_id.asc()) if oldest
+             else (Visit.date.desc(), Visit.visit_id.desc()))
     stmt = (
         select(Visit.visit_id, Visit.counter_id, Visit.date, Visit.traffic_source,
                Visit.page_views, Visit.duration, Visit.start_url)
-        .where(*_where(site_id, dr, source, min_page_views, min_duration))
-        .order_by(Visit.date.desc(), Visit.visit_id.desc())
+        .where(*_where(site_id, dr, source, min_page_views, min_duration, exclude_counters))
+        .order_by(*order)
     )
-    if limit:
-        stmt = stmt.limit(limit)
-    out = []
+    out, seen = [], set()
     for vid, cid, d, src, pv, dur, surl in db.execute(stmt).all():
+        if vid in seen:
+            continue
+        seen.add(vid)
         out.append({"visit_id": vid, "counter_id": cid,
                     "date": d.isoformat() if d else None, "source": src,
                     "page_views": int(pv or 0), "duration": int(dur or 0), "start_url": surl})
+        if limit and len(out) >= limit:
+            break
     return out

@@ -46,3 +46,24 @@ def test_resolve_visit_site(db, site):
     _seed(db, site)
     assert W.resolve_visit_site(db, site_id=site.id) == site.id
     assert W.resolve_visit_site(db, domain=domain_of(site.property_uri)) == site.id
+
+
+def test_all_domains_oldest_exclude(db, site):
+    from app.db.models import Site
+    s2 = Site(source_id=site.source_id, property_uri="sc-domain:other.ru", display_name="o2")
+    db.add(s2)
+    db.commit()
+    db.add_all([
+        Visit(site_id=site.id, visit_id="a1", date=date(2026, 6, 3), counter_id=111, duration=20),
+        Visit(site_id=site.id, visit_id="a2", date=date(2026, 6, 5), counter_id=111, duration=20),
+        Visit(site_id=s2.id, visit_id="b1", date=date(2026, 6, 4), counter_id=222, duration=20),
+    ])
+    db.commit()
+    dr = DateRange(start=date(2026, 6, 1), end=date(2026, 6, 30))
+    assert W.count_sessions(db, None, dr, min_duration=10) == 3              # all domains
+    assert [r["visit_id"] for r in                                          # oldest first, all domains
+            W.sessions_for_period(db, None, dr, min_duration=10, oldest=True)] == ["a1", "b1", "a2"]
+    assert W.distinct_counters(db) == [111, 222]
+    ex = W.counters_matching(db, "other")                                   # exclude other.ru
+    assert ex == [222]
+    assert W.count_sessions(db, None, dr, min_duration=10, exclude_counters=ex) == 2

@@ -11,23 +11,33 @@
 {% if not videos %}
   <article>
     Записи появятся здесь после прогона рекордера:
-    <code>scripts/webvisor.py --domain … --record</code>.
+    <code>scripts/webvisor.py --all --source organic --min-duration 10 --oldest --record</code>.
   </article>
 {% else %}
 <div class="wv-grid">
   {% for v in videos %}
   <article class="wv-card">
-    <header>
-      <strong>{{ v.date or "—" }}</strong>
-      {% if v.duration %} · {{ v.duration // 60 }}:{{ "%02d"|format(v.duration % 60) }}{% endif %}
-      {% if v.source %} · {{ v.source }}{% endif %}
-      {% if v.device %} · {{ v.device }}{% endif %}
-      · {{ v.size_mb }} МБ
-    </header>
     <video controls preload="none" width="100%"
            src="{{ base_path }}/webvisor/video/{{ v.visit_id }}.webm"></video>
-    {% if v.start_url %}<small><a href="{{ v.start_url }}" target="_blank" rel="noopener">{{ v.start_url }}</a></small>{% endif %}
-    <small class="wv-id">visit {{ v.visit_id }}</small>
+    <details open>
+      <summary>
+        <strong>{{ v.date_time or v.date or "—" }}</strong>
+        {% if v.duration %} · ⏱ {{ v.duration // 60 }}:{{ "%02d"|format(v.duration % 60) }}{% endif %}
+        {% if v.page_views %} · 👁 {{ v.page_views }} стр.{% endif %}
+      </summary>
+      <ul class="wv-info">
+        {% if v.city %}<li>📍 Город: <strong>{{ v.city }}</strong></li>{% endif %}
+        {% if v.source %}<li>↪ Источник: {{ v.source }}{% if v.search_engine %} / {{ v.search_engine }}{% endif %}</li>{% endif %}
+        {% if v.phrase %}<li>🔎 Запрос: <strong>{{ v.phrase }}</strong></li>{% endif %}
+        {% if v.device or v.os or v.browser %}<li>💻 {{ v.device or "" }}{% if v.os %} · {{ v.os }}{% endif %}{% if v.browser %} · {{ v.browser }}{% endif %}</li>{% endif %}
+        {% if v.entry %}<li>➡ Вход: <a href="{{ v.entry }}" target="_blank" rel="noopener">{{ v.entry }}</a></li>{% endif %}
+        {% if v.exit %}<li>⬅ Выход: <a href="{{ v.exit }}" target="_blank" rel="noopener">{{ v.exit }}</a></li>{% endif %}
+        {% if v.referer %}<li>🔗 Реферер: {{ v.referer }}</li>{% endif %}
+        {% if v.roistat %}<li>🎯 Roistat: <strong>{{ v.roistat }}</strong></li>{% endif %}
+        {% for k, val in v.utm.items() %}<li>🏷 {{ k }}: {{ val }}</li>{% endfor %}
+        <li class="wv-id">visit {{ v.visit_id }}{% if v.counter_id %} · счётчик {{ v.counter_id }}{% endif %} · {{ v.size_mb }} МБ</li>
+      </ul>
+    </details>
   </article>
   {% endfor %}
 </div>
@@ -36,9 +46,11 @@
 
 {% block scripts %}
 <style>
-  .wv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
+  .wv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1rem; }
   .wv-card video { background: #000; border-radius: 6px; aspect-ratio: 16 / 10; }
-  .wv-card .wv-id, .wv-card small a { color: var(--pico-muted-color); }
-  .wv-card small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wv-card details { margin: 0; }
+  .wv-info { margin: .4rem 0 0; padding-left: 1rem; font-size: .85rem; }
+  .wv-info li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wv-info .wv-id, .wv-info a { color: var(--pico-muted-color); }
 </style>
 {% endblock %}

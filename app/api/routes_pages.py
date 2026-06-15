@@ -1,12 +1,13 @@
 """Server-rendered HTML pages (Jinja2 + Chart.js)."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
 from datetime import date
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
@@ -32,6 +33,56 @@ BP = get_settings().base_path  # "" or e.g. "/stat" — for redirect targets
 WEBVISOR_VIDEOS = Path(os.environ.get(
     "WEBVISOR_OUT", str(Path(__file__).resolve().parents[2] / "data" / "webvisor" / "videos")))
 _WEBM_RE = re.compile(r"^[A-Za-z0-9_-]+\.webm$")  # safe filename, blocks path traversal
+
+
+def _wv_phrases() -> dict:
+    """visit_id -> search phrase, harvested into data/webvisor/sessions.jsonl."""
+    out, f = {}, WEBVISOR_VIDEOS.parent / "sessions.jsonl"
+    if f.exists():
+        for line in f.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if d.get("visit_id") and d.get("phrase"):
+                out[str(d["visit_id"])] = d["phrase"]
+    return out
+
+
+def _wv_roistat(start_url, extra):
+    """Roistat id from the landing URL (?roistat=…) or a Metrica param in ``extra``."""
+    if start_url and "roistat" in start_url.lower():
+        try:
+            qs = parse_qs(urlparse(start_url).query)
+            for k in ("roistat", "rs", "roistat_visit"):
+                if qs.get(k):
+                    return qs[k][0]
+        except Exception:
+            pass
+    if extra:
+        try:
+            for k, v in json.loads(extra).items():
+                if "roistat" in k.lower():
+                    return str(v)
+        except Exception:
+            pass
+    return None
+
+
+def _wv_utm(extra) -> dict:
+    """UTM tags (and any *utm* field) preserved in the visit's ``extra`` JSON."""
+    out = {}
+    if extra:
+        try:
+            for k, v in json.loads(extra).items():
+                if "utm" in k.lower() and v:
+                    out[k] = v
+        except Exception:
+            pass
+    return out
 
 
 def _public_redirect_uri(request: Request) -> str:
@@ -1280,29 +1331,46 @@ def errors_page(request: Request, site_id: str | None = None, start: str | None 
 
 
 @router.get("/webvisor")
-def webvisor_page(request: Request, limit: int = 200, db: Session = Depends(get_db)):
-    """List recorded Webvisor replays (newest first) with visit context; play inline."""
+def webvisor_page(request: Request, limit: int = 300, db: Session = Depends(get_db)):
+    """List recorded Webvisor replays (newest first) with full visit context; play inline."""
     videos, total = [], 0
     if WEBVISOR_VIDEOS.is_dir():
         files = sorted(WEBVISOR_VIDEOS.glob("*.webm"), key=lambda p: p.stat().st_mtime, reverse=True)
         total = len(files)
         files = files[:max(1, limit)]
-        info = {}
         ids = [p.stem for p in files]
+        info, phrases = {}, _wv_phrases()
         if ids:
             from app.db.models import Visit
-            for vid, d, dur, src, url, dev in db.execute(
-                select(Visit.visit_id, Visit.date, Visit.duration, Visit.traffic_source,
-                       Visit.start_url, Visit.device).where(Visit.visit_id.in_(ids))).all():
-                info[str(vid)] = (d, dur, src, url, dev)
+            cols = (Visit.visit_id, Visit.date, Visit.date_time, Visit.duration, Visit.page_views,
+                    Visit.traffic_source, Visit.search_engine, Visit.region_city, Visit.device,
+                    Visit.os, Visit.browser, Visit.start_url, Visit.end_url, Visit.referer,
+                    Visit.counter_id, Visit.extra)
+            for row in db.execute(select(*cols).where(Visit.visit_id.in_(ids))).all():
+                info[str(row[0])] = row
         for p in files:
-            d, dur, src, url, dev = info.get(p.stem, (None, None, None, None, None))
+            r = info.get(p.stem)
+            extra = r[15] if r else None
             videos.append({
                 "visit_id": p.stem,
                 "size_mb": round(p.stat().st_size / 1048576, 2),
-                "date": d.isoformat() if d else None,
-                "duration": int(dur) if dur else None,
-                "source": src, "start_url": url, "device": dev,
+                "date": (r[1].isoformat() if r and r[1] else None),
+                "date_time": (r[2] if r else None),
+                "duration": (int(r[3]) if r and r[3] else None),
+                "page_views": (int(r[4]) if r and r[4] else None),
+                "source": (r[5] if r else None),
+                "search_engine": (r[6] if r else None),
+                "city": (r[7] if r else None),
+                "device": (r[8] if r else None),
+                "os": (r[9] if r else None),
+                "browser": (r[10] if r else None),
+                "entry": (r[11] if r else None),
+                "exit": (r[12] if r else None),
+                "referer": (r[13] if r else None),
+                "counter_id": (r[14] if r else None),
+                "phrase": phrases.get(p.stem),
+                "roistat": _wv_roistat(r[11] if r else None, extra),
+                "utm": _wv_utm(extra),
             })
     return templates.TemplateResponse(
         request, "webvisor.html",
