@@ -9,6 +9,8 @@ unmatched/
 dropped/
 our_pages/
 matching/
+brand11_cards/
+brand11_reports/
 *.txt
 !requirements.txt
 GAP_почти_матч.csv
