@@ -51,7 +51,8 @@ WEBVISOR_BASE = os.environ.get("WEBVISOR_BASE", "https://metrika.yandex.ru/webvi
 # resolves the session from visit_id; override with --replay-url / env if needed.
 REPLAY_URL = os.environ.get(
     "WEBVISOR_REPLAY_URL",
-    "https://metrika.yandex.ru/inpage/visor-proto?visit_id={visit_id}&date={date}&offset=0&id={counter}",
+    "https://metrika.yandex.ru/inpage/visor-proto?id={counter}&offset=0&date={date}"
+    "&date_visit=&visit_id={visit_id}&watch_id=&user_id_hash={user_id_hash}&dn=&tld=ru",
 )
 PLAY_SELECTOR = os.environ.get("WEBVISOR_PLAY_SELECTOR", "")  # optional; many players autoplay
 VIEWPORT = {"width": 1366, "height": 768}
@@ -85,15 +86,34 @@ def cmd_login() -> None:
     print(f"Профиль сохранён в {PROFILE_DIR}. Проверь вход: --probe")
 
 
-def _replay_url(counter, visit_id, vdate, tmpl) -> str:
+def _replay_url(counter, visit_id, vdate, user_id_hash, tmpl) -> str:
     t = tmpl or REPLAY_URL or WEBVISOR_BASE
-    return t.format(counter=counter or "", visit_id=visit_id or "", date=vdate or "")
+    return t.format(counter=counter or "", visit_id=visit_id or "", date=vdate or "",
+                    user_id_hash=user_id_hash or "")
+
+
+def _load_hashes() -> dict:
+    """visit_id -> user_id_hash, from sessions.jsonl produced by --harvest."""
+    out, f = {}, os.path.join(DATA_DIR, "sessions.jsonl")
+    if os.path.exists(f):
+        for line in open(f, encoding="utf-8"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if d.get("visit_id") and d.get("user_id_hash"):
+                out[str(d["visit_id"])] = str(d["user_id_hash"])
+    return out
 
 
 def cmd_probe(sessions, tmpl) -> None:
     os.makedirs(DEBUG_DIR, exist_ok=True)
     s = sessions[0] if sessions else {"counter_id": "", "visit_id": "", "date": ""}
-    url = _replay_url(s.get("counter_id"), s.get("visit_id"), s.get("date"), tmpl)
+    uh = _load_hashes().get(str(s.get("visit_id")), "")
+    url = _replay_url(s.get("counter_id"), s.get("visit_id"), s.get("date"), uh, tmpl)
     print(f"Probe: открываю {url}")
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=True, viewport=VIEWPORT)
@@ -223,6 +243,75 @@ def cmd_inspect() -> None:
             print(f"  после data: …{t[k:k + 240]}…")
 
 
+# Exact dimensions the Webvisor SPA requests (order matters): visit_id is at
+# index 0, user_id_hash at index 4 — we mirror it so the request is identical.
+_HARVEST_DIMS = (
+    "ym:s:visitID,ym:s:webVisorViewed,ym:s:webVisorSelected,ym:s:webVisorSelectedText,"
+    "ym:s:userIDHash,ym:s:webVisorVersion,ym:s:trafficSource,ym:s:regionCountry,"
+    "ym:s:operatingSystem,ym:s:browser,ym:s:dateTime,ym:s:webVisorActivity,"
+    "ym:s:visitDurationShort,ym:s:pageViewsShort,ym:s:searchPhraseWithLink,"
+    "ym:s:refererDomainShort,ym:s:userVisitsShort,ym:s:webVisorGoals"
+)
+
+
+def cmd_harvest(counter, d1, d2) -> None:
+    """Page through getList (reusing the SPA's CSRF key + cookies) to collect
+    visit_id -> user_id_hash for the period; save to data/webvisor/sessions.jsonl."""
+    list_url = f"https://metrika.yandex.ru/stat/visor?id={counter}&period=today"
+    getlist = "https://metrika.yandex.ru/i-proxy/i-webvisor-data-api/getList?lang=ru"
+    key = {"v": None}
+
+    def on_req(req):
+        if "getList" in req.url and not key["v"]:
+            m = re.search(r"key=([^&]+)", req.post_data or "")
+            if m:
+                key["v"] = m.group(1)
+
+    sessions, seen = [], set()
+    with _pw()() as p:
+        ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=True, viewport=VIEWPORT)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.on("request", on_req)
+        page.goto(list_url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(8000)
+        if "passport" in page.url or "auth" in page.url:
+            print("Не залогинен — сначала пройди --login."); ctx.close(); return
+        if not key["v"]:
+            print("Не удалось получить ключ API (список не загрузился)."); ctx.close(); return
+        print(f"Ключ получен. Собираю сессии {d1}…{d2} постранично:")
+        offset = 1
+        while offset < 200000:
+            args = json.dumps([{"offset": offset, "limit": 200, "date1": d1, "date2": d2,
+                                "sort": "-ym:s:dateTime", "id": str(counter),
+                                "dimensions": _HARVEST_DIMS}])
+            try:
+                r = ctx.request.post(getlist, form={"args": args, "key": key["v"], "lang": "ru"},
+                                     headers={"x-requested-with": "XMLHttpRequest", "referer": list_url})
+                data = r.json()
+            except Exception as e:
+                print(f"  offset {offset}: ошибка {e}"); break
+            rows = (data.get("result") or {}).get("data") or []
+            for row in rows:
+                dn = row.get("dimensions") or []
+                vid = dn[0].get("name") if len(dn) > 0 else None
+                uh = dn[4].get("name") if len(dn) > 4 else None
+                if vid and uh and vid not in seen:
+                    seen.add(vid)
+                    sessions.append({"visit_id": vid, "user_id_hash": uh})
+            print(f"  offset {offset}: +{len(rows)} (итого {len(sessions)})", flush=True)
+            if len(rows) < 200:
+                break
+            offset += 200
+        ctx.close()
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+    out = os.path.join(DATA_DIR, "sessions.jsonl")
+    with open(out, "w", encoding="utf-8") as f:
+        for s in sessions:
+            f.write(json.dumps(s, ensure_ascii=False) + "\n")
+    print(f"\nСобрано сессий с user_id_hash: {len(sessions)} -> {out}")
+
+
 def _done_ids() -> set[str]:
     if not os.path.isdir(OUT_DIR):
         return set()
@@ -230,17 +319,19 @@ def _done_ids() -> set[str]:
 
 
 def cmd_record(sessions, tmpl, speed, buffer_s, limit) -> None:
-    if not (tmpl or REPLAY_URL):
-        sys.exit("Не задан URL реплея. После рекона запусти с --replay-url "
-                 "'https://metrika.yandex.ru/...{counter}...{visit_id}...'")
+    hashes = _load_hashes()
+    if not hashes:
+        sys.exit("Нет собранных user_id_hash — сначала запусти --harvest.")
     os.makedirs(OUT_DIR, exist_ok=True)
     done = _done_ids()
-    todo = [s for s in sessions if s["visit_id"] not in done]
+    with_hash = [s for s in sessions if str(s["visit_id"]) in hashes]
+    todo = [s for s in with_hash if s["visit_id"] not in done]
     if limit:
         todo = todo[:limit]
     rec_secs = sum(math.ceil((s["duration"] or 0) / speed) + buffer_s for s in todo)
-    print(f"К записи: {len(todo)} (уже есть {len(done)}). Скорость x{speed}. "
-          f"Ориентир: ~{rec_secs // 60} мин записи, ~{rec_secs * 0.3 / 1024:.1f} ГБ (грубо).")
+    print(f"К записи: {len(todo)} (уже есть {len(done)}; "
+          f"без записи в Вебвизоре: {len(sessions) - len(with_hash)}). Скорость x{speed}. "
+          f"Ориентир: ~{rec_secs // 60} мин, ~{rec_secs * 0.3 / 1024:.1f} ГБ (грубо).")
     man = open(os.path.join(DATA_DIR, "manifest.csv"), "a", encoding="utf-8")
     ok = fail = 0
     with _pw()() as p:
@@ -249,7 +340,7 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit) -> None:
             record_video_dir=OUT_DIR, record_video_size=VIEWPORT)
         for i, s in enumerate(todo, 1):
             vid = s["visit_id"]
-            url = _replay_url(s.get("counter_id"), vid, s.get("date"), tmpl)
+            url = _replay_url(s.get("counter_id"), vid, s.get("date"), hashes[str(vid)], tmpl)
             secs = math.ceil((s["duration"] or 0) / speed) + buffer_s
             page = ctx.new_page()
             video = page.video
@@ -302,6 +393,7 @@ def main() -> None:
     ap.add_argument("--probe", action="store_true", help="открыть 1 сессию: скриншот+html+URL (рекон)")
     ap.add_argument("--discover", action="store_true", help="найти внутренний API списка Вебвизора (перехват сети)")
     ap.add_argument("--inspect", action="store_true", help="разобрать сохранённые ответы --discover (имена полей)")
+    ap.add_argument("--harvest", action="store_true", help="собрать visit_id+user_id_hash из getList (нужно перед --record)")
     ap.add_argument("--record", action="store_true", help="записать видео сессий")
     ap.add_argument("--replay-url", dest="replay", default="", help="шаблон URL реплея ({counter},{visit_id})")
     ap.add_argument("--speed", type=float, default=1.0, help="множитель скорости плеера (бюджет времени)")
@@ -340,6 +432,13 @@ def main() -> None:
                 print("Нет визитов в базе для этого сайта — не из чего взять counter id.")
                 return
             cmd_discover(counter)
+            return
+        if a.harvest:
+            counter = sessions[0]["counter_id"] if sessions else None
+            if not counter:
+                print("Нет визитов в базе — не из чего взять counter id.")
+                return
+            cmd_harvest(counter, d1.isoformat(), d2.isoformat())
             return
         if a.probe:
             cmd_probe(sessions, a.replay)
