@@ -170,6 +170,44 @@ def probe(phrase: str, se, *, token, base, depth, snippets, poll_sec=10, timeout
     print("Не дождался завершения за лимит времени (увеличь --timeout-min).")
 
 
+def fetch_tasks(ids, *, token, base) -> None:
+    """Забрать ГОТОВЫЕ задачи по их task_id и сохранить в базу.
+
+    Спасает результаты, если веб-прогон оборвался (рестарт сервиса/обрыв сети):
+    задачи на arsenkin уже посчитаны, их остаётся только вытянуть (`/get`) —
+    повторная оплата лимитов не нужна. task_id берутся из кабинета arsenkin."""
+    from app.services.serp_run import store_rows
+
+    init_db()
+    client = Arsenkin(token, base=base)
+    db = SessionLocal()
+    try:
+        total = 0
+        for tid in ids:
+            tid = str(tid).strip()
+            if not tid:
+                continue
+            chk = client.check(tid)
+            if not check_done(chk):
+                print(f"[{tid}] ещё не готово ({str(chk)[:100]}) — подождите и повторите")
+                continue
+            rows = list(parse_result(client.get(tid)))
+            n = store_rows(db, rows, tid)
+            total += n
+            print(f"[задача {tid}] сохранено строк: {n}")
+        print(f"\nИтого сохранено: {total}. Откройте /serp — результаты появятся в срезе за сегодня.")
+    finally:
+        db.close()
+
+
+def show_status(token, base) -> None:
+    """Лимиты, очередь и (best-effort) список задач — чтобы найти task_id."""
+    client = Arsenkin(token, base=base)
+    print("limits ->", client.limits())
+    print("status ->", client.running())
+    print("tasks  ->", str(client._post("tasks", {"action": "list"}))[:1500])
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     src = ap.add_argument_group("источник ключевых слов")
@@ -194,6 +232,9 @@ def main() -> None:
     api.add_argument("--timeout-min", dest="timeout_min", type=int, default=30)
     api.add_argument("--rpm", type=int, default=28, help="запросов/мин (лимит arsenkin 30)")
     api.add_argument("--probe", help="проверить ОДНУ фразу и показать сырой ответ (диагностика API)")
+    api.add_argument("--fetch", help="забрать ГОТОВЫЕ задачи по task_id (через запятую) и сохранить")
+    api.add_argument("--status", action="store_true",
+                     help="показать лимиты/очередь/список задач arsenkin (искать task_id)")
     ap.add_argument("--apply", action="store_true", help="реально запустить (иначе только смета)")
     dmp = ap.add_argument_group("выгрузка из базы")
     dmp.add_argument("--dump", help="выгрузить сохранённый ТОП в CSV по этому пути и выйти")
@@ -214,6 +255,15 @@ def main() -> None:
 
     if a.probe:
         probe(a.probe, se, token=token, base=a.base, depth=a.depth, snippets=a.snippets)
+        return
+
+    if a.status:
+        show_status(token, a.base)
+        return
+
+    if a.fetch:
+        ids = [x for x in a.fetch.replace(" ", ",").split(",") if x.strip()]
+        fetch_tasks(ids, token=token, base=a.base)
         return
 
     if a.file:
