@@ -265,7 +265,7 @@ def cmd_harvest(counter, d1, d2) -> None:
         if "getList" in req.url and not key["v"]:
             m = re.search(r"key=([^&]+)", req.post_data or "")
             if m:
-                key["v"] = m.group(1)
+                key["v"] = unquote(m.group(1))  # decode %3A back to ':' (don't double-encode)
 
     sessions, seen = [], set()
     with _pw()() as p:
@@ -295,6 +295,12 @@ def cmd_harvest(counter, d1, d2) -> None:
                     r = ctx.request.post(getlist, form={"args": args, "key": key["v"], "lang": "ru"},
                                          headers=headers)
                     data = r.json()
+                    err = data.get("error") or {}
+                    if err.get("name") == "MetrikaSecretKeyError" and err.get("args"):
+                        key["v"] = str(err["args"][0])  # server returns the expected key — retry
+                        r = ctx.request.post(getlist, form={"args": args, "key": key["v"], "lang": "ru"},
+                                             headers=headers)
+                        data = r.json()
                 except Exception as e:
                     print(f"  {day} offset {offset}: ошибка {e}"); break
                 rows = (data.get("result") or {}).get("data") or []
