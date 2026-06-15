@@ -675,23 +675,67 @@ def _pages_inputs(db, domain, engine, start, end, b_start, b_end):
     return domains, cur, avail, eng, ids, dr_a, dr_b
 
 
+def _pages_filter(db, site_ids):
+    """Active 'my pages' list (saved in settings) -> (text, urls, page_ids).
+
+    ``page_ids`` is None when no list is set (show all pages); an explicit list
+    (possibly empty) when a list is set — empty means none of the URLs matched
+    our data for this source."""
+    from app.credentials import get_cred
+    from app.db.models import Page
+
+    text = get_cred("pages_url_filter") or ""
+    urls = _parse_phrases(text)
+    if not urls:
+        return "", [], None
+    norms = {normalize_url(u) for u in urls if u}
+    rows = db.execute(
+        select(Page.id).where(Page.site_id.in_(site_ids), Page.normalized_url.in_(list(norms)))
+    ).all() if site_ids else []
+    return text, urls, [pid for (pid,) in rows]
+
+
+@router.post("/ui/pages/urls")
+async def ui_pages_urls(urls: str = Form(""), clear: int = Form(0),
+                        file: UploadFile | None = File(None)):
+    from app.credentials import set_cred
+
+    words = [] if clear else _parse_phrases(urls)
+    if not clear and file is not None and getattr(file, "filename", ""):
+        try:
+            words += _parse_phrases((await file.read()).decode("utf-8", "ignore"))
+        finally:
+            await file.close()
+    seen, uniq = set(), []
+    for w in words:
+        if w.lower() not in seen:
+            seen.add(w.lower())
+            uniq.append(w)
+    set_cred("pages_url_filter", "\n".join(uniq))
+    msg = "Список страниц очищен." if not uniq else f"Список страниц сохранён: {len(uniq)} URL."
+    return RedirectResponse(url=f"{BP}/pages?msg={quote(msg)}", status_code=303)
+
+
 @router.get("/pages")
 def pages_page(request: Request, domain: str | None = None, engine: str = "gsc",
                start: str | None = None, end: str | None = None, b_start: str | None = None,
                b_end: str | None = None, q: str | None = None, min_impr: str | None = None,
-               sort: str = "clicks", db: Session = Depends(get_db)):
+               sort: str = "clicks", msg: str | None = None, db: Session = Depends(get_db)):
     from app.services import page_devices as PD
 
     domains, cur, avail, eng, ids, dr_a, dr_b = _pages_inputs(
         db, domain, engine, start, end, b_start, b_end)
+    url_text, url_list, page_ids = _pages_filter(db, ids)
     show = 500
-    res = PD.page_device_compare(db, ids, dr_a, dr_b, search=(q or None),
+    res = PD.page_device_compare(db, ids, dr_a, dr_b, page_ids=page_ids, search=(q or None),
                                  min_impressions=_qint(min_impr) or 0, sort=sort, limit=show)
     return templates.TemplateResponse(request, "pages.html", {
-        "request": request, "domains": domains, "cur_domain": cur or "",
+        "request": request, "domains": domains, "cur_domain": cur or "", "msg": msg,
         "engines_avail": avail, "engine": eng, "range_a": dr_a, "range_b": dr_b,
         "rows": res["rows"], "total": res["total"], "shown": show, "devices": res["devices"],
         "q": q or "", "min_impr": _qint(min_impr) or "", "sort": sort,
+        "url_filter": url_text, "url_count": len(url_list),
+        "matched": (len(set(page_ids)) if page_ids is not None else None),
         "has_data": bool(ids),
     })
 
@@ -705,7 +749,8 @@ def pages_export(domain: str | None = None, engine: str = "gsc", start: str | No
 
     _domains_, cur, _avail, _eng, ids, dr_a, dr_b = _pages_inputs(
         db, domain, engine, start, end, b_start, b_end)
-    res = PD.page_device_compare(db, ids, dr_a, dr_b, search=(q or None),
+    _t, _u, page_ids = _pages_filter(db, ids)
+    res = PD.page_device_compare(db, ids, dr_a, dr_b, page_ids=page_ids, search=(q or None),
                                  min_impressions=_qint(min_impr) or 0, sort=sort, limit=None)
     fname, buf, media = PD.build_export(res["rows"], res["devices"], cur or "all",
                                         fmt=("xlsx" if format == "xlsx" else "csv"))

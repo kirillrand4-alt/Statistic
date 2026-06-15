@@ -14,11 +14,32 @@
 {% block content %}
 <h2>Страницы: десктоп / мобайл и динамика</h2>
 <style>article table td { vertical-align: top; }</style>
+{% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
 <p><small>По каждой странице — клики, показы и CTR отдельно для <strong>десктопа</strong> и
 <strong>мобайла</strong>, с изменением за период. Главное число — текущий период
 (<strong>{{ range_a.start }} … {{ range_a.end }}</strong>), в скобке «было» — предыдущий
 (<strong>{{ range_b.start }} … {{ range_b.end }}</strong>), <span style="color:green">+рост</span> /
 <span style="color:crimson">−падение</span>.</small></p>
+
+<article>
+  <header>Свои страницы (необязательно)</header>
+  {% if url_count %}<p>✅ Активен список: <strong>{{ url_count }}</strong> URL{% if matched is not none %},
+    найдено в данных этого источника: <strong>{{ matched }}</strong>{% endif %}.
+    <form method="post" action="{{ base_path }}/ui/pages/urls" style="display:inline;margin:0">
+      <input type="hidden" name="clear" value="1"><button type="submit" class="outline secondary">Очистить</button>
+    </form></p>{% endif %}
+  <form method="post" action="{{ base_path }}/ui/pages/urls" enctype="multipart/form-data">
+    <label>Вставьте URL (по одному в строке или через запятую) — отчёт покажет только их
+      <textarea name="urls" rows="4" placeholder="https://example.com/page-1&#10;https://example.com/page-2">{{ url_filter }}</textarea>
+    </label>
+    <div class="grid">
+      <label>…или файл со ссылками <input type="file" name="file" accept=".txt,.csv"></label>
+      <label>&nbsp;<button type="submit">Применить список</button></label>
+    </div>
+    <small>Список сохраняется и применяется к выбранному источнику; URL сопоставляются без учёта
+    http/https, www и UTM. Пусто/«Очистить» — показывать все страницы домена.</small>
+  </form>
+</article>
 
 <form method="get" action="{{ base_path }}/pages" class="grid">
   <label>Домен

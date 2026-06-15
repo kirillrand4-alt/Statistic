@@ -61,6 +61,23 @@ def test_min_impressions_and_sort(db, site):
     assert {r["url"] for r in res3["rows"]} == {f"{H}/b"}
 
 
+def test_page_ids_filter(db, site):
+    """The 'my pages' upload resolves to page_ids and restricts the report."""
+    _seed(db, site)
+    from sqlalchemy import select
+
+    from app.db.models import Page
+    from app.utils import normalize_url
+    pid = db.execute(
+        select(Page.id).where(Page.site_id == site.id,
+                              Page.normalized_url == normalize_url(f"{H}/a"))
+    ).scalar_one()
+    res = PD.page_device_compare(db, [site.id], A, B, page_ids=[pid])
+    assert {r["url"] for r in res["rows"]} == {f"{H}/a"}
+    # empty list (list set but nothing matched) -> no rows
+    assert PD.page_device_compare(db, [site.id], A, B, page_ids=[])["rows"] == []
+
+
 def test_export(db, site):
     _seed(db, site)
     res = PD.page_device_compare(db, [site.id], A, B)
