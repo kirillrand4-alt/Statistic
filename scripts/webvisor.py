@@ -27,6 +27,7 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 import time
 from datetime import date, timedelta
@@ -387,7 +388,7 @@ def _done_ids() -> set[str]:
     return {f[:-5] for f in os.listdir(OUT_DIR) if f.endswith(".webm")}
 
 
-def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0) -> None:
+def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5) -> None:
     hashes = _load_hashes()
     if not hashes:
         sys.exit("Нет собранных user_id_hash — сначала запусти --harvest.")
@@ -424,6 +425,11 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0) -> None:
             except Exception:
                 pass
         for i, s in enumerate(todo, 1):
+            if shutil.disk_usage(OUT_DIR).free / 1e9 < min_free:
+                print(f"⛔ Стоп: на диске < {min_free} ГБ свободно. Записано {ok}, "
+                      f"осталось {len(todo) - i + 1}. Освободи место/расширь диск и запусти снова — допишет.",
+                      flush=True)
+                break
             vid = s["visit_id"]
             url = _replay_url(s.get("counter_id"), vid, s.get("date"), hashes[str(vid)], tmpl)
             secs = _secs(s["duration"])
@@ -487,6 +493,8 @@ def main() -> None:
     ap.add_argument("--buffer", type=int, default=4, help="доп. секунд на сессию (загрузка/буфер)")
     ap.add_argument("--max-seconds", dest="max_sec", type=int, default=0,
                     help="кап записи на сессию, сек (0 = без капа; бережёт место/время)")
+    ap.add_argument("--min-free-gb", dest="min_free", type=float, default=1.5,
+                    help="остановить запись, если на диске меньше N ГБ свободно")
     a = ap.parse_args()
 
     if a.login:  # no DB needed to log in
@@ -540,7 +548,7 @@ def main() -> None:
             cmd_probe(sessions, a.replay)
             return
         if a.record:
-            cmd_record(sessions, a.replay, a.speed, a.buffer, a.limit, a.max_sec)
+            cmd_record(sessions, a.replay, a.speed, a.buffer, a.limit, a.max_sec, a.min_free)
             return
 
         n = W.count_sessions(db, sid, dr, **kw)
