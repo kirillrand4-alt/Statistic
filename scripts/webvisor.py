@@ -355,6 +355,14 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit) -> None:
         ctx = p.chromium.launch_persistent_context(
             PROFILE_DIR, headless=True, viewport=VIEWPORT,
             record_video_dir=OUT_DIR, record_video_size=VIEWPORT)
+        for pg in list(ctx.pages):  # drop the blank auto-opened page (and its stray video)
+            v = pg.video
+            try:
+                pg.close()
+                if v:
+                    os.remove(v.path())
+            except Exception:
+                pass
         for i, s in enumerate(todo, 1):
             vid = s["visit_id"]
             url = _replay_url(s.get("counter_id"), vid, s.get("date"), hashes[str(vid)], tmpl)
@@ -362,7 +370,7 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit) -> None:
             page = ctx.new_page()
             video = page.video
             try:
-                page.goto(url, wait_until="networkidle", timeout=60000)
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 if PLAY_SELECTOR:
                     try:
                         page.click(PLAY_SELECTOR, timeout=5000)
