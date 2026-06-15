@@ -356,6 +356,69 @@ class SerpResult(Base):
     task_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
+class DonorSite(Base):
+    """A guest-post donor site from the Miralinks catalog.
+
+    One row per site (keyed by ``source`` + ``external_id`` = Miralinks Ground
+    id), refreshed/upserted on each catalog pull. The clean fields the UI filters
+    and sorts on are typed; the full original ``rowData`` object is kept in
+    ``raw`` so nothing is lost even if a field isn't mapped.
+    """
+
+    __tablename__ = "donor_site"
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uq_donor_site"),
+        Index("ix_donor_domain", "domain"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), default="miralinks", index=True)
+    external_id: Mapped[str] = mapped_column(String(64))      # Miralinks Ground.id
+    domain: Mapped[str] = mapped_column(String(255))          # registrable (topDomain)
+    site_url: Mapped[str | None] = mapped_column(String(512), nullable=True)  # folder_url_wl
+    name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # quality metrics
+    sqi: Mapped[int | None] = mapped_column(Integer, nullable=True)        # Яндекс ИКС
+    cy: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    da: Mapped[int | None] = mapped_column(Integer, nullable=True)         # Moz DA
+    ahrefs_dr: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Ahrefs DR
+    cf: Mapped[int | None] = mapped_column(Integer, nullable=True)         # Majestic CF
+    tf: Mapped[int | None] = mapped_column(Integer, nullable=True)         # Majestic TF
+    spamness: Mapped[float | None] = mapped_column(Float, nullable=True)   # Яндекс спам
+    indexed_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ya_indexed_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    google_indexed_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    traffic: Mapped[int | None] = mapped_column(Integer, nullable=True)    # месячный трафик
+    traffic_interval: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    ahrefs_traffic: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ahrefs_domains: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ahrefs_keywords: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # commercial
+    price_rur: Mapped[int | None] = mapped_column(Integer, nullable=True)        # размещение
+    price_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    article_price_rur: Mapped[int | None] = mapped_column(Integer, nullable=True)  # написание
+    # meta
+    region_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    region: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    topics: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    lang: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    links_in_articles: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    articles_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rating: Mapped[float | None] = mapped_column(Float, nullable=True)
+    placement_time_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_placement: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    venality: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_exclusive: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_fast: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_pr: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    trusted: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    screenshot: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    raw: Mapped[str | None] = mapped_column(Text, nullable=True)  # full rowData JSON
+    captured_on: Mapped[date_type] = mapped_column(Date, index=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class AppSetting(Base):
     """Runtime-editable key/value config (optionally encrypted)."""
 

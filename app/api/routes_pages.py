@@ -428,6 +428,8 @@ def admin_page(request: Request, msg: str | None = None, db: Session = Depends(g
             "gsc_mode": get_cred("gsc_auth_mode"),
             "yandex_connected": bool(get_cred("yandex_wm_token")),
             "arsenkin_connected": bool(get_cred("arsenkin_token")),
+            "miralinks_connected": bool(get_cred("miralinks_cookie")),
+            "miralinks_body_set": bool(get_cred("miralinks_body")),
             "oauth_redirect_uri": _public_redirect_uri(request),
             "sites": _sites(db),
             "device_cov": device_cov,
@@ -483,6 +485,91 @@ def ui_arsenkin_token(token: str = Form(...)):
     set_cred("arsenkin_token", token)
     msg = "Токен arsenkin сохранён." if token else "Токен arsenkin очищен."
     return RedirectResponse(url=f"{BP}/admin?msg={quote(msg)}", status_code=303)
+
+
+@router.post("/ui/miralinks/save")
+def ui_miralinks_save(cookie: str = Form(""), body: str = Form("")):
+    from app.credentials import set_cred
+
+    saved = []
+    cookie = (cookie or "").strip()
+    body = (body or "").strip()
+    if cookie:
+        set_cred("miralinks_cookie", cookie)
+        saved.append("cookie")
+    if body:
+        set_cred("miralinks_body", body)
+        saved.append("запрос")
+    msg = ("Miralinks: сохранены " + " и ".join(saved) + ".") if saved \
+        else "Miralinks: нечего сохранять (пустые поля)."
+    return RedirectResponse(url=f"{BP}/admin?msg={quote(msg)}", status_code=303)
+
+
+def _qint(v: str | None) -> int | None:
+    """Query int that tolerates empty strings (blank HTML number inputs)."""
+    try:
+        return int(str(v).strip()) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+@router.get("/donors")
+def donors_page(request: Request, q: str | None = None, region: str | None = None,
+                topic: str | None = None, min_sqi: str | None = None,
+                max_price: str | None = None, min_dr: str | None = None,
+                min_traffic: str | None = None, sort: str = "sqi",
+                msg: str | None = None, db: Session = Depends(get_db)):
+    from app.credentials import get_cred
+    from app.services import donors as D
+
+    f = {"min_sqi": _qint(min_sqi), "max_price": _qint(max_price),
+         "min_dr": _qint(min_dr), "min_traffic": _qint(min_traffic)}
+    rows = D.donor_rows(db, q=q, region=region, topic=topic, sort=sort, limit=1000, **f)
+    return templates.TemplateResponse(request, "donors.html", {
+        "request": request, "rows": rows, "regions": D.regions(db),
+        "total": D.count(db), "shown_limit": 1000, "msg": msg,
+        "q": q or "", "region": region or "", "topic": topic or "",
+        "min_sqi": f["min_sqi"] or "", "max_price": f["max_price"] or "",
+        "min_dr": f["min_dr"] or "", "min_traffic": f["min_traffic"] or "", "sort": sort,
+        "status": D.current_status(),
+        "has_cookie": bool(get_cred("miralinks_cookie")),
+        "has_body": bool(get_cred("miralinks_body")),
+    })
+
+
+@router.get("/donors/export")
+def donors_export(q: str | None = None, region: str | None = None, topic: str | None = None,
+                  min_sqi: str | None = None, max_price: str | None = None,
+                  min_dr: str | None = None, min_traffic: str | None = None,
+                  sort: str = "sqi", format: str = "csv", db: Session = Depends(get_db)):
+    from app.services import donors as D
+
+    rows = D.donor_rows(db, q=q, region=region, topic=topic, sort=sort, limit=None,
+                        min_sqi=_qint(min_sqi), max_price=_qint(max_price),
+                        min_dr=_qint(min_dr), min_traffic=_qint(min_traffic))
+    fname, buf, media = D.build_export(rows, fmt=("xlsx" if format == "xlsx" else "csv"))
+    return StreamingResponse(buf, media_type=media,
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@router.post("/ui/donors/run")
+def ui_donors_run(length: int = Form(100), max_records: int = Form(0)):
+    from app.credentials import get_cred
+    from app.services import donors as D
+
+    def back(m: str):
+        return RedirectResponse(url=f"{BP}/donors?msg={quote(m)}", status_code=303)
+
+    cookie = get_cred("miralinks_cookie")
+    body = get_cred("miralinks_body")
+    if not cookie or not body:
+        return back("Сначала сохраните cookie и тело запроса Miralinks в Настройках.")
+    if D.current_status().get("running"):
+        return back("Сбор уже идёт — обновите страницу позже.")
+    started = D.launch_run(cookie, body, length=max(1, min(length, 500)),
+                           max_records=max(0, max_records))
+    return back("Запущен сбор каталога Miralinks. Обновляйте страницу — площадки появятся ниже."
+                if started else "Сбор уже идёт.")
 
 
 @router.post("/ui/backfill")

@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Доноры (Miralinks) · SEO Статистика{% endblock %}
+{% block content %}
+<h2>База доноров для гостевых постов (Miralinks)</h2>
+{% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
+
+<article>
+  <header>Обновить базу из каталога Miralinks</header>
+  {% if not has_cookie or not has_body %}
+  <p>⚠️ Сначала сохраните <strong>cookie</strong> и <strong>тело запроса</strong> Miralinks в
+  <a href="{{ base_path }}/admin">Настройках</a> (раздел Miralinks). Фильтры берутся из того
+  запроса, что вы скопировали из каталога — хотите другие, скопируйте новый.</p>
+  {% endif %}
+  {% if status.running %}
+  <p><progress></progress> Идёт сбор: получено <strong>{{ status.fetched|numfmt }}</strong>{% if status.total %} из {{ status.total|numfmt }}{% endif %},
+  сохранено {{ status.stored|numfmt }}. <small>{{ status.msg }}</small> — обновите страницу.</p>
+  {% elif status.msg %}<p><small>Последний сбор: {{ status.msg }}.</small></p>{% endif %}
+
+  <form method="post" action="{{ base_path }}/ui/donors/run" class="grid">
+    <label>Площадок за запрос <input type="number" name="length" value="100" min="1" max="500"></label>
+    <label>Лимит (0 = весь каталог) <input type="number" name="max_records" value="0" min="0"></label>
+    <label>&nbsp;<button type="submit" {% if status.running or not has_cookie or not has_body %}disabled{% endif %}>Обновить базу</button></label>
+  </form>
+  <small>Тянем каталог постранично с твоей сессией, с паузой между страницами (бережно к их
+  серверу). Если cookie протух — увидишь сообщение об ошибке, просто обнови cookie в Настройках.</small>
+</article>
+
+<form method="get" action="{{ base_path }}/donors" class="grid">
+  <label>Домен <input type="search" name="q" value="{{ q }}" placeholder="часть домена"></label>
+  <label>Регион
+    <select name="region">
+      <option value="">— любой —</option>
+      {% for r in regions %}<option value="{{ r }}" {% if r==region %}selected{% endif %}>{{ r }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Тематика <input type="search" name="topic" value="{{ topic }}" placeholder="напр. СМИ"></label>
+  <label>Сортировка
+    <select name="sort">
+      <option value="sqi" {% if sort=='sqi' %}selected{% endif %}>ИКС ↓</option>
+      <option value="dr" {% if sort=='dr' %}selected{% endif %}>Ahrefs DR ↓</option>
+      <option value="traffic" {% if sort=='traffic' %}selected{% endif %}>Трафик ↓</option>
+      <option value="rating" {% if sort=='rating' %}selected{% endif %}>Рейтинг ↓</option>
+      <option value="price" {% if sort=='price' %}selected{% endif %}>Цена ↑</option>
+      <option value="price_desc" {% if sort=='price_desc' %}selected{% endif %}>Цена ↓</option>
+      <option value="spamness" {% if sort=='spamness' %}selected{% endif %}>Спам ↑</option>
+    </select>
+  </label>
+</form>
+<form method="get" action="{{ base_path }}/donors" class="grid">
+  <input type="hidden" name="q" value="{{ q }}"><input type="hidden" name="region" value="{{ region }}">
+  <input type="hidden" name="topic" value="{{ topic }}"><input type="hidden" name="sort" value="{{ sort }}">
+  <label>ИКС ≥ <input type="number" name="min_sqi" value="{{ min_sqi }}" min="0"></label>
+  <label>DR ≥ <input type="number" name="min_dr" value="{{ min_dr }}" min="0" max="100"></label>
+  <label>Трафик ≥ <input type="number" name="min_traffic" value="{{ min_traffic }}" min="0"></label>
+  <label>Цена ≤ ₽ <input type="number" name="max_price" value="{{ max_price }}" min="0"></label>
+  <label>&nbsp;<button type="submit">Фильтровать</button></label>
+</form>
+
+{% set qs = 'q=' ~ q ~ '&region=' ~ region ~ '&topic=' ~ topic ~ '&sort=' ~ sort ~ '&min_sqi=' ~ min_sqi ~ '&min_dr=' ~ min_dr ~ '&min_traffic=' ~ min_traffic ~ '&max_price=' ~ max_price %}
+<p>Всего в базе: <strong>{{ total|numfmt }}</strong>. Показано до {{ shown_limit|numfmt }}. Выгрузить (с фильтрами):
+  <a href="{{ base_path }}/donors/export?{{ qs }}&format=xlsx" role="button" class="outline">Excel</a>
+  <a href="{{ base_path }}/donors/export?{{ qs }}&format=csv" role="button" class="outline secondary">CSV</a>
+</p>
+
+<article>
+  <figure>
+  <table class="sortable">
+    <thead><tr>
+      <th>Домен</th><th>ИКС</th><th>DR</th><th>Трафик</th><th>Цена ₽</th>
+      <th>Спам</th><th>% индекс</th><th>Регион</th><th>Тематика</th><th>Рейтинг</th>
+    </tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td><small title="{{ r.name or '' }}">{{ r.domain }}</small></td>
+        <td>{{ r.sqi|numfmt if r.sqi is not none else '—' }}</td>
+        <td>{{ r.ahrefs_dr if r.ahrefs_dr is not none else '—' }}</td>
+        <td>{{ r.traffic|numfmt if r.traffic is not none else '—' }}</td>
+        <td>{{ r.price_rur|numfmt if r.price_rur is not none else '—' }}</td>
+        <td>{{ r.spamness if r.spamness is not none else '—' }}</td>
+        <td>{{ r.indexed_percent if r.indexed_percent is not none else '—' }}</td>
+        <td><small>{{ r.region or '' }}</small></td>
+        <td><small>{{ (r.topics or '')[:40] }}</small></td>
+        <td>{{ r.rating if r.rating is not none else '—' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="10"><small>Пусто. Сохрани cookie+запрос в Настройках и нажми «Обновить базу».</small></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </figure>
+</article>
+{% endblock %}

@@ -83,6 +83,31 @@
 </article>
 
 <article>
+  <header>Miralinks (база доноров для гостевых постов)</header>
+  {% if miralinks_connected %}<p>✅ Cookie сохранён{% if miralinks_body_set %}, запрос сохранён{% endif %} — можно вставить новые, чтобы заменить.</p>{% endif %}
+  <p>У Miralinks нет API, поэтому каталог тянется вашей сессией. В каталоге площадок откройте
+  DevTools → вкладка <strong>Network</strong> → запрос <code>loadDataTableDataCatalog</code>:</p>
+  <ul>
+    <li><strong>Cookie</strong> — из вкладки Headers (строка <code>cookie</code>), вставьте ниже.</li>
+    <li><strong>Тело запроса</strong> — вкладка Payload → «view source», вставьте ниже. В нём
+    зашиты ваши фильтры (<code>searchData</code>); чтобы поменять фильтры — скопируйте новый запрос.</li>
+  </ul>
+  <form method="post" action="{{ base_path }}/ui/miralinks/save">
+    <label>Cookie сессии
+      <textarea name="cookie" rows="3" autocomplete="off"
+        placeholder="_ym_uid=...; MIRALINKS_RU_LIVE=...; ..."></textarea>
+    </label>
+    <label>Тело запроса каталога (Payload, view source)
+      <textarea name="body" rows="4" autocomplete="off"
+        placeholder="sEcho=7&iColumns=41&iDisplayStart=0&iDisplayLength=20&...&searchData=%7B...%7D"></textarea>
+    </label>
+    <button type="submit">Сохранить Miralinks</button>
+  </form>
+  <small>Запуск сбора и фильтры/выгрузка — на странице <a href="{{ base_path }}/donors">Доноры</a>.
+  Cookie сессии живёт ограниченно; когда протухнет, сбор покажет ошибку — вставьте свежий.</small>
+</article>
+
+<article>
   <header>Добавить сайт</header>
   <form method="post" action="{{ base_path }}/ui/sites">
     <div class="grid">
