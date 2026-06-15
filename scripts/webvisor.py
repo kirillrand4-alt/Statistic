@@ -115,52 +115,63 @@ def cmd_discover(counter) -> None:
     os.makedirs(DEBUG_DIR, exist_ok=True)
     url = f"https://metrika.yandex.ru/stat/visor?id={counter}&period=today"
     print(f"Discover: открываю список {url}")
-    grabbed, all_json = [], []
-    NAMES = ("getList", "webvisor-data-api", "api/metrika")
+    needles = ["3320642230537945170", "212544696", "3320726018304245762", "3663266546"]
+    NAMES = ("getList", "webvisor-data-api")
+    SKIP_CT = ("image", "font", "css", "javascript", "video", "octet", "html")
+    grabbed, seen = [], []
 
     def on_resp(resp):
         try:
-            if "json" not in (resp.headers.get("content-type", "") or ""):
+            ct = (resp.headers.get("content-type", "") or "").lower()
+            if any(x in ct for x in SKIP_CT):
                 return
             u = resp.url
             body = resp.text()
         except Exception:
             return
-        all_json.append(u)
-        if any(s in u for s in NAMES):
+        seen.append(u)
+        hit_needle = any(nd in body for nd in needles)
+        if hit_needle or any(s in u for s in NAMES):
             try:
                 method, post = resp.request.method, resp.request.post_data
             except Exception:
                 method, post = "?", None
-            grabbed.append((u, method, post, body))
+            grabbed.append((u, ct, method, post, body, hit_needle))
 
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=True, viewport=VIEWPORT)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.on("response", on_resp)
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(9000)
+        page.wait_for_timeout(12000)
         try:
-            page.mouse.wheel(0, 5000)  # nudge any lazy-loading list
-            page.wait_for_timeout(4000)
+            page.mouse.wheel(0, 6000)  # nudge any lazy-loading list
+            page.wait_for_timeout(5000)
         except Exception:
             pass
         if "passport" in page.url or "auth" in page.url:
             print("  ⚠ не залогинен — сначала пройди --login.")
         ctx.close()
 
-    print(f"\nJSON-ответов всего: {len(all_json)}; интересных (getList/api): {len(grabbed)}")
-    for i, (u, method, post, b) in enumerate(grabbed[:8]):
-        path = os.path.join(DEBUG_DIR, f"api_{i}.json")
+    print(f"\nОтветов просмотрено: {len(seen)}; интересных: {len(grabbed)}")
+    for i, (u, ct, method, post, b, hn) in enumerate(grabbed[:10]):
+        path = os.path.join(DEBUG_DIR, f"hit_{i}.json")
         with open(path, "w", encoding="utf-8") as f:
             f.write(b)
-        print(f"\n[{i}] {method} {u}  (len={len(b)}, сохранил {path})")
+        tag = "  <-- содержит наш visit_id!" if hn else ""
+        print(f"\n[{i}] {method} {u}\n   ct={ct} len={len(b)}{tag}  ({path})")
         if post:
-            print(f"   POST-данные: {post[:400]}")
-        print(f"   тело[:1000]: {b[:1000]}")
+            print(f"   POST: {post[:200]}")
+        for nd in needles:
+            j = b.find(nd)
+            if j >= 0:
+                print(f"   рядом с {nd}: …{b[max(0, j - 110):j + 60]}…")
+                break
+        else:
+            print(f"   тело[:300]: {b[:300]}")
     if not grabbed:
-        print("Ничего интересного не поймал. Все JSON-URL:")
-        for u in all_json:
+        print("Не нашёл список сессий. Все просмотренные текстовые URL:")
+        for u in seen[-25:]:
             print("  ", u)
 
 
