@@ -238,20 +238,32 @@ def serp_page(request: Request, captured_on: str | None = None,
     se_sel = list(se) if se else []
     rows = S.serp_rows(db, captured_on=cap, se=(se_sel or None), domain=(domain or None),
                        search=(q or None), limit=2000)
+    own = {d["domain"] for d in _domains(db)}
     return templates.TemplateResponse(request, "serp.html", {
         "request": request, "captures": caps, "cap": cap, "rows": rows,
         "se_sel": se_sel, "domain": domain or "", "q": q or "", "msg": msg,
-        "domains": _domains(db), "own_domains": {d["domain"] for d in _domains(db)},
-        "shown_limit": 2000, "status": current_status(),
-        "has_token": bool(get_cred("arsenkin_token")),
+        "domains": _domains(db), "own_domains": own, "shown_limit": 2000,
+        "own_summary": S.own_positions(db, cap, own, se=(se_sel or None)),
+        "status": current_status(), "has_token": bool(get_cred("arsenkin_token")),
     })
 
 
+def _parse_phrases(text: str) -> list[str]:
+    seen, out = set(), []
+    for line in (text or "").replace("\t", "\n").replace(",", "\n").splitlines():
+        p = line.strip().strip('"')
+        if p and p.lower() not in seen:
+            seen.add(p.lower())
+            out.append(p)
+    return out
+
+
 @router.post("/ui/serp/run")
-def ui_serp_run(domain: str = Form(""), se: list[int] = Form(default=[]),
-                depth: int = Form(10), min_clicks: int = Form(1),
-                max_keywords: int = Form(500), period_days: int = Form(90),
-                snippets: int = Form(0), db: Session = Depends(get_db)):
+async def ui_serp_run(domain: str = Form(""), se: list[int] = Form(default=[]),
+                      depth: int = Form(10), min_clicks: int = Form(1),
+                      max_keywords: int = Form(500), period_days: int = Form(90),
+                      snippets: int = Form(1), phrases: str = Form(""),
+                      file: UploadFile | None = File(None), db: Session = Depends(get_db)):
     from datetime import timedelta
 
     from app.credentials import get_cred
@@ -269,16 +281,35 @@ def ui_serp_run(domain: str = Form(""), se: list[int] = Form(default=[]),
         return back("Проверка уже идёт — дождитесь завершения.")
     se_list = [{"type": int(t), "region": DEFAULT_REGION.get(int(t))} for t in se] or \
         [{"type": 2, "region": 213}, {"type": 11, "region": 1011969}]
-    end = date.today() - timedelta(days=1)
-    dr = parse_date_range((end - timedelta(days=max(1, period_days) - 1)).isoformat(), end.isoformat())
-    ids = _keyword_site_ids(db, domain or "", SEARCH_ENGINES)
-    rows = kw.keyword_rows(db, ids, dr, min_clicks=min_clicks, limit=(max_keywords or None))
-    words = [r["query"] for r in rows if r["query"]]
+
+    # source of phrases: your own (textarea/file) wins; otherwise the collected keywords
+    words = _parse_phrases(phrases)
+    if file is not None and file.filename:
+        try:
+            words += _parse_phrases((await file.read()).decode("utf-8", "ignore"))
+        finally:
+            await file.close()
+    src = "свои фразы"
+    if words:
+        seen, uniq = set(), []
+        for w in words:
+            if w.lower() not in seen:
+                seen.add(w.lower())
+                uniq.append(w)
+        words = uniq[:max_keywords] if max_keywords else uniq
+    else:
+        end = date.today() - timedelta(days=1)
+        dr = parse_date_range((end - timedelta(days=max(1, period_days) - 1)).isoformat(),
+                              end.isoformat())
+        ids = _keyword_site_ids(db, domain or "", SEARCH_ENGINES)
+        words = [r["query"] for r in kw.keyword_rows(db, ids, dr, min_clicks=min_clicks,
+                                                     limit=(max_keywords or None)) if r["query"]]
+        src = "ключевые слова из статистики"
     if not words:
-        return back("Не нашлось ключевых слов по условиям (попробуй меньше «мин. кликов»).")
+        return back("Не нашлось фраз: вставь свои или ослабь фильтр «мин. кликов».")
     serp_run.launch_run(words, se_list, token=token, depth=depth, snippets=bool(snippets))
-    return back(f"Запущено: {len(words)} фраз × {len(se_list)} ПС (~{len(words) * len(se_list)} "
-                f"лимитов). Результаты появятся здесь по мере готовности — обновляйте страницу.")
+    return back(f"Запущено ({src}): {len(words)} фраз × {len(se_list)} ПС "
+                f"(~{len(words) * len(se_list)} лимитов). Обновляйте страницу — результаты появятся.")
 
 
 @router.get("/serp/export")

@@ -12,7 +12,7 @@ from collections import deque
 from datetime import date
 
 from app.db.base import SessionLocal, init_db
-from app.providers.arsenkin import SE_LABELS, Arsenkin, is_done, parse_result
+from app.providers.arsenkin import Arsenkin, check_done, parse_result
 from app.utils import domain_of
 
 DEFAULT_BASE = "https://arsenkin.ru/api/tools"
@@ -42,7 +42,8 @@ def store_rows(db, rows, task_id) -> int:
             "region": r.get("region") if isinstance(r.get("region"), int) else None,
             "position": int(r["position"]), "url": r.get("url"),
             "url_domain": domain_of(r.get("url") or "") or None,
-            "title": r.get("title"), "captured_on": today, "task_id": str(task_id),
+            "title": r.get("title"), "snippet": r.get("snippet"),
+            "captured_on": today, "task_id": str(task_id),
         })
     if not payload:
         return 0
@@ -65,7 +66,9 @@ def store_rows(db, rows, task_id) -> int:
 def run_top10(keywords, se, *, token, base=DEFAULT_BASE, depth=10, snippets=False,
               batch=100, parallel=5, poll_sec=15, timeout_min=30, max_per_min=28,
               log=lambda *_: None) -> dict:
-    """Submit ``keywords`` in batches, poll, store the SERP. Updates _STATUS."""
+    """Submit ``keywords`` in batches, poll ``/check`` for completion, then fetch
+    and store the SERP. Updates _STATUS. Readiness comes from /check (not /get),
+    because /get can report TASK_RESULT before the SERP is actually collected."""
     init_db()
     client = Arsenkin(token, base=base, max_per_min=max_per_min)
     db = SessionLocal()
@@ -91,18 +94,19 @@ def run_top10(keywords, se, *, token, base=DEFAULT_BASE, depth=10, snippets=Fals
                 continue
             time.sleep(poll_sec)
             for tid, it in list(inflight.items()):
-                payload = client.get(tid)
-                if is_done(payload):
-                    n = store_rows(db, list(parse_result(payload)), tid)
+                age = time.monotonic() - it["started"]
+                if check_done(client.check(tid)):  # ready per /check -> fetch result
+                    n = store_rows(db, list(parse_result(client.get(tid))), tid)
                     stored += n
                     done += 1
                     del inflight[tid]
                     _STATUS.update(done=done, stored=stored)
                     log(f"[задача {tid}] готово · +{n} строк · {done}/{total}, всего +{stored}")
-                elif (time.monotonic() - it["started"]) / 60.0 >= timeout_min:
+                elif age / 60.0 >= timeout_min:
                     del inflight[tid]
                     skipped += len(it["batch"])
                     log(f"[задача {tid}] >{timeout_min} мин — пропускаю")
+                # else: ещё выполняется — ждём следующего опроса
         log(f"Готово. Строк ТОП: {stored}. Пропущено фраз: {skipped}.")
         return {"stored": stored, "skipped": skipped, "batches": total}
     finally:

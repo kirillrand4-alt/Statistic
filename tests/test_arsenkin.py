@@ -52,7 +52,7 @@ class _Resp:
 
 
 class _FakeHTTP:
-    """set -> task_id; get -> a TASK_RESULT payload (1 query x 1 se x 2 urls)."""
+    """set -> task_id; check -> Done; get -> TASK_RESULT (1 query x 1 se x 2 urls)."""
 
     def __init__(self):
         self.nid = 0
@@ -60,9 +60,10 @@ class _FakeHTTP:
     def post(self, url, json=None, headers=None, timeout=None):
         if url.endswith("/set"):
             self.nid += 1
-            return _Resp({"task_id": self.nid})
+            return _Resp({"code": "SET_TASK_OK", "task_id": self.nid, "cost": 2})
+        if url.endswith("/check"):
+            return _Resp({"status": "Done", "progress": 100})
         if url.endswith("/get"):
-            q = (json or {}).get("task_id")
             return _Resp(_payload(["k1"], [{"ss": 2, "region": 213}],
                                   [[["https://shop.ru/p", "https://rival.ru/x"]]]))
         return _Resp({})
@@ -109,3 +110,42 @@ def test_dump_writes_csv(db, tmp_path):
     A.dump(str(out2), only_domain="shop.ru")
     b2 = out2.read_text(encoding="utf-8-sig")
     assert "shop.ru" in b2 and "rival.ru" not in b2
+
+
+def test_check_done_tolerant():
+    assert ARS.check_done({"status": "Done", "progress": 100})
+    assert ARS.check_done({"progress": "100%"})
+    assert ARS.check_done({"code": "TASK_DONE"})
+    assert not ARS.check_done({"status": "processing", "progress": 40})
+    assert not ARS.check_done({}) and not ARS.check_done(None)
+
+
+def test_parse_result_snippets():
+    p = {"code": "TASK_RESULT", "result": {
+        "request": {"queries": ["k"], "ss": [{"ss": 2, "region": 213}], "depth": 10},
+        "result": {"collect": [[["https://a.ru/"]]],
+                   "snippets": {"https://a.ru/": [{"title": "T", "snippet": "S"}]}}}}
+    r = list(ARS.parse_result(p))[0]
+    assert r["title"] == "T" and r["snippet"] == "S"
+
+
+def test_own_positions_summary(db):
+    from datetime import date
+
+    from app.db.models import SerpResult
+    from app.services.serp import own_positions
+    d = date(2026, 6, 1)
+    db.add_all([
+        SerpResult(keyword="k1", se=2, region=213, position=2, url="https://shop.ru/a",
+                   url_domain="shop.ru", captured_on=d),
+        SerpResult(keyword="k2", se=2, region=213, position=8, url="https://shop.ru/b",
+                   url_domain="shop.ru", captured_on=d),
+        SerpResult(keyword="k1", se=2, region=213, position=1, url="https://rival.ru/x",
+                   url_domain="rival.ru", captured_on=d),
+    ])
+    db.commit()
+    summ = own_positions(db, d.isoformat(), {"shop.ru"})
+    assert len(summ) == 1
+    row = summ[0]
+    assert row["domain"] == "shop.ru" and row["keywords"] == 2
+    assert row["top3"] == 1 and row["top10"] == 2 and row["avg"] == 5.0

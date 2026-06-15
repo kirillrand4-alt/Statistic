@@ -43,8 +43,39 @@ def serp_rows(db, captured_on: str | None = None, se=None, domain: str | None = 
     for r in db.execute(stmt).scalars().all():
         out.append({"keyword": r.keyword, "se": r.se, "se_label": SE_LABELS.get(r.se, r.se),
                     "region": r.region, "position": r.position, "url": r.url,
-                    "url_domain": r.url_domain, "title": r.title,
+                    "url_domain": r.url_domain, "title": r.title, "snippet": r.snippet,
                     "captured_on": r.captured_on.isoformat() if r.captured_on else ""})
+    return out
+
+
+def own_positions(db, captured_on: str | None, own_domains, se=None) -> list[dict]:
+    """For our own domains in a capture: per (domain, ПС) — in how many keywords
+    it ranks, how many in top-3 / top-10, and the average position (best position
+    per keyword)."""
+    cap = captured_on
+    if not cap:
+        d = db.execute(select(func.max(SerpResult.captured_on))).scalar()
+        cap = d.isoformat() if d else None
+    if not cap or not own_domains:
+        return []
+    stmt = select(SerpResult).where(SerpResult.captured_on == cap,
+                                    SerpResult.url_domain.in_(list(own_domains)))
+    if se:
+        stmt = stmt.where(SerpResult.se.in_(list(se)))
+    best: dict = {}  # (domain, se) -> {keyword: best position}
+    for r in db.execute(stmt).scalars():
+        kws = best.setdefault((r.url_domain, r.se), {})
+        if r.keyword not in kws or r.position < kws[r.keyword]:
+            kws[r.keyword] = r.position
+    out = []
+    for (dom, se_t), kws in best.items():
+        poss = list(kws.values())
+        out.append({"domain": dom, "se": se_t, "se_label": SE_LABELS.get(se_t, se_t),
+                    "keywords": len(poss),
+                    "top3": sum(1 for p in poss if p <= 3),
+                    "top10": sum(1 for p in poss if p <= 10),
+                    "avg": round(sum(poss) / len(poss), 1) if poss else 0})
+    out.sort(key=lambda r: r["keywords"], reverse=True)
     return out
 
 
@@ -52,8 +83,9 @@ def build_serp_export(rows: list[dict], dr_label: str, fmt: str = "csv"):
     df = pd.DataFrame(
         [{"Запрос": r["keyword"], "ПС": r["se_label"], "Регион": r["region"],
           "Позиция": r["position"], "URL": r["url"], "Домен": r["url_domain"],
-          "Заголовок": r["title"], "Дата": r["captured_on"]} for r in rows],
-        columns=["Запрос", "ПС", "Регион", "Позиция", "URL", "Домен", "Заголовок", "Дата"],
+          "Заголовок": r["title"], "Сниппет": r.get("snippet"),
+          "Дата": r["captured_on"]} for r in rows],
+        columns=["Запрос", "ПС", "Регион", "Позиция", "URL", "Домен", "Заголовок", "Сниппет", "Дата"],
     )
     safe = "".join(c if (c.isascii() and c.isalnum()) else "_" for c in (dr_label or "all"))[:30]
     name = f"serp_top_{safe.strip('_') or 'all'}_{dr_label or ''}"

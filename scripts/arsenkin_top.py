@@ -31,7 +31,7 @@ from app.providers.arsenkin import (  # noqa: E402
     DEFAULT_REGION,
     SE_LABELS,
     Arsenkin,
-    is_done,
+    check_done,
     parse_result,
 )
 from app.providers.base import DateRange  # noqa: E402
@@ -144,8 +144,9 @@ def run(keywords, se, *, token, base, depth, snippets, batch, parallel, poll_sec
 
 
 def probe(phrase: str, se, *, token, base, depth, snippets, poll_sec=10, timeout_min=10) -> None:
-    """Run ONE phrase end-to-end and print the raw set/get + parsed rows — for
-    verifying the live API (token, fields, result shape)."""
+    """Run ONE phrase end-to-end: print the raw set, then poll /check (printing
+    its raw response each time) and, once it reports done, /get + parsed rows.
+    For verifying the live API (token, fields, readiness, result shape)."""
     import time as _t
 
     client = Arsenkin(token, base=base)
@@ -158,15 +159,15 @@ def probe(phrase: str, se, *, token, base, depth, snippets, poll_sec=10, timeout
     deadline = _t.monotonic() + timeout_min * 60
     while _t.monotonic() < deadline:
         _t.sleep(poll_sec)
-        payload = client.get(tid)
-        if is_done(payload):
-            rows = list(parse_result(payload))
-            print(f"get -> TASK_RESULT, распарсено строк: {len(rows)}")
-            for r in rows[:30]:
-                print(f"  se={r['se']} #{r['position']}  {r['url']}")
+        chk = client.check(tid)
+        print("check ->", str(chk)[:200])
+        if check_done(chk):
+            rows = list(parse_result(client.get(tid)))
+            print(f"get -> готово, распарсено строк: {len(rows)}")
+            for r in rows[:20]:
+                print(f"  se={r['se']} #{r['position']}  {r['url']}  | {(r.get('title') or '')[:60]}")
             return
-        print("  ... ещё не готово:", str(payload)[:160])
-    print("Не дождался результата за лимит времени.")
+    print("Не дождался завершения за лимит времени (увеличь --timeout-min).")
 
 
 def main() -> None:

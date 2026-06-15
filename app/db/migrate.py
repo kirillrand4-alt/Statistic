@@ -14,6 +14,7 @@ from sqlalchemy import inspect
 _ADDED_COLUMNS = [
     ("visit", "extra", "TEXT"),
     ("project", "favorite_goals", "TEXT"),
+    ("serp_result", "snippet", "TEXT"),
 ]
 
 

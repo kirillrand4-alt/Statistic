@@ -100,32 +100,66 @@ class Arsenkin:
         return self._post("tasks", {"action": "delete", "task_id": task_id})
 
 
+def _title_snippet(snippets: dict, url: str):
+    """(title, snippet) for a URL from the result's snippets block, which is
+    either {url: [{title,snippet}]} or {url: {"1": {title,snippet}}}."""
+    sn = (snippets or {}).get(url)
+    item = None
+    if isinstance(sn, list) and sn:
+        item = sn[0]
+    elif isinstance(sn, dict):
+        item = next(iter(sn.values()), None)
+    if isinstance(item, dict):
+        return item.get("title"), item.get("snippet")
+    return None, None
+
+
 def parse_result(payload: dict):
-    """Yield {query, se, region, position, url, title} rows from a ``get``
-    TASK_RESULT payload. ``collect[query_index][se_index]`` is the ranked URL
-    list; the se order matches ``request.ss``."""
+    """Yield {query, se, region, position, url, title, snippet} rows from a
+    ``get`` TASK_RESULT payload. ``collect[query_index][se_index]`` is the ranked
+    URL list; the se order matches ``request.ss``."""
     res = (payload or {}).get("result") or {}
     req = res.get("request") or {}
     inner = res.get("result") or {}
     queries = req.get("queries") or []
     ss = req.get("ss") or []  # [{"ss": type, "region": id}]
+    snippets = inner.get("snippets") or {}
     for qi, per_se in enumerate(inner.get("collect") or []):
         query = queries[qi] if qi < len(queries) else None
         for si, urls in enumerate(per_se or []):
             se = ss[si] if si < len(ss) else {}
-            snippets = inner.get("snippets") or {}
             for pos, url in enumerate(urls or [], 1):
-                title = None
-                sn = snippets.get(url)
-                if isinstance(sn, list) and sn:
-                    title = sn[0].get("title")
-                elif isinstance(sn, dict):
-                    first = next(iter(sn.values()), None)
-                    if isinstance(first, dict):
-                        title = first.get("title")
+                title, snippet = _title_snippet(snippets, url)
                 yield {"query": query, "se": se.get("ss"), "region": se.get("region"),
-                       "position": pos, "url": url, "title": title}
+                       "position": pos, "url": url, "title": title, "snippet": snippet}
 
 
 def is_done(payload: dict) -> bool:
+    """True if a ``get`` payload carries the finished result."""
     return str((payload or {}).get("code")) == "TASK_RESULT"
+
+
+# check/get can report TASK_RESULT before the SERP is actually collected, so
+# readiness is taken from /check: a "done" status or 100% progress.
+_DONE_CODES = {"TASK_DONE", "DONE", "TASK_COMPLETE", "COMPLETE", "TASK_OK", "READY"}
+_DONE_WORDS = {"done", "ready", "complete", "completed", "success", "finished", "готов", "выполнен"}
+
+
+def check_done(payload: dict) -> bool:
+    """Tolerant 'is the task finished?' read of a /check response (its exact
+    field names vary; matches a done-ish status, code or 100% progress)."""
+    if not payload:
+        return False
+    code = str(payload.get("code", "")).upper()
+    if code in _DONE_CODES:
+        return True
+    status = str(payload.get("status", "")).strip().lower()
+    if any(w in status for w in _DONE_WORDS):
+        return True
+    prog = payload.get("progress", payload.get("percent"))
+    try:
+        if prog is not None and float(str(prog).replace("%", "").strip()) >= 100:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False

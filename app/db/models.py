@@ -351,6 +351,7 @@ class SerpResult(Base):
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
     url_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
     captured_on: Mapped[date_type] = mapped_column(Date, index=True)
     task_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
 

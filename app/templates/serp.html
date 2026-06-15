@@ -14,36 +14,55 @@
   сохранено {{ status.stored|numfmt }} строк. <small>{{ status.msg }}</small> — обновите страницу.</p>
   {% elif status.msg %}<p><small>Последний прогон: {{ status.msg }}.</small></p>{% endif %}
 
-  <form method="post" action="{{ base_path }}/ui/serp/run" class="grid">
-    <label>Домен
-      <select name="domain">
-        <option value="">— все сайты —</option>
-        {% for d in domains %}<option value="{{ d.domain }}">{{ d.domain }}</option>{% endfor %}
-      </select>
+  <form method="post" action="{{ base_path }}/ui/serp/run" enctype="multipart/form-data">
+    <div class="grid">
+      <label>Домен (если берём фразы из статистики)
+        <select name="domain">
+          <option value="">— все сайты —</option>
+          {% for d in domains %}<option value="{{ d.domain }}">{{ d.domain }}</option>{% endfor %}
+        </select>
+      </label>
+      <fieldset style="margin:0;"><legend><small>Поисковики</small></legend>
+        <label style="display:inline-flex;gap:.3rem;margin-right:.8rem;"><input type="checkbox" name="se" value="2" checked> Яндекс</label>
+        <label style="display:inline-flex;gap:.3rem;margin-right:.8rem;"><input type="checkbox" name="se" value="11" checked> Google</label>
+        <label style="display:inline-flex;gap:.3rem;margin-right:.8rem;"><input type="checkbox" name="se" value="3"> Яндекс моб</label>
+        <label style="display:inline-flex;gap:.3rem;"><input type="checkbox" name="se" value="12"> Google моб</label>
+      </fieldset>
+    </div>
+    <label>Свои фразы (по одной в строке или через запятую) — если заполнить, берутся они, а не статистика
+      <textarea name="phrases" rows="4" placeholder="ремонт компрессора&#10;винтовой компрессор цена"></textarea>
     </label>
-    <fieldset style="margin:0;"><legend><small>Поисковики</small></legend>
-      <label style="display:inline-flex;gap:.3rem;margin-right:.8rem;"><input type="checkbox" name="se" value="2" checked> Яндекс</label>
-      <label style="display:inline-flex;gap:.3rem;margin-right:.8rem;"><input type="checkbox" name="se" value="11" checked> Google</label>
-      <label style="display:inline-flex;gap:.3rem;margin-right:.8rem;"><input type="checkbox" name="se" value="3"> Яндекс моб</label>
-      <label style="display:inline-flex;gap:.3rem;"><input type="checkbox" name="se" value="12"> Google моб</label>
-    </fieldset>
-    <label>Мин. кликов у фразы <input type="number" name="min_clicks" value="1" min="0" style="max-width:7rem"></label>
-    <label>Макс. фраз <input type="number" name="max_keywords" value="500" min="1" style="max-width:8rem"></label>
-    <label>Период сбора фраз, дней <input type="number" name="period_days" value="90" min="1" style="max-width:8rem"></label>
-    <label>Глубина
-      <select name="depth">{% for d in [10,20,30,50,100] %}<option value="{{ d }}">{{ d }}</option>{% endfor %}</select>
-    </label>
-    <label><input type="checkbox" name="snippets" value="1"> Сниппеты</label>
-    <label>&nbsp;<button type="submit" {% if status.running or not has_token %}disabled{% endif %}>Запустить</button></label>
+    <div class="grid">
+      <label>…или файл с фразами <input type="file" name="file" accept=".txt,.csv"></label>
+      <label>Мин. кликов (для статистики) <input type="number" name="min_clicks" value="1" min="0"></label>
+      <label>Период сбора, дней <input type="number" name="period_days" value="90" min="1"></label>
+    </div>
+    <div class="grid">
+      <label>Макс. фраз <input type="number" name="max_keywords" value="500" min="1"></label>
+      <label>Глубина <select name="depth">{% for d in [10,20,30,50,100] %}<option value="{{ d }}">{{ d }}</option>{% endfor %}</select></label>
+      <label><input type="checkbox" name="snippets" value="1" checked> Снимать сниппеты</label>
+      <label>&nbsp;<button type="submit" {% if status.running or not has_token %}disabled{% endif %}>Запустить</button></label>
+    </div>
   </form>
-  <small>Берутся ключевые слова из собранной статистики (по домену или всем сайтам) с указанным
-  мин. числом кликов, до «макс. фраз». Стоимость arsenkin ≈ фраз × число ПС лимитов. Лимиты API
-  (≤5 задач, ≤30 запросов/мин) соблюдаются автоматически.</small>
+  <small>Стоимость arsenkin ≈ фраз × число ПС лимитов. Лимиты API (≤5 задач, ≤30 запросов/мин)
+  соблюдаются автоматически; готовность задачи берётся из <code>/check</code>.</small>
 </article>
 
+{% if own_summary %}
+<article>
+  <header>Свои позиции в выдаче (срез {{ cap }})</header>
+  <table class="sortable">
+    <thead><tr><th>Домен</th><th>ПС</th><th>Фраз в выдаче</th><th>В топ-3</th><th>В топ-10</th><th>Ср. позиция</th></tr></thead>
+    <tbody>{% for r in own_summary %}<tr><td>{{ r.domain }}</td><td><small>{{ r.se_label }}</small></td>
+      <td>{{ r.keywords|numfmt }}</td><td>{{ r.top3|numfmt }}</td><td>{{ r.top10|numfmt }}</td><td>{{ r.avg }}</td></tr>{% endfor %}</tbody>
+  </table>
+  <small>Позиция — лучшая по каждой фразе среди твоих доменов. Подробно по фразам — фильтром «Свой домен» ниже.</small>
+</article>
+{% endif %}
+
 {% if not captures %}
-<article><p>Результатов пока нет — запусти проверку выше. Когда задачи отработают, тут появится
-таблица и кнопки выгрузки.</p></article>
+<article><p>Результатов пока нет — запусти проверку выше. Когда задачи отработают, тут появятся
+таблица, сводка по своим позициям и кнопки выгрузки.</p></article>
 {% else %}
 <form method="get" action="{{ base_path }}/serp" class="grid">
   <label>Срез (дата)
@@ -69,7 +88,7 @@
 
 {% set qs = 'captured_on=' ~ (cap or '') ~ '&domain=' ~ domain ~ '&q=' ~ q %}
 {% for s in se_sel %}{% set qs = qs ~ '&se=' ~ s %}{% endfor %}
-<p>Срез <strong>{{ cap }}</strong>. Выгрузить (с учётом фильтров):
+<p>Срез <strong>{{ cap }}</strong>. Выгрузить (с фильтрами, со сниппетами):
   <a href="{{ base_path }}/serp/export?{{ qs }}&format=xlsx" role="button" class="outline">Excel</a>
   <a href="{{ base_path }}/serp/export?{{ qs }}&format=csv" role="button" class="outline secondary">CSV</a>
   <small>Свои домены — <mark>подсвечены</mark>.</small>
@@ -79,14 +98,15 @@
   <header>ТОП по фразам (до {{ shown_limit|numfmt }} строк) — полный список в выгрузке</header>
   <figure>
   <table class="sortable">
-    <thead><tr><th>Запрос</th><th>ПС</th><th>Поз.</th><th>URL</th><th>Домен</th></tr></thead>
+    <thead><tr><th>Запрос</th><th>ПС</th><th>Поз.</th><th>URL</th><th>Домен</th><th>Заголовок</th></tr></thead>
     <tbody>
     {% for r in rows %}
       <tr{% if r.url_domain in own_domains %} style="background:#fff7cc"{% endif %}>
         <td>{{ r.keyword }}</td><td><small>{{ r.se_label }}</small></td><td>{{ r.position }}</td>
-        <td><small>{{ r.url }}</small></td><td><small>{{ r.url_domain }}</small></td></tr>
+        <td><small>{{ r.url }}</small></td><td><small>{{ r.url_domain }}</small></td>
+        <td><small title="{{ r.snippet or '' }}">{{ (r.title or '')[:80] }}</small></td></tr>
     {% else %}
-      <tr><td colspan="5"><small>Нет данных по фильтру.</small></td></tr>
+      <tr><td colspan="6"><small>Нет данных по фильтру.</small></td></tr>
     {% endfor %}
     </tbody>
   </table>
