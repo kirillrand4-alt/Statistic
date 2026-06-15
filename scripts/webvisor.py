@@ -115,18 +115,39 @@ def cmd_probe(sessions, tmpl) -> None:
     uh = _load_hashes().get(str(s.get("visit_id")), "")
     url = _replay_url(s.get("counter_id"), s.get("visit_id"), s.get("date"), uh, tmpl)
     print(f"Probe: открываю {url}")
+    js = ("() => { const out=[]; "
+          "for (const e of document.querySelectorAll("
+          "'button,[role=button],[class*=speed],[class*=Speed],[class*=rate],[class*=Rate],"
+          "[class*=playback],[class*=Playback],[class*=control],[class*=Control],[data-speed]')) "
+          "{ out.push({tag:e.tagName, t:(e.innerText||'').trim().slice(0,24), "
+          "title:e.getAttribute('title')||'', aria:e.getAttribute('aria-label')||'', "
+          "cls:(''+(e.className||'')).slice(0,70)}); } return out.slice(0,80); }")
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=True, viewport=VIEWPORT)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto(url, wait_until="networkidle", timeout=60000)
-        page.wait_for_timeout(4000)
-        shot, html = os.path.join(DEBUG_DIR, "probe.png"), os.path.join(DEBUG_DIR, "probe.html")
+        page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        page.wait_for_timeout(6000)
+        shot = os.path.join(DEBUG_DIR, "probe.png")
         page.screenshot(path=shot, full_page=False)
-        with open(html, "w", encoding="utf-8") as f:
+        with open(os.path.join(DEBUG_DIR, "probe.html"), "w", encoding="utf-8") as f:
             f.write(page.content())
-        print(f"  итоговый URL: {page.url}\n  скриншот: {shot}\n  html: {html}")
+        print(f"  URL: {page.url}\n  скриншот: {shot}")
         if "passport" in page.url or "auth" in page.url:
-            print("  ⚠ похоже, не залогинен — сначала пройди --login.")
+            print("  ⚠ не залогинен — сначала пройди --login.")
+        for fr in page.frames:
+            try:
+                ctrls = fr.evaluate(js)
+            except Exception:
+                continue
+            if not ctrls:
+                continue
+            print(f"  -- frame {fr.url[:55]} : {len(ctrls)} контролов")
+            for c in ctrls:
+                blob = (c["t"] + c["title"] + c["aria"] + c["cls"]).lower()
+                star = "  ⭐" if any(k in blob for k in
+                                    ("speed", "rate", "playback", "скорост", "x2", "x4", "x8")) else "    "
+                print(f"{star}<{c['tag']}> t='{c['t']}' title='{c['title']}' "
+                      f"aria='{c['aria']}' cls='{c['cls']}'")
         ctx.close()
 
 
