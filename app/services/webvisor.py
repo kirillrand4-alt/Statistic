@@ -40,6 +40,18 @@ def resolve_visit_site(db, site_id: int | None = None, domain: str | None = None
     return max(ids, key=lambda i: (counts.get(i, 0), -i))
 
 
+def sites_with_visits(db) -> list[dict]:
+    """Domains/sites that actually have synced visits (for CLI hints), busiest first."""
+    counts = dict(db.execute(
+        select(Visit.site_id, func.count()).group_by(Visit.site_id)
+    ).all())
+    out = [{"site_id": sid, "domain": domain_of(uri), "visits": int(counts[sid])}
+           for sid, uri in db.execute(select(Site.id, Site.property_uri)).all()
+           if counts.get(sid)]
+    out.sort(key=lambda r: r["visits"], reverse=True)
+    return out
+
+
 def _where(site_id, dr: DateRange, source, min_page_views):
     w = [Visit.site_id == site_id, Visit.date >= dr.start, Visit.date <= dr.end]
     if source:

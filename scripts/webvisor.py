@@ -53,7 +53,13 @@ def main() -> None:
     try:
         sid = W.resolve_visit_site(db, site_id=a.site, domain=a.domain)
         if not sid:
-            print("Не нашёл сайт с визитами. Укажи --site или --domain.")
+            avail = W.sites_with_visits(db)
+            if avail:
+                print("Не нашёл сайт по запросу. Доступные домены с визитами:")
+                for x in avail:
+                    print(f"  --domain {x['domain']}   (site {x['site_id']}, визитов {x['visits']})")
+            else:
+                print("В базе нет визитов Метрики — сначала закачай их (scripts/metrika_logs.py).")
             return
         d2 = date.fromisoformat(a.d2) if a.d2 else date.today()
         d1 = date.fromisoformat(a.d1) if a.d1 else d2 - timedelta(days=13)
