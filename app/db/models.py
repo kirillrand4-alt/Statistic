@@ -276,7 +276,6 @@ class Visit(Base):
     page_views: Mapped[int] = mapped_column(Integer, default=0)
     duration: Mapped[int] = mapped_column(Integer, default=0)
     bounce: Mapped[int] = mapped_column(Integer, default=0)
-    is_robot: Mapped[int | None] = mapped_column(Integer, nullable=True)  # ym:s:isRobot (0/1)
     device: Mapped[str | None] = mapped_column(String(32), nullable=True)
     os: Mapped[str | None] = mapped_column(String(64), nullable=True)
     browser: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -13,7 +13,6 @@ from sqlalchemy import inspect
 # (table, column, column DDL) — ADD COLUMN is valid on both SQLite and Postgres.
 _ADDED_COLUMNS = [
     ("visit", "extra", "TEXT"),
-    ("visit", "is_robot", "INTEGER"),
     ("project", "favorite_goals", "TEXT"),
     ("serp_result", "snippet", "TEXT"),
 ]
