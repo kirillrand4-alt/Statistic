@@ -42,10 +42,13 @@ DEBUG_DIR = os.path.join(DATA_DIR, "debug")
 
 # The Webvisor list page for a counter (used by --login / --probe fallback).
 WEBVISOR_BASE = os.environ.get("WEBVISOR_BASE", "https://metrika.yandex.ru/webvisor/{counter}")
-# Deep link to a single session replay. UNVERIFIED — confirm via --probe/recon and
-# override with --replay-url or env WEBVISOR_REPLAY_URL. {counter} and {visit_id}
-# are substituted.
-REPLAY_URL = os.environ.get("WEBVISOR_REPLAY_URL", "")
+# Deep link to a single session replay (discovered via recon). {visit_id}, {date}
+# and {counter} come from our DB. user_id_hash is intentionally omitted — the page
+# resolves the session from visit_id; override with --replay-url / env if needed.
+REPLAY_URL = os.environ.get(
+    "WEBVISOR_REPLAY_URL",
+    "https://metrika.yandex.ru/inpage/visor-proto?visit_id={visit_id}&date={date}&offset=0&id={counter}",
+)
 PLAY_SELECTOR = os.environ.get("WEBVISOR_PLAY_SELECTOR", "")  # optional; many players autoplay
 VIEWPORT = {"width": 1366, "height": 768}
 
@@ -78,14 +81,15 @@ def cmd_login() -> None:
     print(f"Профиль сохранён в {PROFILE_DIR}. Проверь вход: --probe")
 
 
-def _replay_url(counter, visit_id, tmpl) -> str:
-    return (tmpl or WEBVISOR_BASE).format(counter=counter or "", visit_id=visit_id or "")
+def _replay_url(counter, visit_id, vdate, tmpl) -> str:
+    t = tmpl or REPLAY_URL or WEBVISOR_BASE
+    return t.format(counter=counter or "", visit_id=visit_id or "", date=vdate or "")
 
 
 def cmd_probe(sessions, tmpl) -> None:
     os.makedirs(DEBUG_DIR, exist_ok=True)
-    s = sessions[0] if sessions else {"counter_id": "", "visit_id": ""}
-    url = _replay_url(s.get("counter_id"), s.get("visit_id"), tmpl)
+    s = sessions[0] if sessions else {"counter_id": "", "visit_id": "", "date": ""}
+    url = _replay_url(s.get("counter_id"), s.get("visit_id"), s.get("date"), tmpl)
     print(f"Probe: открываю {url}")
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=True, viewport=VIEWPORT)
@@ -128,7 +132,7 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit) -> None:
             record_video_dir=OUT_DIR, record_video_size=VIEWPORT)
         for i, s in enumerate(todo, 1):
             vid = s["visit_id"]
-            url = _replay_url(s.get("counter_id"), vid, tmpl)
+            url = _replay_url(s.get("counter_id"), vid, s.get("date"), tmpl)
             secs = math.ceil((s["duration"] or 0) / speed) + buffer_s
             page = ctx.new_page()
             video = page.video
