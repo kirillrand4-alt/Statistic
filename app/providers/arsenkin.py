@@ -139,22 +139,20 @@ def is_done(payload: dict) -> bool:
     return str((payload or {}).get("code")) == "TASK_RESULT"
 
 
-# check/get can report TASK_RESULT before the SERP is actually collected, so
-# readiness is taken from /check: a "done" status or 100% progress.
-_DONE_CODES = {"TASK_DONE", "DONE", "TASK_COMPLETE", "COMPLETE", "TASK_OK", "READY"}
-_DONE_WORDS = {"done", "ready", "complete", "completed", "success", "finished", "готов", "выполнен"}
+# /check reports {"code":"TASK_STATUS","status":"process","progress":N} while
+# running. /get can return TASK_RESULT before the SERP is actually collected, so
+# readiness is taken from /check: 100% progress, a result/done code, or any
+# non-running status.
+_DONE_CODES = {"TASK_RESULT", "TASK_DONE", "DONE", "TASK_COMPLETE", "COMPLETE", "TASK_OK", "READY"}
+_RUNNING = {"process", "processing", "in_progress", "queue", "queued", "wait", "waiting",
+            "pending", "new", "created", "start", "started", "running", "work", "working"}
 
 
 def check_done(payload: dict) -> bool:
-    """Tolerant 'is the task finished?' read of a /check response (its exact
-    field names vary; matches a done-ish status, code or 100% progress)."""
+    """Tolerant 'is the task finished?' read of a /check response."""
     if not payload:
         return False
-    code = str(payload.get("code", "")).upper()
-    if code in _DONE_CODES:
-        return True
-    status = str(payload.get("status", "")).strip().lower()
-    if any(w in status for w in _DONE_WORDS):
+    if str(payload.get("code", "")).upper() in _DONE_CODES:
         return True
     prog = payload.get("progress", payload.get("percent"))
     try:
@@ -162,4 +160,5 @@ def check_done(payload: dict) -> bool:
             return True
     except (TypeError, ValueError):
         pass
-    return False
+    status = str(payload.get("status", "")).strip().lower()
+    return bool(status) and status not in _RUNNING  # any non-running status = done

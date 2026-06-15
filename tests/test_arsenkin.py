@@ -116,6 +116,9 @@ def test_check_done_tolerant():
     assert ARS.check_done({"status": "Done", "progress": 100})
     assert ARS.check_done({"progress": "100%"})
     assert ARS.check_done({"code": "TASK_DONE"})
+    # real arsenkin /check shape: running while status=process & progress<100
+    assert not ARS.check_done({"code": "TASK_STATUS", "status": "process", "progress": 5})
+    assert ARS.check_done({"code": "TASK_STATUS", "status": "process", "progress": 100})
     assert not ARS.check_done({"status": "processing", "progress": 40})
     assert not ARS.check_done({}) and not ARS.check_done(None)
 
