@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Вебвизор — записи{% endblock %}
+{% block content %}
+<hgroup>
+  <h2>🎥 Вебвизор — записи сессий</h2>
+  <p>
+    {% if total %}Роликов: <strong>{{ total }}</strong>{% if shown < total %} (показаны последние {{ shown }}){% endif %}.{% else %}Записей пока нет.{% endif %}
+  </p>
+</hgroup>
+
+{% if not videos %}
+  <article>
+    Записи появятся здесь после прогона рекордера:
+    <code>scripts/webvisor.py --domain … --record</code>.
+  </article>
+{% else %}
+<div class="wv-grid">
+  {% for v in videos %}
+  <article class="wv-card">
+    <header>
+      <strong>{{ v.date or "—" }}</strong>
+      {% if v.duration %} · {{ v.duration // 60 }}:{{ "%02d"|format(v.duration % 60) }}{% endif %}
+      {% if v.source %} · {{ v.source }}{% endif %}
+      {% if v.device %} · {{ v.device }}{% endif %}
+      · {{ v.size_mb }} МБ
+    </header>
+    <video controls preload="none" width="100%"
+           src="{{ base_path }}/webvisor/video/{{ v.visit_id }}.webm"></video>
+    {% if v.start_url %}<small><a href="{{ v.start_url }}" target="_blank" rel="noopener">{{ v.start_url }}</a></small>{% endif %}
+    <small class="wv-id">visit {{ v.visit_id }}</small>
+  </article>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .wv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
+  .wv-card video { background: #000; border-radius: 6px; aspect-ratio: 16 / 10; }
+  .wv-card .wv-id, .wv-card small a { color: var(--pico-muted-color); }
+  .wv-card small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+{% endblock %}

@@ -1,12 +1,15 @@
 """Server-rendered HTML pages (Jinja2 + Chart.js)."""
 from __future__ import annotations
 
+import os
+import re
 import secrets
 from datetime import date
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -24,6 +27,11 @@ from app.web import templates
 router = APIRouter(tags=["pages"], include_in_schema=False)
 
 BP = get_settings().base_path  # "" or e.g. "/stat" — for redirect targets
+
+# Recorded Webvisor replays (written by scripts/webvisor.py --record).
+WEBVISOR_VIDEOS = Path(os.environ.get(
+    "WEBVISOR_OUT", str(Path(__file__).resolve().parents[2] / "data" / "webvisor" / "videos")))
+_WEBM_RE = re.compile(r"^[A-Za-z0-9_-]+\.webm$")  # safe filename, blocks path traversal
 
 
 def _public_redirect_uri(request: Request) -> str:
@@ -1269,6 +1277,47 @@ def errors_page(request: Request, site_id: str | None = None, start: str | None 
     else:  # overview: a chart per domain that has any 404, last bucket vs previous
         ctx["overview"] = not_found.not_found_overview(db, dr, markers, gran=gran)
     return templates.TemplateResponse(request, "errors.html", ctx)
+
+
+@router.get("/webvisor")
+def webvisor_page(request: Request, limit: int = 200, db: Session = Depends(get_db)):
+    """List recorded Webvisor replays (newest first) with visit context; play inline."""
+    videos, total = [], 0
+    if WEBVISOR_VIDEOS.is_dir():
+        files = sorted(WEBVISOR_VIDEOS.glob("*.webm"), key=lambda p: p.stat().st_mtime, reverse=True)
+        total = len(files)
+        files = files[:max(1, limit)]
+        info = {}
+        ids = [p.stem for p in files]
+        if ids:
+            from app.db.models import Visit
+            for vid, d, dur, src, url, dev in db.execute(
+                select(Visit.visit_id, Visit.date, Visit.duration, Visit.traffic_source,
+                       Visit.start_url, Visit.device).where(Visit.visit_id.in_(ids))).all():
+                info[str(vid)] = (d, dur, src, url, dev)
+        for p in files:
+            d, dur, src, url, dev = info.get(p.stem, (None, None, None, None, None))
+            videos.append({
+                "visit_id": p.stem,
+                "size_mb": round(p.stat().st_size / 1048576, 2),
+                "date": d.isoformat() if d else None,
+                "duration": int(dur) if dur else None,
+                "source": src, "start_url": url, "device": dev,
+            })
+    return templates.TemplateResponse(
+        request, "webvisor.html",
+        {"request": request, "videos": videos, "total": total, "shown": len(videos)})
+
+
+@router.get("/webvisor/video/{name}")
+def webvisor_video(name: str):
+    """Serve a recorded replay file by name (range requests supported for seeking)."""
+    if not _WEBM_RE.match(name):
+        raise HTTPException(404, "not found")
+    path = WEBVISOR_VIDEOS / name
+    if not path.is_file():
+        raise HTTPException(404, "not found")
+    return FileResponse(str(path), media_type="video/webm")
 
 
 @router.get("/metrika")
