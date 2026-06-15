@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable
 from urllib.parse import urlsplit
 
 from sqlalchemy import func, select
 
 from app.db.models import Visit
 from app.providers.base import DateRange
+from app.utils import as_id_list as _ids
 
 _INT = re.compile(r"\d+")
 _API = "https://api-metrika.yandex.net"
@@ -51,12 +51,6 @@ def page_key(url: str | None) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host + (p.path.rstrip("/") or "/")
-
-
-def _ids(site_ids):
-    if isinstance(site_ids, Iterable) and not isinstance(site_ids, (str, bytes)):
-        return list(site_ids)
-    return [site_ids]
 
 
 def goal_stats(db, site_ids, dr: DateRange, url_for_key: dict[str, str],

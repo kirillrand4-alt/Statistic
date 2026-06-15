@@ -8,15 +8,12 @@ desktop/mobile aren't double-counted across properties.
 """
 from __future__ import annotations
 
-import io
-
 import pandas as pd
 
 from app.providers.base import DateRange
+from app.services.exporting import to_download
 from app.services.loaders import agg_metrics, load_device_metrics_df
 
-CSV_MEDIA = "text/csv"
-XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 DEVICES = ("desktop", "mobile")
 
 
@@ -109,12 +106,4 @@ def build_export(rows: list[dict], devices, label: str, fmt: str = "csv"):
     df = pd.DataFrame(data)
     safe = "".join(c if (c.isascii() and c.isalnum()) else "_" for c in (label or "all"))[:30]
     name = f"pages_devices_{safe.strip('_') or 'all'}"
-    buf = io.BytesIO()
-    if fmt == "csv":
-        buf.write(df.to_csv(index=False).encode("utf-8-sig"))
-        buf.seek(0)
-        return f"{name}.csv", buf, CSV_MEDIA
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        df.to_excel(w, sheet_name="Страницы устройства", index=False)
-    buf.seek(0)
-    return f"{name}.xlsx", buf, XLSX_MEDIA
+    return to_download(df, name, fmt, sheet="Страницы устройства")

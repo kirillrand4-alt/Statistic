@@ -1,7 +1,6 @@
 """Pull, store, query and export the Miralinks donor catalog (``donor_site``)."""
 from __future__ import annotations
 
-import io
 import threading
 import time
 from datetime import date
@@ -12,9 +11,7 @@ from sqlalchemy import func, select
 from app.db.base import SessionLocal, init_db
 from app.db.models import DonorSite
 from app.providers.miralinks import DEFAULT_URL, Miralinks, parse_rows, total_records
-
-CSV_MEDIA = "text/csv"
-XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+from app.services.exporting import to_download
 
 # Columns that come straight from a mapped row (everything except identity keys).
 _UPSERT_COLS = (
@@ -214,12 +211,4 @@ def build_export(rows: list[DonorSite], fmt: str = "csv"):
         data.append(rec)
     df = pd.DataFrame(data, columns=[c[0] for c in _EXPORT_COLS])
     name = f"miralinks_donors_{date.today().isoformat()}"
-    buf = io.BytesIO()
-    if fmt == "csv":
-        buf.write(df.to_csv(index=False).encode("utf-8-sig"))
-        buf.seek(0)
-        return f"{name}.csv", buf, CSV_MEDIA
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        df.to_excel(w, sheet_name="Доноры", index=False)
-    buf.seek(0)
-    return f"{name}.xlsx", buf, XLSX_MEDIA
+    return to_download(df, name, fmt, sheet="Доноры")

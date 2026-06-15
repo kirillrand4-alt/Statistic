@@ -6,6 +6,7 @@ import io
 import pandas as pd
 
 from app.providers.base import DateRange
+from app.services.exporting import CSV_MEDIA, XLSX_MEDIA  # re-exported for importers
 from app.services.loaders import (
     agg_metrics,
     load_page_metrics_df,
@@ -13,9 +14,6 @@ from app.services.loaders import (
     load_site_totals_df,
     project_page_id_map,
 )
-
-CSV_MEDIA = "text/csv"
-XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 _RENAME = {
     "url": "URL",

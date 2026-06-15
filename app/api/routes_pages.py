@@ -724,17 +724,13 @@ def _pages_filter(db, site_ids):
     (possibly empty) when a list is set — empty means none of the URLs matched
     our data for this source."""
     from app.credentials import get_cred
-    from app.db.models import Page
+    from app.services.loaders import resolve_page_ids
 
     text = get_cred("pages_url_filter") or ""
     urls = _parse_phrases(text)
     if not urls:
         return "", [], None
-    norms = {normalize_url(u) for u in urls if u}
-    rows = db.execute(
-        select(Page.id).where(Page.site_id.in_(site_ids), Page.normalized_url.in_(list(norms)))
-    ).all() if site_ids else []
-    return text, urls, [pid for (pid,) in rows]
+    return text, urls, resolve_page_ids(db, site_ids, urls)
 
 
 @router.post("/ui/pages/urls")

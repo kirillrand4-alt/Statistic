@@ -13,8 +13,6 @@ noise (``exclude_home``).
 """
 from __future__ import annotations
 
-import io
-from collections.abc import Iterable
 from urllib.parse import urlparse
 
 import pandas as pd
@@ -23,15 +21,8 @@ from sqlalchemy import func, select
 from app.db.models import Page, Query, QueryMetricDaily, SerpResult
 from app.providers.arsenkin import SE_LABELS
 from app.providers.base import DateRange
-
-CSV_MEDIA = "text/csv"
-XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
-
-def _ids(site_ids):
-    if isinstance(site_ids, Iterable) and not isinstance(site_ids, (str, bytes)):
-        return list(site_ids)
-    return [site_ids]
+from app.services.exporting import to_download
+from app.utils import as_id_list as _ids
 
 
 def is_home(url: str | None) -> bool:
@@ -180,12 +171,4 @@ def build_export(rows: list[dict], label: str, fmt: str = "csv"):
                                      "Нестабильность"])
     safe = "".join(c if (c.isascii() and c.isalnum()) else "_" for c in (label or "all"))[:30]
     name = f"cannibalization_{safe.strip('_') or 'all'}"
-    buf = io.BytesIO()
-    if fmt == "csv":
-        buf.write(df.to_csv(index=False).encode("utf-8-sig"))
-        buf.seek(0)
-        return f"{name}.csv", buf, CSV_MEDIA
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        df.to_excel(w, sheet_name="Каннибализация", index=False)
-    buf.seek(0)
-    return f"{name}.xlsx", buf, XLSX_MEDIA
+    return to_download(df, name, fmt, sheet="Каннибализация")

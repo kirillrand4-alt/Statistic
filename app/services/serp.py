@@ -1,16 +1,12 @@
 """Read/export the stored ARSENKIN ТОП-10 results (``serp_result``)."""
 from __future__ import annotations
 
-import io
-
 import pandas as pd
 from sqlalchemy import func, select
 
 from app.db.models import SerpResult
 from app.providers.arsenkin import SE_LABELS
-
-CSV_MEDIA = "text/csv"
-XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+from app.services.exporting import to_download
 
 
 def captures(db) -> list[str]:
@@ -97,12 +93,4 @@ def build_serp_export(rows: list[dict], dr_label: str, fmt: str = "csv"):
     )
     safe = "".join(c if (c.isascii() and c.isalnum()) else "_" for c in (dr_label or "all"))[:30]
     name = f"serp_top_{safe.strip('_') or 'all'}_{dr_label or ''}"
-    buf = io.BytesIO()
-    if fmt == "csv":
-        buf.write(df.to_csv(index=False).encode("utf-8-sig"))
-        buf.seek(0)
-        return f"{name}.csv", buf, CSV_MEDIA
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        df.to_excel(w, sheet_name="ТОП-10", index=False)
-    buf.seek(0)
-    return f"{name}.xlsx", buf, XLSX_MEDIA
+    return to_download(df, name, fmt, sheet="ТОП-10")

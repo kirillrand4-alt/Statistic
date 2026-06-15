@@ -2,7 +2,15 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from urllib.parse import urlsplit, urlunsplit
+
+
+def as_id_list(site_ids) -> list:
+    """A single id or an iterable of ids -> a flat list (str/bytes treated as one)."""
+    if isinstance(site_ids, Iterable) and not isinstance(site_ids, (str, bytes)):
+        return list(site_ids)
+    return [site_ids]
 
 
 def normalize_url(url: str) -> str:

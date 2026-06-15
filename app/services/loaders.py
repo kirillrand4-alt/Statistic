@@ -20,6 +20,7 @@ from app.db.models import (
     SiteTotalDaily,
 )
 from app.providers.base import DateRange
+from app.utils import as_id_list, normalize_url
 
 PAGE_COLS = ["url", "date", "clicks", "impressions", "position"]
 QUERY_COLS = ["url", "query", "date", "clicks", "impressions", "position"]
@@ -29,9 +30,28 @@ AGG_OUT = ["clicks", "impressions", "ctr", "position"]
 
 def _idlist(site_id) -> list[int]:
     """Accept a single site_id or a list of them (for merging same-domain properties)."""
-    if isinstance(site_id, (list, tuple, set)):
-        return list(site_id)
-    return [site_id]
+    return as_id_list(site_id)
+
+
+def resolve_page_ids(db, site_ids, urls) -> list[int]:
+    """page_ids for the given URLs within ``site_ids``, matched by normalized URL
+    regardless of http/https, www or trailing slash."""
+    norms: set[str] = set()
+    for u in urls or []:
+        if not u:
+            continue
+        n = normalize_url(u)
+        norms.add(n)
+        if n.startswith("https://"):       # match regardless of stored scheme
+            norms.add("http://" + n[len("https://"):])
+        elif n.startswith("http://"):
+            norms.add("https://" + n[len("http://"):])
+    ids = as_id_list(site_ids)
+    if not ids or not norms:
+        return []
+    return [pid for (pid,) in db.execute(
+        select(Page.id).where(Page.site_id.in_(ids), Page.normalized_url.in_(list(norms)))
+    ).all()]
 
 
 def _collapse_overlap(df: pd.DataFrame, keys: list[str]) -> pd.DataFrame:

@@ -7,15 +7,13 @@ period A and period B per engine, with delta / % change. Powers the
 """
 from __future__ import annotations
 
-import io
-
 import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Site, Source
 from app.providers.base import DateRange
-from app.services.export import CSV_MEDIA, XLSX_MEDIA
+from app.services.exporting import to_download
 from app.services.loaders import (
     agg_metrics,
     load_device_metrics_df,
@@ -201,13 +199,4 @@ def build_compare_export(result: dict, project, fmt: str = "xlsx"):
     dev = result.get("device", "all")
     suffix = f"_{dev}" if dev != "all" else ""
     base = f"compare2_{safe or 'project'}_{metric}{suffix}_{a['start']}_{a['end']}_vs_{b['start']}_{b['end']}"
-
-    buf = io.BytesIO()
-    if fmt == "csv":
-        buf.write(df.to_csv(index=False).encode("utf-8-sig"))
-        buf.seek(0)
-        return f"{base}.csv", buf, CSV_MEDIA
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, sheet_name="Google vs Яндекс"[:31], index=False)
-    buf.seek(0)
-    return f"{base}.xlsx", buf, XLSX_MEDIA
+    return to_download(df, base, fmt, sheet="Google vs Яндекс")

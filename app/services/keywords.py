@@ -10,24 +10,14 @@ means every keyword the engines actually returned for the period.
 """
 from __future__ import annotations
 
-import io
-from collections.abc import Iterable
-
 import pandas as pd
 from sqlalchemy import func, select
 
-from app.db.models import Page, Query, QueryMetricDaily
+from app.db.models import Query, QueryMetricDaily
 from app.providers.base import DateRange
-from app.utils import normalize_url
-
-CSV_MEDIA = "text/csv"
-XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
-
-def _ids(site_ids):
-    if isinstance(site_ids, Iterable) and not isinstance(site_ids, (str, bytes)):
-        return list(site_ids)
-    return [site_ids]
+from app.services.exporting import to_download
+from app.services.loaders import resolve_page_ids
+from app.utils import as_id_list as _ids
 
 
 def keyword_rows(db, site_ids, dr: DateRange, *, min_clicks: int = 0, min_impr: int = 0,
@@ -77,19 +67,7 @@ def keywords_for_urls(db, site_ids, urls, dr: DateRange, *, min_clicks: int = 0,
     ids = _ids(site_ids)
     if not ids or not urls:
         return []
-    norms: set[str] = set()
-    for u in urls:
-        if not u:
-            continue
-        n = normalize_url(u)
-        norms.add(n)
-        if n.startswith("https://"):       # match regardless of stored scheme
-            norms.add("http://" + n[len("https://"):])
-        elif n.startswith("http://"):
-            norms.add("https://" + n[len("http://"):])
-    page_ids = [pid for (pid,) in db.execute(
-        select(Page.id).where(Page.site_id.in_(ids), Page.normalized_url.in_(list(norms)))
-    ).all()]
+    page_ids = resolve_page_ids(db, ids, urls)
     if not page_ids:
         return []
     clicks = func.sum(QueryMetricDaily.clicks)
@@ -144,12 +122,4 @@ def build_keyword_export(rows: list[dict], label: str, dr: DateRange, fmt: str =
     )
     safe = "".join(c if (c.isascii() and c.isalnum()) else "_" for c in (label or "all"))[:40]
     name = f"keywords_{safe.strip('_') or 'all'}_{dr.start}_{dr.end}"
-    buf = io.BytesIO()
-    if fmt == "csv":
-        buf.write(df.to_csv(index=False).encode("utf-8-sig"))
-        buf.seek(0)
-        return f"{name}.csv", buf, CSV_MEDIA
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        df.to_excel(w, sheet_name="Ключевые слова", index=False)
-    buf.seek(0)
-    return f"{name}.xlsx", buf, XLSX_MEDIA
+    return to_download(df, name, fmt, sheet="Ключевые слова")

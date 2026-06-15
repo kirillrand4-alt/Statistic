@@ -1,7 +1,6 @@
 """Export every enabled site at once over the whole collected period."""
 from __future__ import annotations
 
-import io
 from datetime import date, timedelta
 
 import pandas as pd
@@ -10,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.db.models import PageMetricDaily, Site, SiteTotalDaily
 from app.providers.base import DateRange
-from app.services.export import CSV_MEDIA, XLSX_MEDIA, _prettify
+from app.services.export import _prettify
+from app.services.exporting import to_download
 from app.services.loaders import (
     agg_metrics,
     load_page_metrics_df,
@@ -68,12 +68,4 @@ def build_bulk_export(db, dr: DateRange, level: str = "page", fmt: str = "xlsx")
     level = level if level in LEVELS else "page"
     df = _prettify(bulk_dataframe(db, dr, level))
     base = f"all_sites_{level}_{dr.start.isoformat()}_{dr.end.isoformat()}"
-    buf = io.BytesIO()
-    if fmt == "csv":
-        buf.write(df.to_csv(index=False).encode("utf-8-sig"))
-        buf.seek(0)
-        return f"{base}.csv", buf, CSV_MEDIA
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, sheet_name=level[:31], index=False)
-    buf.seek(0)
-    return f"{base}.xlsx", buf, XLSX_MEDIA
+    return to_download(df, base, fmt, sheet=level)

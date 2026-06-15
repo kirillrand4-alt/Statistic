@@ -12,7 +12,6 @@ both carrying the counter and having a recognisable title.
 """
 from __future__ import annotations
 
-from collections.abc import Iterable
 from datetime import date, timedelta
 
 from sqlalchemy import distinct, func, or_, select
@@ -20,6 +19,7 @@ from sqlalchemy import distinct, func, or_, select
 from app.db.models import Hit, Site
 from app.providers.base import DateRange
 from app.services.totals import bucket_label, bucket_series
+from app.utils import as_id_list as _ids
 from app.utils import domain_of
 
 # Substrings a 404 page <title> usually contains. Matched case-insensitively
@@ -58,12 +58,6 @@ def _title_filter(markers: list[str]):
     for m in markers:
         needles.update({m, m.lower(), m.upper(), m.capitalize()})
     return or_(*[Hit.title.like(f"%{n}%") for n in needles])
-
-
-def _ids(site_ids) -> list[int]:
-    if isinstance(site_ids, Iterable) and not isinstance(site_ids, (str, bytes)):
-        return list(site_ids)
-    return [site_ids]
 
 
 def not_found_overview(db, dr: DateRange, markers_raw: str | None = None,
