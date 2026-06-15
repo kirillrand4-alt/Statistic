@@ -572,6 +572,72 @@ def ui_donors_run(length: int = Form(100), max_records: int = Form(0)):
                 if started else "Сбор уже идёт.")
 
 
+@router.get("/cannibalization")
+def cannibalization_page(request: Request, domain: str | None = None,
+                         period_days: int = 90, min_query_impr: str | None = None,
+                         min_page_impr: str | None = None, max_position: str | None = None,
+                         exclude_home: int = 1, cap: str | None = None,
+                         se: list[int] | None = Query(None), db: Session = Depends(get_db)):
+    from datetime import timedelta
+
+    from app.services import cannibalization as C
+    from app.services import serp as S
+
+    domains = _domains(db)
+    cur = domain if domain and any(d["domain"] == domain for d in domains) \
+        else (domains[0]["domain"] if domains else None)
+    gsc_ids = (_domain_engine_ids(db, cur, ("gsc",)).get("gsc", []) if cur
+               else _keyword_site_ids(db, "", ("gsc",)))
+    end = date.today() - timedelta(days=1)
+    dr = parse_date_range((end - timedelta(days=max(1, period_days) - 1)).isoformat(),
+                          end.isoformat())
+    mqi = _qint(min_query_impr); mpi = _qint(min_page_impr); mpos = _qint(max_position)
+    home = bool(exclude_home)
+    gsc_rows = C.gsc_cannibalization(
+        db, gsc_ids, dr, min_query_impr=(mqi if mqi is not None else 30),
+        min_page_impr=(mpi if mpi is not None else 10),
+        max_position=(float(mpos) if mpos else None), exclude_home=home, limit=500)
+
+    caps = S.captures(db)
+    cap_sel = cap or (caps[0] if caps else None)
+    own = {cur} if cur else {d["domain"] for d in _domains(db)}
+    serp_rows = C.serp_cannibalization(db, cap_sel, own, se=(list(se) if se else None),
+                                       exclude_home=home, limit=500)
+    return templates.TemplateResponse(request, "cannibalization.html", {
+        "request": request, "domains": domains, "cur_domain": cur or "",
+        "period_days": period_days, "min_query_impr": mqi if mqi is not None else 30,
+        "min_page_impr": mpi if mpi is not None else 10, "max_position": mpos or "",
+        "exclude_home": home, "gsc_rows": gsc_rows, "serp_rows": serp_rows,
+        "has_gsc": bool(gsc_ids), "captures": caps, "cap": cap_sel,
+        "se_sel": [int(x) for x in se] if se else [],
+    })
+
+
+@router.get("/cannibalization/export")
+def cannibalization_export(domain: str | None = None, period_days: int = 90,
+                           min_query_impr: str | None = None, min_page_impr: str | None = None,
+                           max_position: str | None = None, exclude_home: int = 1,
+                           format: str = "csv", db: Session = Depends(get_db)):
+    from datetime import timedelta
+
+    from app.services import cannibalization as C
+
+    gsc_ids = (_domain_engine_ids(db, domain, ("gsc",)).get("gsc", []) if domain
+               else _keyword_site_ids(db, "", ("gsc",)))
+    end = date.today() - timedelta(days=1)
+    dr = parse_date_range((end - timedelta(days=max(1, period_days) - 1)).isoformat(),
+                          end.isoformat())
+    mqi = _qint(min_query_impr); mpi = _qint(min_page_impr); mpos = _qint(max_position)
+    rows = C.gsc_cannibalization(
+        db, gsc_ids, dr, min_query_impr=(mqi if mqi is not None else 30),
+        min_page_impr=(mpi if mpi is not None else 10),
+        max_position=(float(mpos) if mpos else None), exclude_home=bool(exclude_home),
+        limit=None)
+    fname, buf, media = C.build_export(rows, domain or "all", fmt=("xlsx" if format == "xlsx" else "csv"))
+    return StreamingResponse(buf, media_type=media,
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 @router.post("/ui/backfill")
 def ui_backfill(site_id: int = Form(...), days: int = Form(90), db: Session = Depends(get_db)):
     from app.scheduler.jobs import run_backfill

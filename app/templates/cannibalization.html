@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Каннибализация · SEO Статистика{% endblock %}
+{% block content %}
+<h2>Каннибализация страниц</h2>
+<p><small>Несколько ваших страниц конкурируют за один запрос. <strong>GSC</strong> — по реальным
+показам/кликам (все запросы, история). <strong>Выдача</strong> — ≥2 ваших URL в живом ТОПе
+(arsenkin, оба ПС). Главная <code>/</code> {{ 'исключена' if exclude_home else 'учитывается' }}.</small></p>
+
+<form method="get" action="{{ base_path }}/cannibalization" class="grid">
+  <label>Домен
+    <select name="domain" onchange="this.form.submit()">
+      {% for d in domains %}<option value="{{ d.domain }}" {% if d.domain==cur_domain %}selected{% endif %}>{{ d.domain }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Период, дней <input type="number" name="period_days" value="{{ period_days }}" min="1"></label>
+  <label>Показов у запроса ≥ <input type="number" name="min_query_impr" value="{{ min_query_impr }}" min="0"></label>
+  <label>Показов у страницы ≥ <input type="number" name="min_page_impr" value="{{ min_page_impr }}" min="0"></label>
+  <label>Позиция ≤ (опц.) <input type="number" name="max_position" value="{{ max_position }}" min="1"></label>
+  <label><input type="checkbox" name="exclude_home" value="1" {% if exclude_home %}checked{% endif %}> Без главной</label>
+  <label>&nbsp;<button type="submit">Показать</button></label>
+</form>
+
+{% if not has_gsc %}
+<article><p>⚠️ Для этого домена нет данных Google Search Console — отчёт по GSC недоступен.
+Подключите GSC в <a href="{{ base_path }}/admin">Настройках</a> (срез «выдача» ниже работает по arsenkin).</p></article>
+{% endif %}
+
+{% set qs = 'domain=' ~ cur_domain ~ '&period_days=' ~ period_days ~ '&min_query_impr=' ~ min_query_impr ~ '&min_page_impr=' ~ min_page_impr ~ '&max_position=' ~ max_position ~ '&exclude_home=' ~ (1 if exclude_home else 0) %}
+<article>
+  <header>По данным GSC (за {{ period_days }} дн.) — найдено {{ gsc_rows|length|numfmt }} запросов
+    {% if gsc_rows %}· <a href="{{ base_path }}/cannibalization/export?{{ qs }}&format=xlsx" role="button" class="outline">Excel</a>
+    <a href="{{ base_path }}/cannibalization/export?{{ qs }}&format=csv" role="button" class="outline secondary">CSV</a>{% endif %}
+  </header>
+  <figure>
+  <table class="sortable">
+    <thead><tr><th>Запрос</th><th>Стр.</th><th>Показы</th><th>Клики</th>
+      <th>Основная</th><th>Каннибалы (URL · поз · клики)</th><th>В топ-10</th><th>Нестаб.</th></tr></thead>
+    <tbody>
+    {% for r in gsc_rows %}
+      <tr>
+        <td>{{ r.query }}</td>
+        <td>{{ r.pages_n }}</td>
+        <td>{{ r.total_impr|numfmt }}</td>
+        <td>{{ r.total_clicks|numfmt }}</td>
+        <td><small title="{{ r.primary.url }}">#{{ r.primary.position }} · {{ (r.primary.url|truncate(46))[:46] }} <mark>{{ r.primary.clicks }}кл</mark></small></td>
+        <td>{% for c in r.cannibals %}<small title="{{ c.url }}">#{{ c.position }} · {{ (c.url|truncate(40))[:40] }} ({{ c.clicks }}кл/{{ c.impressions|numfmt }}п)</small><br>{% endfor %}</td>
+        <td>{% if r.top10_pages >= 2 %}<strong>{{ r.top10_pages }}</strong>{% else %}{{ r.top10_pages }}{% endif %}</td>
+        <td>{% if r.instability > 1 %}<mark>{{ r.instability }}</mark>{% else %}{{ r.instability }}{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8"><small>Каннибализация не найдена по этим порогам (или нет данных GSC). Ослабь пороги.</small></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </figure>
+  <small>«Нестаб.» — по скольким разным страницам Google гонял этот запрос по дням (>1 = не может
+  выбрать). «В топ-10» ≥2 — обе страницы реально на 1-й странице, самый болезненный случай.</small>
+</article>
+
+<article>
+  <header>По выдаче (arsenkin)
+    {% if captures %}— срез
+      <form method="get" action="{{ base_path }}/cannibalization" style="display:inline">
+        <input type="hidden" name="domain" value="{{ cur_domain }}">
+        <input type="hidden" name="period_days" value="{{ period_days }}">
+        <input type="hidden" name="exclude_home" value="{{ 1 if exclude_home else 0 }}">
+        <select name="cap" onchange="this.form.submit()">
+          {% for c in captures %}<option value="{{ c }}" {% if c==cap %}selected{% endif %}>{{ c }}</option>{% endfor %}
+        </select>
+      </form>
+    {% endif %}
+  </header>
+  {% if serp_rows %}
+  <figure>
+  <table class="sortable">
+    <thead><tr><th>Запрос</th><th>ПС</th><th>Наших URL</th><th>URL · позиции</th></tr></thead>
+    <tbody>
+    {% for r in serp_rows %}
+      <tr><td>{{ r.keyword }}</td><td><small>{{ r.se_label }}</small></td><td><strong>{{ r.urls_n }}</strong></td>
+        <td>{% for u in r.urls %}<small title="{{ u.url }}">#{{ u.position }} · {{ (u.url|truncate(50))[:50] }}</small><br>{% endfor %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </figure>
+  {% else %}
+  <p><small>Нет фраз, где ≥2 ваших URL в ТОПе по этому срезу. Прогоните больше фраз на странице
+  <a href="{{ base_path }}/serp">ТОП-10</a>, чтобы было что сверять.</small></p>
+  {% endif %}
+</article>
+{% endblock %}
