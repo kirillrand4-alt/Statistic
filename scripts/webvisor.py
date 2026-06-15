@@ -1,0 +1,79 @@
+"""Webvisor session recording — sizing (смета) now; recorder is the next step.
+
+Webvisor replays have no API, so recording = browser automation of the Metrica
+UI (Playwright/Chromium + screen capture). This CLI currently answers HOW MANY
+sessions and WHICH (visit_id) to record for a period, from our synced visits —
+run it first to size the job (Метрика хранит Вебвизор ≈15 дней).
+
+    python scripts/webvisor.py --domain example.com --from 2026-06-01 --count
+    python scripts/webvisor.py --domain example.com --from 2026-06-01 --list
+
+The actual recorder needs, on the server: Playwright+Chromium+ffmpeg installed,
+a saved Yandex login session, and a short recon of the live Webvisor UI (the
+replay URL + player controls). Until that's wired, --record explains the setup.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from datetime import date, timedelta
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app.db.base import SessionLocal, init_db  # noqa: E402
+from app.providers.base import DateRange  # noqa: E402
+from app.services import webvisor as W  # noqa: E402
+
+_SETUP = """\
+Рекордер ещё не настроен. Для записи Вебвизора на сервере нужно:
+  1) зависимости:  .venv/bin/pip install playwright && .venv/bin/playwright install --with-deps chromium
+                   apt install -y ffmpeg
+  2) вход в Яндекс: один раз залогиниться и сохранить сессию (storage_state)
+  3) рекон живого Вебвизора: URL открытого реплея сессии + кнопки плеера
+Пришли мне (2)–(3), и я допишу запись. Пока — оцени объём: --count / --list."""
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--site", type=int, help="site_id (иначе резолв по --domain)")
+    ap.add_argument("--domain", help="домен (берём сайт с наибольшим числом визитов)")
+    ap.add_argument("--from", dest="d1", help="дата с (по умолч. 14 дней назад — ретенция Вебвизора)")
+    ap.add_argument("--to", dest="d2", help="дата по (по умолч. сегодня)")
+    ap.add_argument("--source", help="фильтр по источнику трафика (напр. organic/ad/direct)")
+    ap.add_argument("--min-pageviews", dest="min_pv", type=int, default=0)
+    ap.add_argument("--count", action="store_true", help="сколько сессий за период")
+    ap.add_argument("--list", action="store_true", help="вывести visit_id сессий")
+    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--record", action="store_true", help="(скоро) записать видео сессий")
+    a = ap.parse_args()
+
+    init_db()
+    db = SessionLocal()
+    try:
+        sid = W.resolve_visit_site(db, site_id=a.site, domain=a.domain)
+        if not sid:
+            print("Не нашёл сайт с визитами. Укажи --site или --domain.")
+            return
+        d2 = date.fromisoformat(a.d2) if a.d2 else date.today()
+        d1 = date.fromisoformat(a.d1) if a.d1 else d2 - timedelta(days=13)
+        dr = DateRange(start=d1, end=d2)
+        kw = {"source": a.source, "min_page_views": a.min_pv}
+
+        if a.record:
+            print(_SETUP)
+            return
+        n = W.count_sessions(db, sid, dr, **kw)
+        print(f"Сессий к записи: {n} (сайт {sid}, {d1}…{d2}"
+              + (f", источник {a.source}" if a.source else "")
+              + (f", ≥{a.min_pv} стр." if a.min_pv else "") + ")")
+        if a.list:
+            for s in W.sessions_for_period(db, sid, dr, limit=(a.limit or None), **kw):
+                print(f"  {s['date']}  visit={s['visit_id']}  стр={s['page_views']}  "
+                      f"{s['duration']}с  [{s['source']}]  {s['start_url'] or ''}")
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    main()
