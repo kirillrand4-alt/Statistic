@@ -33,7 +33,11 @@
       <textarea name="phrases" rows="4" placeholder="ремонт компрессора&#10;винтовой компрессор цена"></textarea>
     </label>
     <div class="grid">
+      <label>Регион Яндекса (ID) <input type="number" name="yandex_region" value="213"></label>
+      <label>Регион Google (ID) <input type="number" name="google_region" value="1011969"></label>
       <label>…или файл с фразами <input type="file" name="file" accept=".txt,.csv"></label>
+    </div>
+    <div class="grid">
       <label>Мин. кликов (для статистики) <input type="number" name="min_clicks" value="1" min="0"></label>
       <label>Период сбора, дней <input type="number" name="period_days" value="90" min="1"></label>
     </div>
@@ -44,8 +48,10 @@
       <label>&nbsp;<button type="submit" {% if status.running or not has_token %}disabled{% endif %}>Запустить</button></label>
     </div>
   </form>
-  <small>Стоимость arsenkin ≈ фраз × число ПС лимитов. Лимиты API (≤5 задач, ≤30 запросов/мин)
-  соблюдаются автоматически; готовность задачи берётся из <code>/check</code>.</small>
+  <small>Регион: у Яндекса — его код (213 Москва, 2 Санкт-Петербург, 65 Новосибирск, 54 Екатеринбург…);
+  у Google — свой ID (1011969 Москва) из справочника регионов arsenkin. Применяются ко всем выбранным
+  ПС соответствующего семейства. Стоимость ≈ фраз × число ПС лимитов; лимиты API (≤5 задач,
+  ≤30 запросов/мин) соблюдаются автоматически, готовность берётся из <code>/check</code>.</small>
 </article>
 
 {% if own_summary %}

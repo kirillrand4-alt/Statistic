@@ -134,6 +134,22 @@ def parse_result(payload: dict):
                        "position": pos, "url": url, "title": title, "snippet": snippet}
 
 
+def se_for(types, yandex_region=213, google_region=1011969) -> list[dict]:
+    """Build the ``se`` list: Yandex engines (1/2/3) use the Yandex region id,
+    Google engines (11/12) use the Google region id (different id schemes)."""
+    out = []
+    for t in types:
+        t = int(t)
+        if t in (1, 2, 3):
+            r = yandex_region
+        elif t in (11, 12):
+            r = google_region
+        else:
+            r = DEFAULT_REGION.get(t)
+        out.append({"type": t, "region": r})
+    return out
+
+
 def is_done(payload: dict) -> bool:
     """True if a ``get`` payload carries the finished result."""
     return str((payload or {}).get("code")) == "TASK_RESULT"

@@ -260,6 +260,7 @@ def _parse_phrases(text: str) -> list[str]:
 
 @router.post("/ui/serp/run")
 async def ui_serp_run(domain: str = Form(""), se: list[int] = Form(default=[]),
+                      yandex_region: int = Form(213), google_region: int = Form(1011969),
                       depth: int = Form(10), min_clicks: int = Form(1),
                       max_keywords: int = Form(500), period_days: int = Form(90),
                       snippets: int = Form(1), phrases: str = Form(""),
@@ -267,7 +268,7 @@ async def ui_serp_run(domain: str = Form(""), se: list[int] = Form(default=[]),
     from datetime import timedelta
 
     from app.credentials import get_cred
-    from app.providers.arsenkin import DEFAULT_REGION
+    from app.providers.arsenkin import se_for
     from app.services import keywords as kw
     from app.services import serp_run
 
@@ -279,8 +280,7 @@ async def ui_serp_run(domain: str = Form(""), se: list[int] = Form(default=[]),
         return back("Сначала вставьте токен arsenkin в Настройках.")
     if serp_run.current_status().get("running"):
         return back("Проверка уже идёт — дождитесь завершения.")
-    se_list = [{"type": int(t), "region": DEFAULT_REGION.get(int(t))} for t in se] or \
-        [{"type": 2, "region": 213}, {"type": 11, "region": 1011969}]
+    se_list = se_for(se or [2, 11], yandex_region, google_region)
 
     # source of phrases: your own (textarea/file) wins; otherwise the collected keywords
     words = _parse_phrases(phrases)

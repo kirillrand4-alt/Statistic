@@ -152,3 +152,11 @@ def test_own_positions_summary(db):
     row = summ[0]
     assert row["domain"] == "shop.ru" and row["keywords"] == 2
     assert row["top3"] == 1 and row["top10"] == 2 and row["avg"] == 5.0
+
+
+def test_se_for_regions_per_engine():
+    assert ARS.se_for([2, 11]) == [
+        {"type": 2, "region": 213}, {"type": 11, "region": 1011969}]
+    assert ARS.se_for([2, 3, 11, 12], yandex_region=2, google_region=2840) == [
+        {"type": 2, "region": 2}, {"type": 3, "region": 2},
+        {"type": 11, "region": 2840}, {"type": 12, "region": 2840}]
