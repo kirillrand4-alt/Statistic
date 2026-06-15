@@ -111,8 +111,12 @@ def _load_hashes() -> dict:
 
 def cmd_probe(sessions, tmpl) -> None:
     os.makedirs(DEBUG_DIR, exist_ok=True)
-    s = sessions[0] if sessions else {"counter_id": "", "visit_id": "", "date": ""}
-    uh = _load_hashes().get(str(s.get("visit_id")), "")
+    hashes = _load_hashes()
+    s = (next((x for x in sessions if str(x.get("visit_id")) in hashes), None)
+         or (sessions[0] if sessions else {"counter_id": "", "visit_id": "", "date": ""}))
+    uh = hashes.get(str(s.get("visit_id")), "")
+    if not uh:
+        print("  ⚠ нет сессии с user_id_hash — сначала запусти --harvest (иначе откроется ошибка).")
     url = _replay_url(s.get("counter_id"), s.get("visit_id"), s.get("date"), uh, tmpl)
     print(f"Probe: открываю {url}")
     js = ("() => { const out=[]; "
