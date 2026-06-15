@@ -16,8 +16,9 @@ from collections.abc import Iterable
 import pandas as pd
 from sqlalchemy import func, select
 
-from app.db.models import Query, QueryMetricDaily
+from app.db.models import Page, Query, QueryMetricDaily
 from app.providers.base import DateRange
+from app.utils import normalize_url
 
 CSV_MEDIA = "text/csv"
 XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -65,6 +66,53 @@ def keyword_rows(db, site_ids, dr: DateRange, *, min_clicks: int = 0, min_impr: 
         out.append({"query": text, "clicks": c, "impressions": im,
                     "ctr": (c / im) if im else 0.0,
                     "position": (float(pw) / im) if (im and pw) else 0.0})
+    return out
+
+
+def keywords_for_urls(db, site_ids, urls, dr: DateRange, *, min_clicks: int = 0,
+                      min_impr: int = 0, limit: int | None = None) -> list[str]:
+    """Keywords (queries) that the given URLs got from search — straight from the
+    collected ``query × page`` data. URLs are matched to stored pages by
+    normalized URL (http/https, www, trailing slash agnostic)."""
+    ids = _ids(site_ids)
+    if not ids or not urls:
+        return []
+    norms: set[str] = set()
+    for u in urls:
+        if not u:
+            continue
+        n = normalize_url(u)
+        norms.add(n)
+        if n.startswith("https://"):       # match regardless of stored scheme
+            norms.add("http://" + n[len("https://"):])
+        elif n.startswith("http://"):
+            norms.add("https://" + n[len("http://"):])
+    page_ids = [pid for (pid,) in db.execute(
+        select(Page.id).where(Page.site_id.in_(ids), Page.normalized_url.in_(list(norms)))
+    ).all()]
+    if not page_ids:
+        return []
+    clicks = func.sum(QueryMetricDaily.clicks)
+    impr = func.sum(QueryMetricDaily.impressions)
+    stmt = (
+        select(Query.text, clicks.label("c"), impr.label("im"))
+        .join(Query, Query.id == QueryMetricDaily.query_id)
+        .where(QueryMetricDaily.site_id.in_(ids), QueryMetricDaily.page_id.in_(page_ids),
+               QueryMetricDaily.date >= dr.start, QueryMetricDaily.date <= dr.end)
+        .group_by(Query.text)
+    )
+    if min_clicks:
+        stmt = stmt.having(clicks >= min_clicks)
+    if min_impr:
+        stmt = stmt.having(impr >= min_impr)
+    stmt = stmt.order_by(clicks.desc(), impr.desc())
+    if limit:
+        stmt = stmt.limit(limit)
+    seen, out = set(), []
+    for text, _c, _im in db.execute(stmt).all():
+        if text and text.lower() not in seen:
+            seen.add(text.lower())
+            out.append(text)
     return out
 
 

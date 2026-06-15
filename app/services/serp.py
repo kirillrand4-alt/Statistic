@@ -22,7 +22,8 @@ def captures(db) -> list[str]:
 
 
 def serp_rows(db, captured_on: str | None = None, se=None, domain: str | None = None,
-              search: str | None = None, limit: int | None = None) -> list[dict]:
+              search: str | None = None, limit: int | None = None,
+              max_position: int | None = None, keywords=None) -> list[dict]:
     cap = captured_on
     if not cap:
         d = db.execute(select(func.max(SerpResult.captured_on))).scalar()
@@ -36,6 +37,13 @@ def serp_rows(db, captured_on: str | None = None, se=None, domain: str | None = 
         stmt = stmt.where(SerpResult.url_domain == domain)
     if search:
         stmt = stmt.where(SerpResult.keyword.ilike(f"%{search}%"))
+    if keywords:
+        kws = {str(k).strip().lower() for k in keywords if str(k).strip()}
+        if not kws:
+            return []
+        stmt = stmt.where(func.lower(SerpResult.keyword).in_(list(kws)))
+    if max_position:
+        stmt = stmt.where(SerpResult.position <= max_position)
     stmt = stmt.order_by(SerpResult.keyword, SerpResult.se, SerpResult.position)
     if limit:
         stmt = stmt.limit(limit)

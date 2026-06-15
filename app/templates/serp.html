@@ -96,6 +96,26 @@
 <article><p>Результатов пока нет — запусти проверку выше. Когда задачи отработают, тут появятся
 таблица, сводка по своим позициям и кнопки выгрузки.</p></article>
 {% else %}
+<article>
+  <header>Топ по ключам ваших ссылок — из базы, без нового прогона</header>
+  {% if kw_filter_n %}<p>✅ Активен фильтр по ссылкам: <strong>{{ kw_filter_n }}</strong> ключевых запросов.
+    <form method="post" action="{{ base_path }}/ui/serp/urls" style="display:inline;margin:0">
+      <input type="hidden" name="clear" value="1"><button type="submit" class="outline secondary">Очистить</button>
+    </form></p>{% endif %}
+  <form method="post" action="{{ base_path }}/ui/serp/urls" enctype="multipart/form-data">
+    <label>Вставьте ссылки — покажем готовую выдачу по их ключевым запросам из базы (по одной в строке)
+      <textarea name="urls" rows="3" placeholder="https://site.ru/page-1&#10;https://site.ru/page-2"></textarea>
+    </label>
+    <div class="grid">
+      <label>…или файл со ссылками <input type="file" name="file" accept=".txt,.csv"></label>
+      <label>&nbsp;<button type="submit">Применить фильтр по ссылкам</button></label>
+    </div>
+    <small>Берём ключевые запросы ИМЕННО этих страниц из собранной статистики и фильтруем уже
+    сохранённую выдачу (arsenkin повторно НЕ запускается). Для «топ-3 по каждой ПС» поставь
+    в фильтре ниже «Поз. ≤ 3».</small>
+  </form>
+</article>
+
 <form method="get" action="{{ base_path }}/serp" class="grid">
   <label>Срез (дата)
     <select name="captured_on" onchange="this.form.submit()">
@@ -109,6 +129,7 @@
     </select>
   </label>
   <label>Поиск по фразе <input type="search" name="q" value="{{ q }}"></label>
+  <label>Поз. ≤ (напр. 3 — топ-3) <input type="number" name="max_pos" value="{{ max_pos }}" min="1" placeholder="все"></label>
   <fieldset style="margin:0;"><legend><small>ПС</small></legend>
     <label style="display:inline-flex;gap:.3rem;margin-right:.8rem;"><input type="checkbox" name="se" value="2" {% if 2 in se_sel or not se_sel %}checked{% endif %}> Яндекс</label>
     <label style="display:inline-flex;gap:.3rem;margin-right:.8rem;"><input type="checkbox" name="se" value="11" {% if 11 in se_sel or not se_sel %}checked{% endif %}> Google</label>
@@ -118,7 +139,7 @@
   <label>&nbsp;<button type="submit">Показать</button></label>
 </form>
 
-{% set qs = 'captured_on=' ~ (cap or '') ~ '&domain=' ~ domain ~ '&q=' ~ q %}
+{% set qs = 'captured_on=' ~ (cap or '') ~ '&domain=' ~ domain ~ '&q=' ~ q ~ '&max_pos=' ~ max_pos %}
 {% for s in se_sel %}{% set qs = qs ~ '&se=' ~ s %}{% endfor %}
 <p>Срез <strong>{{ cap }}</strong>. Выгрузить (с фильтрами, со сниппетами):
   <a href="{{ base_path }}/serp/export?{{ qs }}&format=xlsx" role="button" class="outline">Excel</a>

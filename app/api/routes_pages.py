@@ -228,7 +228,8 @@ def keywords_export(domain: str | None = None, engines: list[str] | None = Query
 @router.get("/serp")
 def serp_page(request: Request, captured_on: str | None = None,
               se: list[int] | None = Query(None), domain: str | None = None,
-              q: str | None = None, msg: str | None = None, db: Session = Depends(get_db)):
+              q: str | None = None, max_pos: str | None = None, msg: str | None = None,
+              db: Session = Depends(get_db)):
     from app.credentials import get_cred
     from app.services import serp as S
     from app.services.serp_run import current_status, pending_count
@@ -236,12 +237,16 @@ def serp_page(request: Request, captured_on: str | None = None,
     caps = S.captures(db)
     cap = captured_on or (caps[0] if caps else None)
     se_sel = list(se) if se else []
+    mp = _qint(max_pos)
+    kw_filter = _parse_phrases(get_cred("serp_kw_filter") or "")
     rows = S.serp_rows(db, captured_on=cap, se=(se_sel or None), domain=(domain or None),
-                       search=(q or None), limit=2000)
+                       search=(q or None), limit=2000, max_position=mp,
+                       keywords=(kw_filter or None))
     own = {d["domain"] for d in _domains(db)}
     return templates.TemplateResponse(request, "serp.html", {
         "request": request, "captures": caps, "cap": cap, "rows": rows,
         "se_sel": se_sel, "domain": domain or "", "q": q or "", "msg": msg,
+        "max_pos": mp or "", "kw_filter_n": len(kw_filter),
         "domains": _domains(db), "own_domains": own, "shown_limit": 2000,
         "own_summary": S.own_positions(db, cap, own, se=(se_sel or None)),
         "status": current_status(), "has_token": bool(get_cred("arsenkin_token")),
@@ -333,16 +338,53 @@ def ui_serp_fetch_pending(db: Session = Depends(get_db)):
     return back("Догрузка недостающих задач запущена. Обновляйте страницу.")
 
 
+@router.post("/ui/serp/urls")
+async def ui_serp_urls(urls: str = Form(""), clear: int = Form(0),
+                       file: UploadFile | None = File(None), db: Session = Depends(get_db)):
+    """Upload URLs -> their keywords (from our collected base) become a filter for
+    the stored SERP results (no arsenkin run). Saved + applied to the view/export."""
+    from datetime import date as _date
+
+    from app.credentials import set_cred
+    from app.services import keywords as kw
+
+    def back(m: str):
+        return RedirectResponse(url=f"{BP}/serp?msg={quote(m)}", status_code=303)
+
+    if clear:
+        set_cred("serp_kw_filter", "")
+        return back("Фильтр по ссылкам снят.")
+    url_list = _parse_phrases(urls)
+    if file is not None and getattr(file, "filename", ""):
+        try:
+            url_list += _parse_phrases((await file.read()).decode("utf-8", "ignore"))
+        finally:
+            await file.close()
+    if not url_list:
+        set_cred("serp_kw_filter", "")
+        return back("Список ссылок пуст — фильтр снят.")
+    ids = _keyword_site_ids(db, "", SEARCH_ENGINES)
+    dr = parse_date_range("2000-01-01", _date.today().isoformat())  # all collected history
+    words = kw.keywords_for_urls(db, ids, url_list, dr)
+    set_cred("serp_kw_filter", "\n".join(words))
+    return back(f"По {len(url_list)} ссылкам найдено {len(words)} ключей в базе — "
+                "ставь «Поз. ≤ 3» для топ-3."
+                if words else "По этим ссылкам ключей в базе нет (URL не совпали со страницами).")
+
+
 @router.get("/serp/export")
 def serp_export(captured_on: str | None = None, se: list[int] | None = Query(None),
-                domain: str | None = None, q: str | None = None, format: str = "csv",
-                db: Session = Depends(get_db)):
+                domain: str | None = None, q: str | None = None, max_pos: str | None = None,
+                format: str = "csv", db: Session = Depends(get_db)):
+    from app.credentials import get_cred
     from app.services import serp as S
 
     caps = S.captures(db)
     cap = captured_on or (caps[0] if caps else None)
+    kw_filter = _parse_phrases(get_cred("serp_kw_filter") or "")
     rows = S.serp_rows(db, captured_on=cap, se=(list(se) if se else None),
-                       domain=(domain or None), search=(q or None), limit=None)
+                       domain=(domain or None), search=(q or None), limit=None,
+                       max_position=_qint(max_pos), keywords=(kw_filter or None))
     fmt = "csv" if format == "csv" else "xlsx"
     fn, buf, media = S.build_serp_export(rows, cap or "all", fmt)
     return StreamingResponse(buf, media_type=media,
