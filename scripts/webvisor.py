@@ -113,27 +113,33 @@ def cmd_discover(counter) -> None:
     os.makedirs(DEBUG_DIR, exist_ok=True)
     url = f"https://metrika.yandex.ru/stat/visor?id={counter}&period=today"
     print(f"Discover: открываю список {url}")
-    hits, all_json = [], []
+    grabbed, all_json = [], []
+    NAMES = ("getList", "webvisor-data-api", "api/metrika")
 
     def on_resp(resp):
         try:
             if "json" not in (resp.headers.get("content-type", "") or ""):
                 return
+            u = resp.url
             body = resp.text()
         except Exception:
             return
-        all_json.append(resp.url)
-        if any(k in body for k in ("user_id_hash", "userIdHash", "visit_id", "visitId")):
-            hits.append((resp.url, body))
+        all_json.append(u)
+        if any(s in u for s in NAMES):
+            try:
+                method, post = resp.request.method, resp.request.post_data
+            except Exception:
+                method, post = "?", None
+            grabbed.append((u, method, post, body))
 
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=True, viewport=VIEWPORT)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.on("response", on_resp)
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(8000)
+        page.wait_for_timeout(9000)
         try:
-            page.mouse.wheel(0, 4000)  # nudge any lazy-loading list
+            page.mouse.wheel(0, 5000)  # nudge any lazy-loading list
             page.wait_for_timeout(4000)
         except Exception:
             pass
@@ -141,23 +147,18 @@ def cmd_discover(counter) -> None:
             print("  ⚠ не залогинен — сначала пройди --login.")
         ctx.close()
 
-    print(f"\nJSON-ответов всего: {len(all_json)}; из них с нужными полями: {len(hits)}")
-    for i, (u, b) in enumerate(hits[:6]):
-        path = os.path.join(DEBUG_DIR, f"list_{i}.json")
+    print(f"\nJSON-ответов всего: {len(all_json)}; интересных (getList/api): {len(grabbed)}")
+    for i, (u, method, post, b) in enumerate(grabbed[:8]):
+        path = os.path.join(DEBUG_DIR, f"api_{i}.json")
         with open(path, "w", encoding="utf-8") as f:
             f.write(b)
-        keys = ""
-        try:
-            d = json.loads(b)
-            keys = ", ".join(list(d.keys())[:12]) if isinstance(d, dict) else f"<{type(d).__name__}>"
-        except Exception:
-            pass
-        j = b.find("user_id_hash")
-        snip = b[max(0, j - 60):j + 120].replace("\n", " ") if j >= 0 else b[:180].replace("\n", " ")
-        print(f"\n[{i}] {u}\n   top-keys: {keys}\n   рядом с user_id_hash: …{snip}…\n   (сохранил: {path})")
-    if not hits:
-        print("Не поймал нужный ответ. Список последних JSON-URL:")
-        for u in all_json[-12:]:
+        print(f"\n[{i}] {method} {u}  (len={len(b)}, сохранил {path})")
+        if post:
+            print(f"   POST-данные: {post[:400]}")
+        print(f"   тело[:1000]: {b[:1000]}")
+    if not grabbed:
+        print("Ничего интересного не поймал. Все JSON-URL:")
+        for u in all_json:
             print("  ", u)
 
 
