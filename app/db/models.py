@@ -333,6 +333,28 @@ class Hit(Base):
     extra: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class SerpResult(Base):
+    """A single SERP position from the ARSENKIN 'check-top' parser: one row per
+    (keyword, search engine, region, position) on a capture date."""
+
+    __tablename__ = "serp_result"
+    __table_args__ = (
+        UniqueConstraint("keyword", "se", "region", "position", "captured_on", name="uq_serp"),
+        Index("ix_serp_kw", "keyword", "se", "captured_on"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    keyword: Mapped[str] = mapped_column(Text)
+    se: Mapped[int] = mapped_column(Integer)            # arsenkin se.type (1/2/3/11/12…)
+    region: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    position: Mapped[int] = mapped_column(Integer)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    captured_on: Mapped[date_type] = mapped_column(Date, index=True)
+    task_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
 class AppSetting(Base):
     """Runtime-editable key/value config (optionally encrypted)."""
 

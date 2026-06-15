@@ -323,6 +323,7 @@ def admin_page(request: Request, msg: str | None = None, db: Session = Depends(g
             "msg": msg,
             "gsc_mode": get_cred("gsc_auth_mode"),
             "yandex_connected": bool(get_cred("yandex_wm_token")),
+            "arsenkin_connected": bool(get_cred("arsenkin_token")),
             "oauth_redirect_uri": _public_redirect_uri(request),
             "sites": _sites(db),
             "device_cov": device_cov,
@@ -368,6 +369,16 @@ def ui_toggle_site(site_id: int, db: Session = Depends(get_db)):
         site.enabled = not site.enabled
         db.commit()
     return RedirectResponse(url=f"{BP}/admin", status_code=303)
+
+
+@router.post("/ui/arsenkin/token")
+def ui_arsenkin_token(token: str = Form(...)):
+    from app.credentials import set_cred
+
+    token = (token or "").strip()
+    set_cred("arsenkin_token", token)
+    msg = "Токен arsenkin сохранён." if token else "Токен arsenkin очищен."
+    return RedirectResponse(url=f"{BP}/admin?msg={quote(msg)}", status_code=303)
 
 
 @router.post("/ui/backfill")

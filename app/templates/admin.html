@@ -68,6 +68,21 @@
 </article>
 
 <article>
+  <header>ARSENKIN TOOLS (парсинг ТОП-10)</header>
+  {% if arsenkin_connected %}<p>✅ Токен arsenkin сохранён — можно вставить новый, чтобы заменить.</p>{% endif %}
+  <p>API-токен из <a href="https://arsenkin.ru/tools/cabinet/" target="_blank" rel="noopener">кабинета arsenkin</a>
+  (тариф STANDARD/КОРПОРАТИВНЫЙ). С ним прогон ТОП-10 по всем ключевым словам запускается так:
+  <code>python scripts/arsenkin_top.py --domain ДОМЕН --min-clicks 1 --apply</code> (сначала без
+  <code>--apply</code> — увидите смету по лимитам).</p>
+  <form method="post" action="{{ base_path }}/ui/arsenkin/token">
+    <div class="grid">
+      <label>API-токен <input type="password" name="token" autocomplete="off" placeholder="токен arsenkin"></label>
+      <label>&nbsp;<button type="submit">Сохранить токен</button></label>
+    </div>
+  </form>
+</article>
+
+<article>
   <header>Добавить сайт</header>
   <form method="post" action="{{ base_path }}/ui/sites">
     <div class="grid">

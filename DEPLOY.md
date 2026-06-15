@@ -152,6 +152,24 @@ journalctl -u seostat-metrika -f                 # лог закачки
 чтобы не качать в два процесса. Период правится в `seostat-metrika.service`
 (`--from`), время — в `.timer` (`OnCalendar`).
 
+### ARSENKIN ТОП-10 (парсинг выдачи по ключевым словам)
+
+Прогон всех собранных ключевых слов через инструмент «Выгрузка ТОП-10» arsenkin
+(Яндекс + Google), результат пишется в таблицу `serp_result`. Токен — в
+Настройках (`/stat/admin`, поле ARSENKIN) или `--token`. Соблюдаются лимиты API
+(≤5 задач разом, ≤30 запросов/мин, ретрай 429).
+```bash
+cd /opt/seostat
+# смета (без запуска): сколько фраз и лимитов уйдёт
+.venv/bin/python scripts/arsenkin_top.py --domain prokompressor.ru --min-clicks 1
+# запуск (в фоне, переживёт консоль); --se "type:region,..." настраивает ПС/регионы
+nohup .venv/bin/python scripts/arsenkin_top.py --domain prokompressor.ru \
+  --min-clicks 1 --apply > /tmp/arsenkin.log 2>&1 &
+tail -f /tmp/arsenkin.log
+```
+`--domain all` — по всем сайтам; `--file kw.txt` — взять фразы из файла; `--depth`,
+`--batch`, `--parallel` (≤5), `--rpm` (≤30) — тонкая настройка.
+
 
 ## Обновление версии
 ```bash
