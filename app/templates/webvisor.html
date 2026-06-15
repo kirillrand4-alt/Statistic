@@ -1,56 +1,131 @@
 {% extends "base.html" %}
-{% block title %}Вебвизор — записи{% endblock %}
+{% block title %}Вебвизор{% endblock %}
 {% block content %}
 <hgroup>
   <h2>🎥 Вебвизор — записи сессий</h2>
-  <p>
-    {% if total %}Роликов: <strong>{{ total }}</strong>{% if shown < total %} (показаны последние {{ shown }}){% endif %}.{% else %}Записей пока нет.{% endif %}
-  </p>
+  <p>{% if total %}Роликов: <strong>{{ total }}</strong>{% if shown < total %} (показаны последние {{ shown }}){% endif %}.{% else %}Записей пока нет.{% endif %}</p>
 </hgroup>
 
 {% if not videos %}
-  <article>
-    Записи появятся здесь после прогона рекордера:
-    <code>scripts/webvisor.py --all --source organic --min-duration 10 --oldest --record</code>.
-  </article>
+  <article>Записи появятся здесь после прогона рекордера (<code>scripts/webvisor.py … --record</code>).</article>
 {% else %}
-<div class="wv-grid">
-  {% for v in videos %}
-  <article class="wv-card">
-    <video controls preload="none" width="100%"
-           src="{{ base_path }}/webvisor/video/{{ v.visit_id }}.webm"></video>
-    <details open>
-      <summary>
-        <strong>{{ v.date_time or v.date or "—" }}</strong>
-        {% if v.duration %} · ⏱ {{ v.duration // 60 }}:{{ "%02d"|format(v.duration % 60) }}{% endif %}
-        {% if v.page_views %} · 👁 {{ v.page_views }} стр.{% endif %}
-      </summary>
-      <ul class="wv-info">
-        {% if v.city %}<li>📍 Город: <strong>{{ v.city }}</strong></li>{% endif %}
-        {% if v.source %}<li>↪ Источник: {{ v.source }}{% if v.search_engine %} / {{ v.search_engine }}{% endif %}</li>{% endif %}
-        {% if v.phrase %}<li>🔎 Запрос: <strong>{{ v.phrase }}</strong></li>{% endif %}
-        {% if v.device or v.os or v.browser %}<li>💻 {{ v.device or "" }}{% if v.os %} · {{ v.os }}{% endif %}{% if v.browser %} · {{ v.browser }}{% endif %}</li>{% endif %}
-        {% if v.entry %}<li>➡ Вход: <a href="{{ v.entry }}" target="_blank" rel="noopener">{{ v.entry }}</a></li>{% endif %}
-        {% if v.exit %}<li>⬅ Выход: <a href="{{ v.exit }}" target="_blank" rel="noopener">{{ v.exit }}</a></li>{% endif %}
-        {% if v.referer %}<li>🔗 Реферер: {{ v.referer }}</li>{% endif %}
-        {% if v.roistat %}<li>🎯 Roistat: <strong>{{ v.roistat }}</strong></li>{% endif %}
-        {% for k, val in v.utm.items() %}<li>🏷 {{ k }}: {{ val }}</li>{% endfor %}
-        <li class="wv-id">visit {{ v.visit_id }}{% if v.counter_id %} · счётчик {{ v.counter_id }}{% endif %} · {{ v.size_mb }} МБ</li>
-      </ul>
-    </details>
-  </article>
-  {% endfor %}
+<input type="search" id="wv-q" placeholder="Поиск по запросу, городу, странице, источнику…" autocomplete="off">
+<div class="wv-wrap">
+  <ul id="wv-list" class="wv-list"></ul>
+  <div class="wv-player">
+    <video id="wv-video" controls preload="auto" playsinline></video>
+    <div class="wv-speed">
+      <span>Скорость:</span>
+      <button type="button" data-s="1" class="active">1×</button>
+      <button type="button" data-s="2">2×</button>
+      <button type="button" data-s="4">4×</button>
+      <button type="button" data-s="8">8×</button>
+    </div>
+    <div id="wv-meta" class="wv-meta"></div>
+  </div>
 </div>
+<script id="wv-data" type="application/json">{{ videos | tojson }}</script>
 {% endif %}
 {% endblock %}
 
 {% block scripts %}
 <style>
-  .wv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1rem; }
-  .wv-card video { background: #000; border-radius: 6px; aspect-ratio: 16 / 10; }
-  .wv-card details { margin: 0; }
-  .wv-info { margin: .4rem 0 0; padding-left: 1rem; font-size: .85rem; }
-  .wv-info li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .wv-info .wv-id, .wv-info a { color: var(--pico-muted-color); }
+  #wv-q { margin: .5rem 0; }
+  .wv-wrap { display: grid; grid-template-columns: minmax(260px, 360px) 1fr; gap: 1rem; align-items: start; }
+  .wv-list { list-style: none; margin: 0; padding: 0; max-height: 78vh; overflow: auto;
+             border: 1px solid var(--pico-muted-border-color); border-radius: 8px; }
+  .wv-list li { padding: .5rem .7rem; cursor: pointer; border-bottom: 1px solid var(--pico-muted-border-color);
+                font-size: .85rem; line-height: 1.25; }
+  .wv-list li:hover { background: var(--pico-secondary-background); }
+  .wv-list li.active { background: var(--pico-primary-focus); }
+  .wv-player { position: sticky; top: .5rem; }
+  .wv-player video { width: 100%; background: #000; border-radius: 8px; aspect-ratio: 16 / 10; }
+  .wv-speed { display: flex; gap: .4rem; align-items: center; margin: .5rem 0; }
+  .wv-speed button { width: auto; padding: .2rem .6rem; margin: 0; }
+  .wv-speed button.active { background: var(--pico-primary); color: #fff; }
+  .wv-meta table { width: 100%; font-size: .85rem; }
+  .wv-meta th { width: 32%; text-align: left; color: var(--pico-muted-color); font-weight: 400; vertical-align: top; }
+  .wv-meta td { word-break: break-all; }
+  @media (max-width: 800px) { .wv-wrap { grid-template-columns: 1fr; } .wv-list { max-height: 40vh; } }
 </style>
+<script>
+(function () {
+  var el = document.getElementById('wv-data');
+  if (!el) return;
+  var data = JSON.parse(el.textContent);
+  var base = "{{ base_path }}";
+  var list = document.getElementById('wv-list');
+  var video = document.getElementById('wv-video');
+  var meta = document.getElementById('wv-meta');
+  var q = document.getElementById('wv-q');
+  var speed = 1, cur = -1;
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+    });
+  }
+  function dur(d) { if (!d) return ''; var m = Math.floor(d / 60), s = d % 60; return m + ':' + ('0' + s).slice(-2); }
+  function row(v) {
+    return [v.date_time || v.date, v.city, v.source, v.phrase ? '«' + v.phrase + '»' : '', dur(v.duration)]
+      .filter(Boolean).join(' · ');
+  }
+  function metaHtml(v) {
+    var r = [];
+    if (v.date_time || v.date) r.push(['Дата/время', v.date_time || v.date]);
+    if (v.duration) r.push(['Длительность', dur(v.duration)]);
+    if (v.page_views) r.push(['Просмотров', v.page_views]);
+    if (v.city) r.push(['Город', v.city]);
+    if (v.source) r.push(['Источник', v.source + (v.search_engine ? ' / ' + v.search_engine : '')]);
+    if (v.phrase) r.push(['Поисковый запрос', v.phrase]);
+    if (v.device || v.os || v.browser) r.push(['Устройство', [v.device, v.os, v.browser].filter(Boolean).join(' · ')]);
+    if (v.entry) r.push(['Страница входа', '<a href="' + esc(v.entry) + '" target="_blank" rel="noopener">' + esc(v.entry) + '</a>']);
+    if (v.exit) r.push(['Страница выхода', '<a href="' + esc(v.exit) + '" target="_blank" rel="noopener">' + esc(v.exit) + '</a>']);
+    if (v.referer) r.push(['Реферер', v.referer]);
+    if (v.roistat) r.push(['Roistat ID', v.roistat]);
+    var utm = v.utm || {};
+    for (var k in utm) r.push([k, utm[k]]);
+    r.push(['visit', v.visit_id + (v.counter_id ? ' · счётчик ' + v.counter_id : '') + ' · ' + v.size_mb + ' МБ']);
+    return '<table><tbody>' + r.map(function (x) {
+      var val = (x[0] === 'Страница входа' || x[0] === 'Страница выхода') ? x[1] : esc(x[1]);
+      return '<tr><th>' + esc(x[0]) + '</th><td>' + val + '</td></tr>';
+    }).join('') + '</tbody></table>';
+  }
+  function play(i, li) {
+    cur = i;
+    var v = data[i];
+    Array.prototype.forEach.call(list.children, function (n) { n.classList.remove('active'); });
+    if (li) li.classList.add('active');
+    video.src = base + '/webvisor/video/' + v.visit_id + '.webm';
+    video.playbackRate = speed;
+    video.play().catch(function () {});
+    meta.innerHTML = metaHtml(v);
+  }
+  function render() {
+    var f = (q.value || '').toLowerCase();
+    list.innerHTML = '';
+    data.forEach(function (v, i) {
+      var hay = [v.date, v.city, v.source, v.phrase, v.entry, v.exit, v.device].join(' ').toLowerCase();
+      if (f && hay.indexOf(f) < 0) return;
+      var li = document.createElement('li');
+      li.textContent = row(v) || ('visit ' + v.visit_id);
+      li.onclick = function () { play(i, li); };
+      if (i === cur) li.classList.add('active');
+      list.appendChild(li);
+    });
+  }
+  video.addEventListener('loadeddata', function () { video.playbackRate = speed; });
+  Array.prototype.forEach.call(document.querySelectorAll('.wv-speed button'), function (b) {
+    b.onclick = function () {
+      speed = parseFloat(b.dataset.s);
+      video.playbackRate = speed;
+      Array.prototype.forEach.call(document.querySelectorAll('.wv-speed button'), function (x) { x.classList.remove('active'); });
+      b.classList.add('active');
+    };
+  });
+  q.oninput = render;
+  render();
+  if (data.length) play(0, list.querySelector('li'));
+})();
+</script>
 {% endblock %}
