@@ -22,6 +22,7 @@ Metrica keeps Webvisor recordings ≈15 days, so older visits can't be replayed.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import sys
@@ -106,6 +107,60 @@ def cmd_probe(sessions, tmpl) -> None:
         ctx.close()
 
 
+def cmd_discover(counter) -> None:
+    """Open the Webvisor list and capture the XHR that carries session data
+    (visit_id + user_id_hash), so we learn the internal endpoint + its shape."""
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+    url = f"https://metrika.yandex.ru/stat/visor?id={counter}&period=today"
+    print(f"Discover: открываю список {url}")
+    hits, all_json = [], []
+
+    def on_resp(resp):
+        try:
+            if "json" not in (resp.headers.get("content-type", "") or ""):
+                return
+            body = resp.text()
+        except Exception:
+            return
+        all_json.append(resp.url)
+        if any(k in body for k in ("user_id_hash", "userIdHash", "visit_id", "visitId")):
+            hits.append((resp.url, body))
+
+    with _pw()() as p:
+        ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=True, viewport=VIEWPORT)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.on("response", on_resp)
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(8000)
+        try:
+            page.mouse.wheel(0, 4000)  # nudge any lazy-loading list
+            page.wait_for_timeout(4000)
+        except Exception:
+            pass
+        if "passport" in page.url or "auth" in page.url:
+            print("  ⚠ не залогинен — сначала пройди --login.")
+        ctx.close()
+
+    print(f"\nJSON-ответов всего: {len(all_json)}; из них с нужными полями: {len(hits)}")
+    for i, (u, b) in enumerate(hits[:6]):
+        path = os.path.join(DEBUG_DIR, f"list_{i}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(b)
+        keys = ""
+        try:
+            d = json.loads(b)
+            keys = ", ".join(list(d.keys())[:12]) if isinstance(d, dict) else f"<{type(d).__name__}>"
+        except Exception:
+            pass
+        j = b.find("user_id_hash")
+        snip = b[max(0, j - 60):j + 120].replace("\n", " ") if j >= 0 else b[:180].replace("\n", " ")
+        print(f"\n[{i}] {u}\n   top-keys: {keys}\n   рядом с user_id_hash: …{snip}…\n   (сохранил: {path})")
+    if not hits:
+        print("Не поймал нужный ответ. Список последних JSON-URL:")
+        for u in all_json[-12:]:
+            print("  ", u)
+
+
 def _done_ids() -> set[str]:
     if not os.path.isdir(OUT_DIR):
         return set()
@@ -183,6 +238,7 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--login", action="store_true", help="войти в Яндекс (headful, через VNC)")
     ap.add_argument("--probe", action="store_true", help="открыть 1 сессию: скриншот+html+URL (рекон)")
+    ap.add_argument("--discover", action="store_true", help="найти внутренний API списка Вебвизора (перехват сети)")
     ap.add_argument("--record", action="store_true", help="записать видео сессий")
     ap.add_argument("--replay-url", dest="replay", default="", help="шаблон URL реплея ({counter},{visit_id})")
     ap.add_argument("--speed", type=float, default=1.0, help="множитель скорости плеера (бюджет времени)")
@@ -212,6 +268,13 @@ def main() -> None:
         kw = {"source": a.source, "min_page_views": a.min_pv, "min_duration": a.min_dur}
         sessions = W.sessions_for_period(db, sid, dr, limit=(a.limit or None), **kw)
 
+        if a.discover:
+            counter = sessions[0]["counter_id"] if sessions else None
+            if not counter:
+                print("Нет визитов в базе для этого сайта — не из чего взять counter id.")
+                return
+            cmd_discover(counter)
+            return
         if a.probe:
             cmd_probe(sessions, a.replay)
             return
