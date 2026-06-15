@@ -21,6 +21,7 @@ from app.api import (
 )
 from app.bootstrap import bootstrap
 from app.config import get_settings
+from app.formlimit import apply_upload_limit
 from app.db.base import SessionLocal, init_db
 from app.scheduler.jobs import shutdown_scheduler, start_scheduler
 from app.web import STATIC_DIR, templates
@@ -44,7 +45,9 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    bp = get_settings().base_path  # "" or e.g. "/stat"
+    settings = get_settings()
+    bp = settings.base_path  # "" or e.g. "/stat"
+    apply_upload_limit(max(1, settings.max_upload_mb) * 1024 * 1024)
 
     app = FastAPI(
         title="SEO Статистика",

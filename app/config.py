@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # Public base URL (e.g. https://parsercompressor.online) for OAuth redirects.
     # If empty, it is derived from the incoming request (Host + X-Forwarded-Proto).
     public_base_url: str = ""
+    # Max size (MB) of a single uploaded file / form field. Starlette defaults to
+    # 1 MB per part, which is too small for big keyword/URL/Metrika uploads.
+    max_upload_mb: int = 64
 
     # Google Search Console
     gsc_auth_mode: str = "service_account"  # service_account | oauth
