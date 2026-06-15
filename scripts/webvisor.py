@@ -30,6 +30,7 @@ import re
 import sys
 import time
 from datetime import date, timedelta
+from urllib.parse import unquote
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -158,16 +159,24 @@ def cmd_discover(counter) -> None:
         path = os.path.join(DEBUG_DIR, f"hit_{i}.json")
         with open(path, "w", encoding="utf-8") as f:
             f.write(b)
+        if post:
+            with open(path + ".post.txt", "w", encoding="utf-8") as f:
+                f.write(post)
         tag = "  <-- содержит наш visit_id!" if hn else ""
         print(f"\n[{i}] {method} {u}\n   ct={ct} len={len(b)}{tag}  ({path})")
         if post:
-            print(f"   POST: {post[:200]}")
+            print(f"   POST: {unquote(post)[:700]}")
+        try:
+            print(f"   shape: {_shape(json.loads(b))[:700]}")
+        except Exception:
+            pass
+        found = False
         for nd in needles:
             j = b.find(nd)
             if j >= 0:
-                print(f"   рядом с {nd}: …{b[max(0, j - 110):j + 60]}…")
-                break
-        else:
+                found = True
+                print(f"   рядом с {nd}: …{b[max(0, j - 140):j + 70]}…")
+        if not found:
             print(f"   тело[:300]: {b[:300]}")
     if not grabbed:
         print("Не нашёл список сессий. Все просмотренные текстовые URL:")
@@ -177,7 +186,7 @@ def cmd_discover(counter) -> None:
 
 def _shape(d, depth=0):
     if isinstance(d, dict):
-        if depth >= 2:
+        if depth >= 3:
             return "{…}"
         items = list(d.items())[:10]
         return "{" + ",".join(f"{k}:{_shape(v, depth + 1)}" for k, v in items) + ("…}" if len(d) > 10 else "}")
@@ -192,9 +201,10 @@ def cmd_inspect() -> None:
     sit, and a snippet after the first "data" so we can read a real session row."""
     pat = re.compile(r'"([A-Za-z_]*(?:hash|visit|watch|uid|user|client|uniq|durat)[A-Za-z_]*)"', re.I)
     needles = ["3320642230537945170", "212544696", "3320726018304245762", "3663266546"]
-    files = sorted(glob.glob(os.path.join(DEBUG_DIR, "api_*.json")))
+    files = sorted(glob.glob(os.path.join(DEBUG_DIR, "api_*.json")) +
+                   glob.glob(os.path.join(DEBUG_DIR, "hit_*.json")))
     if not files:
-        print("Нет файлов api_*.json — сначала запусти --discover.")
+        print("Нет файлов api_*/hit_*.json — сначала запусти --discover.")
         return
     for f in files:
         t = open(f, encoding="utf-8").read()
