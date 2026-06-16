@@ -134,10 +134,11 @@
   <header>Выполнено целей по брендам{% if brand_goals.favorites %} (избранные){% endif %} — за период</header>
   <figure>
   <table class="sortable">
-    <thead><tr><th>Бренд</th><th>Клики</th><th>Достижений целей</th></tr></thead>
+    <thead><tr><th>Бренд</th><th>Клики</th><th>Достижений целей</th><th>Конверсия</th></tr></thead>
     <tbody>
     {% for r in brand_goals.rows %}
-      <tr><td>{{ r.brand }}</td><td>{{ r.clicks|numfmt }}</td><td>{{ r.goals|numfmt }}</td></tr>
+      <tr><td>{{ r.brand }}</td><td>{{ r.clicks|numfmt }}</td><td>{{ r.goals|numfmt }}</td>
+          <td>{% if r.conv is not none %}{{ r.conv }}%{% else %}—{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -192,21 +193,6 @@
     </table>
     </figure>
   </details>
-</article>
-
-<article>
-  <header>CTR по страницам</header>
-  <figure>
-  <table class="sortable">
-    <thead><tr><th>URL</th><th>Клики</th><th>Показы</th><th>CTR</th><th>Позиция</th></tr></thead>
-    <tbody>
-    {% for p in ctr.pages %}
-      <tr><td><small>{{ p.url }}</small></td><td>{{ p.clicks|numfmt }}</td>
-          <td>{{ p.impressions|numfmt }}</td><td>{{ p.ctr|ctr }}</td><td>{{ p.position|pos }}</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  </figure>
 </article>
 {% endblock %}
 

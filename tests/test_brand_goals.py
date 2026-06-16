@@ -41,7 +41,9 @@ def test_brand_goals_and_clicks_by_brand(db, site):
     res = _brand_goals(db, p, site, DR, "example.com")
     by = {r["brand"]: r for r in res["rows"]}
     assert by["Aso"]["goals"] == 2 and by["Aso"]["clicks"] == 5
+    assert by["Aso"]["conv"] == 40.0                 # 2 goals / 5 clicks * 100
     assert by["Berg"]["goals"] == 0 and by["Berg"]["clicks"] == 0
+    assert by["Berg"]["conv"] is None                # no clicks → no conversion
     assert res["total"] == 2 and res["total_clicks"] == 5
     assert res["rows"][0]["brand"] == "Aso"          # sorted: top goals first
 

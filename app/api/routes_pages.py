@@ -991,7 +991,6 @@ def project_page(request: Request, project_id: int, start: str | None = None,
             "brands": brand_list, "sel_brands": sel_brands,
             "top_keywords": top_keywords_for_project(db, project, dr, order_by,
                                                      site_ids=site_ids, only_norms=only_norms),
-            "ctr": ctr_for_project(db, project, dr, site_ids=site_ids, only_norms=only_norms),
             "subset_totals": totals_svc.subset_totals(db, project, dr, site_ids=site_ids,
                                                       only_norms=only_norms),
             "daily": totals_svc.bucket_series(
@@ -1089,7 +1088,6 @@ def _brand_goals(db, project, site, dr, domain, site_ids=None):
     project has no brand map. A URL tied to several brands counts under each."""
     from app.db.models import UrlBrand
     from app.services import goals as goals_svc
-    from app.services.ctr import ctr_for_project
 
     if site is None or not domain:
         return None
@@ -1118,7 +1116,8 @@ def _brand_goals(db, project, site, dr, domain, site_ids=None):
         a = agg.setdefault(brand, {"goals": 0, "clicks": 0})
         a["goals"] += key_goals.get(url_key, 0)
         a["clicks"] += key_clicks.get(url_key, 0)
-    rows = sorted(({"brand": b, "goals": v["goals"], "clicks": v["clicks"]}
+    rows = sorted(({"brand": b, "goals": v["goals"], "clicks": v["clicks"],
+                    "conv": round(v["goals"] / v["clicks"] * 100, 1) if v["clicks"] else None}
                    for b, v in agg.items()),
                   key=lambda r: (-r["goals"], -r["clicks"], r["brand"]))
     return {"rows": rows, "total": stats["total"],
