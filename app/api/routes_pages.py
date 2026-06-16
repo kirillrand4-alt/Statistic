@@ -998,6 +998,7 @@ def project_page(request: Request, project_id: int, start: str | None = None,
                 totals_svc.subset_daily(db, project, dr, site_ids=site_ids,
                                         only_norms=only_norms), gran),
             "goals": _project_goals(db, project, site, dr, gran, brand_keys=brand_keys),
+            "brand_goals": _brand_goals(db, project, site, dr, domain),
         },
     )
 
@@ -1080,6 +1081,42 @@ def _project_goals(db, project, site, dr, gran, brand_keys=None):
     names = goals_svc.goal_names(db, vids)
     return {"stats": stats, "names": names, "favorites": favs,
             "chart": _goals_chart(stats, names, dr, gran)}
+
+
+def _brand_goals(db, project, site, dr, domain):
+    """Favourite-goal completions grouped by brand (landing page → brand), across
+    ALL brands of the domain. ``None`` if the project has no brand map. A URL tied
+    to several brands counts under each."""
+    from app.db.models import UrlBrand
+    from app.services import goals as goals_svc
+
+    if site is None or not domain:
+        return None
+    brand_rows = db.execute(
+        select(UrlBrand.url_key, UrlBrand.brand).where(UrlBrand.domain == domain)
+    ).all()
+    if not brand_rows:
+        return None
+    vids, _ = _same_domain_site_ids(db, site)
+    url_for_key = {}
+    for (u,) in db.execute(
+        select(ProjectUrl.url).where(ProjectUrl.project_id == project.id)
+    ).all():
+        url_for_key.setdefault(goals_svc.page_key(u), u)
+    if not url_for_key:
+        return None
+    favs = goals_svc.parse_favorites(project.favorite_goals)
+    stats = goals_svc.goal_stats(db, vids, dr, url_for_key, favorites=(favs or None), top=10**9)
+    key_count = {goals_svc.page_key(r["url"]): r["count"] for r in stats["by_url"]}
+    brand_count: dict[str, int] = {}
+    for url_key, brand in brand_rows:
+        brand_count.setdefault(brand, 0)
+        c = key_count.get(url_key)
+        if c:
+            brand_count[brand] += c
+    rows = sorted(({"brand": b, "goals": c} for b, c in brand_count.items()),
+                  key=lambda r: (-r["goals"], r["brand"]))
+    return {"rows": rows, "total": stats["total"], "favorites": favs}
 
 
 @router.post("/ui/projects/{project_id}/goals")
