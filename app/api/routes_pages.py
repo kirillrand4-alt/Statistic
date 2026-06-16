@@ -998,7 +998,7 @@ def project_page(request: Request, project_id: int, start: str | None = None,
                 totals_svc.subset_daily(db, project, dr, site_ids=site_ids,
                                         only_norms=only_norms), gran),
             "goals": _project_goals(db, project, site, dr, gran, brand_keys=brand_keys),
-            "brand_goals": _brand_goals(db, project, site, dr, domain),
+            "brand_goals": _brand_goals(db, project, site, dr, domain, site_ids=site_ids),
         },
     )
 
@@ -1083,12 +1083,13 @@ def _project_goals(db, project, site, dr, gran, brand_keys=None):
             "chart": _goals_chart(stats, names, dr, gran)}
 
 
-def _brand_goals(db, project, site, dr, domain):
-    """Favourite-goal completions grouped by brand (landing page → brand), across
-    ALL brands of the domain. ``None`` if the project has no brand map. A URL tied
-    to several brands counts under each."""
+def _brand_goals(db, project, site, dr, domain, site_ids=None):
+    """Search clicks AND favourite-goal completions grouped by brand (the brand of
+    the project/landing page), across ALL brands of the domain. ``None`` if the
+    project has no brand map. A URL tied to several brands counts under each."""
     from app.db.models import UrlBrand
     from app.services import goals as goals_svc
+    from app.services.ctr import ctr_for_project
 
     if site is None or not domain:
         return None
@@ -1107,16 +1108,21 @@ def _brand_goals(db, project, site, dr, domain):
         return None
     favs = goals_svc.parse_favorites(project.favorite_goals)
     stats = goals_svc.goal_stats(db, vids, dr, url_for_key, favorites=(favs or None), top=10**9)
-    key_count = {goals_svc.page_key(r["url"]): r["count"] for r in stats["by_url"]}
-    brand_count: dict[str, int] = {}
+    key_goals = {goals_svc.page_key(r["url"]): r["count"] for r in stats["by_url"]}
+    key_clicks: dict[str, int] = {}
+    for p in ctr_for_project(db, project, dr, site_ids=site_ids, only_norms=None)["pages"]:
+        k = goals_svc.page_key(p["url"])
+        key_clicks[k] = key_clicks.get(k, 0) + int(p["clicks"] or 0)
+    agg: dict[str, dict] = {}
     for url_key, brand in brand_rows:
-        brand_count.setdefault(brand, 0)
-        c = key_count.get(url_key)
-        if c:
-            brand_count[brand] += c
-    rows = sorted(({"brand": b, "goals": c} for b, c in brand_count.items()),
-                  key=lambda r: (-r["goals"], r["brand"]))
-    return {"rows": rows, "total": stats["total"], "favorites": favs}
+        a = agg.setdefault(brand, {"goals": 0, "clicks": 0})
+        a["goals"] += key_goals.get(url_key, 0)
+        a["clicks"] += key_clicks.get(url_key, 0)
+    rows = sorted(({"brand": b, "goals": v["goals"], "clicks": v["clicks"]}
+                   for b, v in agg.items()),
+                  key=lambda r: (-r["goals"], -r["clicks"], r["brand"]))
+    return {"rows": rows, "total": stats["total"],
+            "total_clicks": sum(key_clicks.values()), "favorites": favs}
 
 
 @router.post("/ui/projects/{project_id}/goals")

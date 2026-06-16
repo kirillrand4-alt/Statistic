@@ -134,15 +134,15 @@
   <header>Выполнено целей по брендам{% if brand_goals.favorites %} (избранные){% endif %} — за период</header>
   <figure>
   <table class="sortable">
-    <thead><tr><th>Бренд</th><th>Достижений целей</th></tr></thead>
+    <thead><tr><th>Бренд</th><th>Клики</th><th>Достижений целей</th></tr></thead>
     <tbody>
     {% for r in brand_goals.rows %}
-      <tr><td>{{ r.brand }}</td><td>{{ r.goals|numfmt }}</td></tr>
+      <tr><td>{{ r.brand }}</td><td>{{ r.clicks|numfmt }}</td><td>{{ r.goals|numfmt }}</td></tr>
     {% endfor %}
     </tbody>
   </table>
   </figure>
-  <small>Достижения {% if brand_goals.favorites %}избранных {% endif %}целей по странице входа, сгруппированные по бренду этой страницы. Всего уникальных достижений: {{ brand_goals.total|numfmt }}. URL, отнесённый к нескольким брендам, учитывается в каждом.</small>
+  <small>Клики (поиск) и достижения {% if brand_goals.favorites %}избранных {% endif %}целей по страницам бренда за период. Всего: кликов {{ brand_goals.total_clicks|numfmt }}, достижений {{ brand_goals.total|numfmt }}. URL, отнесённый к нескольким брендам, учитывается в каждом.</small>
 </article>
 {% endif %}
 
