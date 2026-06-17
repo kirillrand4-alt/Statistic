@@ -190,12 +190,47 @@ def test_antifraud_merge_dedups_devices(db):
     assert summ["raw_impressions"] == 230
 
 
-def test_project_page_merge_renders(client, db):
+def test_project_page_combines_same_domain(client, db):
     a = _site(db, "sc-domain:example.com")
-    _site(db, "https://example.com/")
+    b = _site(db, "https://example.com/")
+    d, url = date(2026, 6, 1), "https://example.com/p"
+    pa, pb = _page(db, a.id, url), _page(db, b.id, url)
+    db.add_all([
+        PageMetricDaily(site_id=a.id, page_id=pa, date=d, clicks=10, impressions=100, position=2.0),
+        PageMetricDaily(site_id=b.id, page_id=pb, date=d, clicks=12, impressions=120, position=2.0),
+    ])
     proj = Project(name="P", site_id=a.id)
     db.add(proj)
     db.commit()
-    r = client.get(f"/projects/{proj.id}?merge=1")
+    db.add(ProjectUrl(project_id=proj.id, url=url, normalized_url=normalize_url(url)))
+    db.commit()
+    r = client.get(f"/projects/{proj.id}?start={d}&end={d}")
     assert r.status_code == 200
-    assert "Объединено свойств домена" in r.text
+    assert "Поисковая система" in r.text          # engine selector replaces the merge checkbox
+    # same-domain GSC twins are de-duped within the engine: max(10,12)=12, not 22
+    assert "<h3>12</h3>" in r.text
+
+
+def test_project_page_combines_engines(client, db):
+    g = _site(db, "https://example.com/")                       # GSC property
+    yw = ensure_sources(db)["yandex_webmaster"]
+    y = Site(source_id=yw.id, property_uri="https://example.com/", display_name="y")
+    db.add(y)
+    db.commit()
+    d, url = date(2026, 6, 1), "https://example.com/p"
+    pg, py = _page(db, g.id, url), _page(db, y.id, url)
+    db.add_all([
+        PageMetricDaily(site_id=g.id, page_id=pg, date=d, clicks=10, impressions=100, position=2.0),
+        PageMetricDaily(site_id=y.id, page_id=py, date=d, clicks=7, impressions=70, position=3.0),
+    ])
+    proj = Project(name="P", site_id=g.id)
+    db.add(proj)
+    db.commit()
+    db.add(ProjectUrl(project_id=proj.id, url=url, normalized_url=normalize_url(url)))
+    db.commit()
+    base = f"/projects/{proj.id}?start={d}&end={d}"
+    assert "<h3>17</h3>" in client.get(base).text                       # both engines summed (10+7)
+    assert "<h3>10</h3>" in client.get(base + "&engines=gsc").text       # only Google
+    assert "<h3>7</h3>" in client.get(base + "&engines=yandex_webmaster").text  # only Yandex
+    page = client.get(base).text
+    assert "Google" in page and "Яндекс" in page                        # both selectable

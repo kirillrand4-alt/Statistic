@@ -951,8 +951,9 @@ def gsc_oauth_callback(request: Request, code: str = "", state: str = "", error:
 
 @router.get("/projects/{project_id}")
 def project_page(request: Request, project_id: int, start: str | None = None,
-                 end: str | None = None, order_by: str = "clicks", merge: int = 0,
-                 gran: str = "day", brand: list[str] | None = Query(None),
+                 end: str | None = None, order_by: str = "clicks", gran: str = "day",
+                 brand: list[str] | None = Query(None),
+                 engines: list[str] | None = Query(None),
                  msg: str | None = None, db: Session = Depends(get_db)):
     from app.services import brands as brands_svc
     from app.services.goals import page_key
@@ -962,21 +963,35 @@ def project_page(request: Request, project_id: int, start: str | None = None,
         raise HTTPException(404, "project not found")
     dr = parse_date_range(start, end)
     site = db.get(Site, project.site_id)
-    site_ids, merged = None, None
-    if merge and site is not None:
-        ids = _same_domain_ids(db, site)
-        if len(ids) > 1:
-            site_ids = ids
-            merged = {"count": len(ids), "domain": domain_of(site.property_uri)}
+    domain = domain_of(site.property_uri) if site else ""
+
+    # Search engines that have this domain + the selected subset (default: all of
+    # them). Within an engine its same-host properties (sc-domain: + https://) are
+    # de-duped; clicks/impressions are SUMMED across the chosen engines.
+    engine_ids_all = _domain_engine_ids(db, domain, SEARCH_ENGINES) if domain else {}
+    engines_avail = [e for e in SEARCH_ENGINES if e in engine_ids_all]
+    sel = [e for e in (engines or engines_avail) if e in engines_avail] or engines_avail
+    parts_ids = [engine_ids_all[e] for e in sel]
+    flat_ids = [sid for ids in parts_ids for sid in ids] or ([site.id] if site else None)
 
     # Brand filter: restrict the project's URLs to the chosen brands of its domain
-    domain = domain_of(site.property_uri) if site else ""
     brand_list = brands_svc.list_brands(db, domain) if domain else []
     sel_brands = [b for b in (brand or []) if any(x["brand"] == b for x in brand_list)]
     only_norms, brand_keys = None, None
     if sel_brands:
         brand_keys = brands_svc.brand_url_keys(db, domain, sel_brands)
         only_norms = {u.normalized_url for u in project.urls if page_key(u.url) in brand_keys}
+
+    if parts_ids:  # per engine (de-dup within), then summed across engines
+        subset = totals_svc.combine_totals(
+            [totals_svc.subset_totals(db, project, dr, site_ids=ids, only_norms=only_norms)
+             for ids in parts_ids])
+        daily = totals_svc.combine_daily(
+            [totals_svc.subset_daily(db, project, dr, site_ids=ids, only_norms=only_norms)
+             for ids in parts_ids])
+    else:
+        subset = totals_svc.subset_totals(db, project, dr, only_norms=only_norms)
+        daily = totals_svc.subset_daily(db, project, dr, only_norms=only_norms)
 
     return templates.TemplateResponse(
         request,
@@ -986,18 +1001,15 @@ def project_page(request: Request, project_id: int, start: str | None = None,
             "project": project,
             "site": site,
             "range": dr, "msg": msg,
-            "order_by": order_by,
-            "merge": bool(merge), "merged": merged, "gran": gran,
+            "order_by": order_by, "gran": gran,
+            "engines": sel, "engines_avail": engines_avail,
             "brands": brand_list, "sel_brands": sel_brands,
             "top_keywords": top_keywords_for_project(db, project, dr, order_by,
-                                                     site_ids=site_ids, only_norms=only_norms),
-            "subset_totals": totals_svc.subset_totals(db, project, dr, site_ids=site_ids,
-                                                      only_norms=only_norms),
-            "daily": totals_svc.bucket_series(
-                totals_svc.subset_daily(db, project, dr, site_ids=site_ids,
-                                        only_norms=only_norms), gran),
+                                                     site_ids=flat_ids, only_norms=only_norms),
+            "subset_totals": subset,
+            "daily": totals_svc.bucket_series(daily, gran),
             "goals": _project_goals(db, project, site, dr, gran, brand_keys=brand_keys),
-            "brand_goals": _brand_goals(db, project, site, dr, domain, site_ids=site_ids),
+            "brand_goals": _brand_goals(db, project, site, dr, domain, parts_ids=parts_ids),
         },
     )
 
@@ -1082,10 +1094,12 @@ def _project_goals(db, project, site, dr, gran, brand_keys=None):
             "chart": _goals_chart(stats, names, dr, gran)}
 
 
-def _brand_goals(db, project, site, dr, domain, site_ids=None):
+def _brand_goals(db, project, site, dr, domain, parts_ids=None):
     """Search clicks AND favourite-goal completions grouped by brand (the brand of
     the project/landing page), across ALL brands of the domain. ``None`` if the
-    project has no brand map. A URL tied to several brands counts under each."""
+    project has no brand map. A URL tied to several brands counts under each.
+    ``parts_ids`` = per-engine site-id lists (clicks de-duped within an engine,
+    summed across engines); None = the project's own site."""
     from app.db.models import UrlBrand
     from app.services import goals as goals_svc
 
@@ -1108,9 +1122,10 @@ def _brand_goals(db, project, site, dr, domain, site_ids=None):
     stats = goals_svc.goal_stats(db, vids, dr, url_for_key, favorites=(favs or None), top=10**9)
     key_goals = {goals_svc.page_key(r["url"]): r["count"] for r in stats["by_url"]}
     key_clicks: dict[str, int] = {}
-    for p in ctr_for_project(db, project, dr, site_ids=site_ids, only_norms=None)["pages"]:
-        k = goals_svc.page_key(p["url"])
-        key_clicks[k] = key_clicks.get(k, 0) + int(p["clicks"] or 0)
+    for ids in (parts_ids or [None]):          # per engine: de-dup within, sum across
+        for p in ctr_for_project(db, project, dr, site_ids=ids, only_norms=None)["pages"]:
+            k = goals_svc.page_key(p["url"])
+            key_clicks[k] = key_clicks.get(k, 0) + int(p["clicks"] or 0)
     agg: dict[str, dict] = {}
     for url_key, brand in brand_rows:
         a = agg.setdefault(brand, {"goals": 0, "clicks": 0})

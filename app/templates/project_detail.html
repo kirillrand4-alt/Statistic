@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "partials/site_selector.html" import gran_select %}
+{% from "partials/site_selector.html" import gran_select, engine_checks %}
 {% block title %}{{ project.name }} · SEO Статистика{% endblock %}
 {% block content %}
 <hgroup>
@@ -33,7 +33,7 @@
       </select>
     </label>
     {{ gran_select(gran) }}
-    <label><input type="checkbox" name="merge" value="1" {% if merge %}checked{% endif %}> Объединить домен</label>
+    {{ engine_checks(engines, engines_avail) }}
     <label>&nbsp;<button type="submit">Обновить</button></label>
   </div>
   {% if brands %}
@@ -52,8 +52,7 @@
   {% endif %}
 </form>
 {% if sel_brands %}<p><mark>Фильтр по брендам: {{ sel_brands|join(', ') }}.</mark></p>{% endif %}
-{% if merged %}<p><mark>Объединено свойств домена «{{ merged.domain }}»: {{ merged.count }} (макс. на URL/день, без задвоения https:// и sc-domain:).</mark></p>
-{% elif merge %}<p><small>Другого свойства того же домена не нашлось — объединять нечего.</small></p>{% endif %}
+{% if engines_avail|length > 1 %}<p><small>Внутри одной ПС свойства (<code>https://</code> и <code>sc-domain:</code>) не задваиваются; клики/показы выбранных ПС суммируются.{% if not engines %} <mark>Отметьте хотя бы одну поисковую систему.</mark>{% endif %}</small></p>{% endif %}
 
 <article>
   <header>Бренды сайта (CSV: «бренд; ссылка»)</header>

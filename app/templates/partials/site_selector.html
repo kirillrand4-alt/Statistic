@@ -31,3 +31,21 @@
     {{ engine_icon('yandex_webmaster') }} Яндекс</label>
 </fieldset>
 {% endmacro %}
+
+{# Engine checkboxes only (no domain picker) — for pages bound to one domain.
+   `avail` = engine codes the domain actually has; `engines` = checked codes. #}
+{% macro engine_checks(engines, avail) %}
+<fieldset style="margin:0;">
+  <legend><small>Поисковая система</small></legend>
+  {% if 'gsc' in avail %}
+  <label style="display:inline-flex;align-items:center;gap:.3rem;margin-right:1rem;">
+    <input type="checkbox" name="engines" value="gsc" {% if 'gsc' in engines %}checked{% endif %} onchange="this.form.submit()">
+    {{ engine_icon('gsc') }} Google</label>
+  {% endif %}
+  {% if 'yandex_webmaster' in avail %}
+  <label style="display:inline-flex;align-items:center;gap:.3rem;">
+    <input type="checkbox" name="engines" value="yandex_webmaster" {% if 'yandex_webmaster' in engines %}checked{% endif %} onchange="this.form.submit()">
+    {{ engine_icon('yandex_webmaster') }} Яндекс</label>
+  {% endif %}
+</fieldset>
+{% endmacro %}
