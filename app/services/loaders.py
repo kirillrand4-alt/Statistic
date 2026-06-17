@@ -33,6 +33,32 @@ def _idlist(site_id) -> list[int]:
     return as_id_list(site_id)
 
 
+# Chunk a large `page_id IN (...)` list so it never exceeds SQLite's bound-variable
+# limit (999 on older builds, 32766 on 3.32+). Big projects — especially when
+# merging same-domain properties multiplies page_ids — otherwise overflow it and
+# the metrics query fails/returns wrong totals. Kept well under the oldest limit
+# (999), leaving headroom for the site_id + date bind params in the same query.
+_VAR_CHUNK = 800
+
+
+def _fetch(db, base_stmt, id_col, page_ids):
+    """Run ``base_stmt``; if ``page_ids`` is given, filter by ``id_col IN page_ids``
+    in chunks and concatenate rows (each id falls in exactly one chunk, so sums are
+    exact). ``page_ids=None`` = no id filter; empty list = no rows."""
+    if page_ids is None:
+        return db.execute(base_stmt).all()
+    ids = list(page_ids)
+    if not ids:
+        return []
+    if len(ids) <= _VAR_CHUNK:
+        return db.execute(base_stmt.where(id_col.in_(ids))).all()
+    rows = []
+    for i in range(0, len(ids), _VAR_CHUNK):
+        rows.extend(db.execute(base_stmt.where(id_col.in_(ids[i:i + _VAR_CHUNK]))).all())
+    return rows
+
+
+
 def resolve_page_ids(db, site_ids, urls) -> list[int]:
     """page_ids for the given URLs within ``site_ids``, matched by normalized URL
     regardless of http/https, www or trailing slash."""
@@ -49,9 +75,8 @@ def resolve_page_ids(db, site_ids, urls) -> list[int]:
     ids = as_id_list(site_ids)
     if not ids or not norms:
         return []
-    return [pid for (pid,) in db.execute(
-        select(Page.id).where(Page.site_id.in_(ids), Page.normalized_url.in_(list(norms)))
-    ).all()]
+    base = select(Page.id).where(Page.site_id.in_(ids))
+    return [pid for (pid,) in _fetch(db, base, Page.normalized_url, list(norms))]
 
 
 def _collapse_overlap(df: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
@@ -69,12 +94,8 @@ def project_page_id_map(db: Session, site_id: int, project: Project) -> dict[str
     norms = [u.normalized_url for u in project.urls]
     if not norms:
         return {}
-    rows = db.execute(
-        select(Page.normalized_url, Page.id).where(
-            Page.site_id.in_(_idlist(site_id)), Page.normalized_url.in_(norms)
-        )
-    ).all()
-    return {n: pid for n, pid in rows}
+    base = select(Page.normalized_url, Page.id).where(Page.site_id.in_(_idlist(site_id)))
+    return {n: pid for n, pid in _fetch(db, base, Page.normalized_url, norms)}
 
 
 def project_page_ids(db: Session, site_id, project: Project, only_norms=None) -> list[int]:
@@ -87,16 +108,12 @@ def project_page_ids(db: Session, site_id, project: Project, only_norms=None) ->
         norms = [n for n in norms if n in only_norms]
     if not norms:
         return []
-    rows = db.execute(
-        select(Page.id).where(
-            Page.site_id.in_(_idlist(site_id)), Page.normalized_url.in_(norms)
-        )
-    ).all()
-    return [r[0] for r in rows]
+    base = select(Page.id).where(Page.site_id.in_(_idlist(site_id)))
+    return [r[0] for r in _fetch(db, base, Page.normalized_url, norms)]
 
 
 def load_page_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.DataFrame:
-    stmt = (
+    base = (
         select(
             Page.url,
             PageMetricDaily.date,
@@ -111,14 +128,12 @@ def load_page_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.DataFr
             PageMetricDaily.date <= dr.end,
         )
     )
-    if page_ids is not None:
-        stmt = stmt.where(PageMetricDaily.page_id.in_(list(page_ids)))
-    df = pd.DataFrame(db.execute(stmt).all(), columns=PAGE_COLS)
+    df = pd.DataFrame(_fetch(db, base, PageMetricDaily.page_id, page_ids), columns=PAGE_COLS)
     return _collapse_overlap(df, ["url", "date"]) if len(_idlist(site_id)) > 1 else df
 
 
 def load_query_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.DataFrame:
-    stmt = (
+    base = (
         select(
             Page.url,
             Query.text.label("query"),
@@ -135,9 +150,7 @@ def load_query_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.DataF
             QueryMetricDaily.date <= dr.end,
         )
     )
-    if page_ids is not None:
-        stmt = stmt.where(QueryMetricDaily.page_id.in_(list(page_ids)))
-    df = pd.DataFrame(db.execute(stmt).all(), columns=QUERY_COLS)
+    df = pd.DataFrame(_fetch(db, base, QueryMetricDaily.page_id, page_ids), columns=QUERY_COLS)
     return _collapse_overlap(df, ["url", "query", "date"]) if len(_idlist(site_id)) > 1 else df
 
 
@@ -157,7 +170,7 @@ def load_site_totals_df(db, site_id, dr: DateRange) -> pd.DataFrame:
 
 
 def load_device_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.DataFrame:
-    stmt = (
+    base = (
         select(
             Page.url,
             DeviceMetricDaily.device,
@@ -173,10 +186,8 @@ def load_device_metrics_df(db, site_id, dr: DateRange, page_ids=None) -> pd.Data
             DeviceMetricDaily.date <= dr.end,
         )
     )
-    if page_ids is not None:
-        stmt = stmt.where(DeviceMetricDaily.page_id.in_(list(page_ids)))
     df = pd.DataFrame(
-        db.execute(stmt).all(),
+        _fetch(db, base, DeviceMetricDaily.page_id, page_ids),
         columns=["url", "device", "date", "clicks", "impressions", "position"],
     )
     return _collapse_overlap(df, ["url", "device", "date"]) if len(_idlist(site_id)) > 1 else df
