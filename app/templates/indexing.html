@@ -27,6 +27,119 @@
 {% endif %}
 
 {% if site %}
+{# ---------- Google: per-page index check + submission (GSC sites) ---------- #}
+<article>
+  <header>🔎 Проверка индексации в Google — постранично</header>
+  {% if g_can_inspect %}
+  <form method="post" action="{{ base_path }}/ui/indexing/google/check" enctype="multipart/form-data">
+    <input type="hidden" name="site_id" value="{{ site.id }}">
+    <div class="grid">
+      <label>Список URL (по одному в строке; можно путь вида <code>/page</code>)
+        <textarea name="urls_text" rows="6" placeholder="https://site.ru/page1&#10;/otnositelnyy-put"></textarea>
+      </label>
+      <label>…или файл (.txt / .csv)
+        <input type="file" name="file" accept=".txt,.csv,.tsv">
+      </label>
+    </div>
+    <button type="submit" {% if g_running %}disabled aria-busy="true"{% endif %}>Проверить в Google</button>
+  </form>
+  <small>Каждый URL — отдельный запрос к Google URL Inspection API (квота ~2000/сутки, до {{ 2000|numfmt }} за раз).
+  Проверка идёт в фоне — страница обновится сама.</small>
+  {% else %}
+  <p><small>Постраничная проверка индексации доступна только для сайтов <strong>Google Search Console</strong>.
+  Выберите GSC-сайт; сервисный аккаунт должен быть владельцем ресурса.</small></p>
+  {% endif %}
+</article>
+
+{% if g_inspect %}
+<article>
+  <header>
+    {% if g_inspect.running %}<span aria-busy="true">Проверка Google: {{ g_inspect.done }} / {{ g_inspect.total }}…</span>
+    {% else %}Google: в индексе <ins>{{ g_inspect.in_count }}</ins> · нет <del>{{ g_inspect.out_count }}</del> из {{ g_inspect.total }}{% endif %}
+    {% if g_inspect.error %} · <strong style="color:var(--pico-del-color, #c00)">{{ g_inspect.error }}</strong>{% endif %}
+  </header>
+  {% if not g_inspect.running and g_inspect.rows %}
+  <form method="post" action="{{ base_path }}/ui/indexing/google/check/export">
+    <input type="hidden" name="site_id" value="{{ site.id }}">
+    <div class="grid">
+      <button type="submit" name="export" value="out:txt">⬇ Не в индексе — .txt ({{ g_inspect.out_count|numfmt }})</button>
+      <button type="submit" name="export" value="out:csv" class="secondary">⬇ Не в индексе — .csv</button>
+      <button type="submit" name="export" value="all:csv" class="secondary outline">⬇ Все результаты — .csv</button>
+    </div>
+  </form>
+  {% endif %}
+  <figure><table class="sortable">
+    <thead><tr><th>URL</th><th>В индексе?</th><th>Статус Google</th><th>Последний обход</th><th>Канонический</th></tr></thead>
+    <tbody>
+      {% for r in g_inspect.rows[:3000] %}
+      <tr>
+        <td><small>{{ r.input }}</small></td>
+        <td>{% if r.indexed %}<ins>✓ да</ins>{% elif r.error %}<del>⚠ ошибка</del>{% else %}<del>✗ нет</del>{% endif %}</td>
+        <td><small>{{ r.coverage or r.error or '—' }}</small></td>
+        <td><small>{{ r.last_crawl or '—' }}</small></td>
+        <td><small>{{ r.canonical or '—' }}</small></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table></figure>
+  {% if g_inspect.total > 3000 %}<small>Показаны первые 3000 из {{ g_inspect.total|numfmt }}.</small>{% endif %}
+</article>
+{% endif %}
+
+<article>
+  <header>🚀 Отправить страницы на индексацию в Google (Indexing API)</header>
+  {% if g_can_submit %}
+  <details>
+    <summary>⚠️ Обязательно прочитайте перед отправкой</summary>
+    <p><small>Google Indexing API официально предназначен только для страниц <code>JobPosting</code> и трансляций
+    <code>BroadcastEvent</code>. Отправка обычных страниц — на ваш страх и риск и не гарантирует индексацию.
+    Дневная квота — около {{ 200|numfmt }} URL. Сервисный аккаунт должен быть <strong>владельцем</strong> ресурса,
+    а Indexing API — включён в проекте Google Cloud. Отправляйте только нужные страницы.</small></p>
+  </details>
+  <form method="post" action="{{ base_path }}/ui/indexing/google/submit" enctype="multipart/form-data"
+        onsubmit="return confirm('Отправить эти URL на индексацию в Google? Будет израсходована дневная квота Indexing API (~200/сутки). Действие нельзя отменить.');">
+    <input type="hidden" name="site_id" value="{{ site.id }}">
+    <div class="grid">
+      <label>Список URL (по одному в строке; до {{ 200|numfmt }} за раз)
+        <textarea name="urls_text" rows="6" placeholder="https://site.ru/new-page1&#10;https://site.ru/new-page2"></textarea>
+      </label>
+      <label>…или файл (.txt / .csv)
+        <input type="file" name="file" accept=".txt,.csv,.tsv">
+      </label>
+    </div>
+    <label>
+      <input type="checkbox" name="confirm" value="yes" required>
+      Я понимаю последствия и подтверждаю отправку реальных URL в Google Indexing API (расход дневной квоты).
+    </label>
+    <button type="submit" class="contrast" {% if g_running %}disabled aria-busy="true"{% endif %}>🚀 Отправить на индексацию</button>
+  </form>
+  {% else %}
+  <p><small>Отправка на индексацию доступна только для сайтов <strong>Google Search Console</strong>.</small></p>
+  {% endif %}
+</article>
+
+{% if g_submit %}
+<article>
+  <header>
+    {% if g_submit.running %}<span aria-busy="true">Отправка: {{ g_submit.done }} / {{ g_submit.total }}…</span>
+    {% else %}Отправлено в Google: <ins>{{ g_submit.ok }}</ins> из {{ g_submit.total }}{% if g_submit.failed %} · ошибок <del>{{ g_submit.failed }}</del>{% endif %}{% endif %}
+    {% if g_submit.error %} · <strong style="color:var(--pico-del-color, #c00)">{{ g_submit.error }}</strong>{% endif %}
+  </header>
+  <figure><table class="sortable">
+    <thead><tr><th>URL</th><th>Статус</th><th>Время уведомления</th></tr></thead>
+    <tbody>
+      {% for r in g_submit.rows[:3000] %}
+      <tr>
+        <td><small>{{ r.url }}</small></td>
+        <td>{% if r.ok %}<ins>✓ принято</ins>{% else %}<del>✗ {{ r.error or 'ошибка' }}</del>{% endif %}</td>
+        <td><small>{{ r.notify_time or '—' }}</small></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table></figure>
+</article>
+{% endif %}
+
 <article>
   <header>Проверить свой список по последнему снимку</header>
   <form method="post" action="{{ base_path }}/ui/indexing/check" enctype="multipart/form-data">
@@ -128,6 +241,7 @@
 {% endblock %}
 
 {% block scripts %}
+{% if g_running %}<script>setTimeout(function () { location.reload(); }, 5000);</script>{% endif %}
 {% if history %}
 <script>
   const h = {{ history|tojson }};

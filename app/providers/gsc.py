@@ -32,6 +32,7 @@ from app.utils import normalize_url
 logger = logging.getLogger(__name__)
 
 SCOPE = "https://www.googleapis.com/auth/webmasters.readonly"
+INDEX_SCOPE = "https://www.googleapis.com/auth/indexing"  # Indexing API (submit URLs)
 ROW_LIMIT = 25000  # GSC max rows per request
 
 
@@ -54,21 +55,25 @@ def _is_retryable(exc: BaseException) -> bool:
 class GSCProvider(SearchDataProvider):
     code = "gsc"
     capabilities = {
-        "page_metrics", "query_metrics_per_url", "site_totals", "all_query_metrics", "device_metrics",
+        "page_metrics", "query_metrics_per_url", "site_totals", "all_query_metrics",
+        "device_metrics", "url_inspection", "index_submit",
     }
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
         self._svc = None
+        self._sc = None   # searchconsole v1 (URL Inspection)
+        self._idx = None  # indexing v3 (submit URLs)
 
     def data_delay_days(self) -> int:
         return self.settings.gsc_data_delay_days
 
     # ----- auth & client -----
-    def _credentials(self):
+    def _credentials(self, scopes: list[str] | None = None):
         from app.credentials import get_cred
 
         s = self.settings
+        scopes = scopes or [SCOPE]
         mode = get_cred("gsc_auth_mode", s.gsc_auth_mode)
 
         if mode == "service_account":
@@ -77,10 +82,10 @@ class GSCProvider(SearchDataProvider):
             sa_json = get_cred("gsc_sa_json")
             if sa_json:
                 return service_account.Credentials.from_service_account_info(
-                    json.loads(sa_json), scopes=[SCOPE]
+                    json.loads(sa_json), scopes=scopes
                 )
             return service_account.Credentials.from_service_account_file(
-                s.gsc_service_account_file, scopes=[SCOPE]
+                s.gsc_service_account_file, scopes=scopes
             )
 
         if mode == "oauth":
@@ -101,7 +106,7 @@ class GSCProvider(SearchDataProvider):
                 token_uri="https://oauth2.googleapis.com/token",
                 client_id=client_id,
                 client_secret=client_secret,
-                scopes=[SCOPE],
+                scopes=scopes,
             )
         raise ValueError(f"Unknown GSC auth mode: {mode!r}")
 
@@ -113,6 +118,29 @@ class GSCProvider(SearchDataProvider):
                 "webmasters", "v3", credentials=self._credentials(), cache_discovery=False
             )
         return self._svc
+
+    def _sc_service(self):
+        """Search Console v1 client — same readonly scope, exposes URL Inspection."""
+        if self._sc is None:
+            from googleapiclient.discovery import build
+
+            self._sc = build(
+                "searchconsole", "v1", credentials=self._credentials([SCOPE]),
+                cache_discovery=False,
+            )
+        return self._sc
+
+    def _index_service(self):
+        """Indexing API v3 client — needs the separate ``indexing`` scope and the
+        service account to be an *owner* of the property."""
+        if self._idx is None:
+            from googleapiclient.discovery import build
+
+            self._idx = build(
+                "indexing", "v3", credentials=self._credentials([INDEX_SCOPE]),
+                cache_discovery=False,
+            )
+        return self._idx
 
     # ----- low-level query with retry + pagination -----
     @retry(
@@ -237,3 +265,38 @@ class GSCProvider(SearchDataProvider):
                 {"site_url": entry.get("siteUrl"), "permission": entry.get("permissionLevel")}
             )
         return out
+
+    # ----- index status & submission (per URL) -----
+    @retry(
+        retry=retry_if_exception(_is_retryable),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        reraise=True,
+    )
+    def inspect_url(self, site_url: str, url: str, language: str = "ru-RU") -> dict:
+        """URL Inspection API: index status of one page. Returns ``inspectionResult``
+        ({} on empty). ``site_url`` must be the exact verified property URI."""
+        resp = (
+            self._sc_service()
+            .urlInspection()
+            .index()
+            .inspect(body={"inspectionUrl": url, "siteUrl": site_url, "languageCode": language})
+            .execute()
+        )
+        return resp.get("inspectionResult", {}) or {}
+
+    @retry(
+        retry=retry_if_exception(_is_retryable),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        reraise=True,
+    )
+    def request_indexing(self, url: str, type_: str = "URL_UPDATED") -> dict:
+        """Indexing API: notify Google a URL was updated/removed. ``type_`` is
+        ``URL_UPDATED`` or ``URL_DELETED``. Returns the publish response."""
+        return (
+            self._index_service()
+            .urlNotifications()
+            .publish(body={"url": url, "type": type_})
+            .execute()
+        )

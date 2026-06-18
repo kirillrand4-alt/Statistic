@@ -1235,11 +1235,14 @@ def compare_page(request: Request, site_id: int | None = None, metric: str = "cl
 
 
 def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None, gran="day"):
+    from app.services import google_index as gi
     from app.services import indexing
 
     sites = _sites(db)
     site = _resolve_site(db, site_id)
     snapshots, history, cmp, can_capture = [], [], None, False
+    g_inspect = g_submit = None
+    g_can_inspect = g_can_submit = False
     if site is not None:
         can_capture = indexing.supports(site)
         snapshots = indexing.list_snapshots(db, site.id)
@@ -1251,10 +1254,17 @@ def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None, gr
         if da and db_:
             cmp = indexing.compare_snapshots(db, site.id, date.fromisoformat(da), date.fromisoformat(db_))
             a, b = da, db_
+        g_can_inspect = gi.supports_inspection(site)
+        g_can_submit = gi.supports_submit(site)
+        g_inspect = gi.load_result("inspect", site.id)
+        g_submit = gi.load_result("submit", site.id)
+    g_running = bool((g_inspect and g_inspect.get("running")) or (g_submit and g_submit.get("running")))
     return {
         "request": request, "msg": msg, "sites": sites, "site": site,
         "snapshots": snapshots, "history": history, "cmp": cmp,
         "a": a, "b": b, "can_capture": can_capture, "check": check, "gran": gran,
+        "g_inspect": g_inspect, "g_submit": g_submit, "g_running": g_running,
+        "g_can_inspect": g_can_inspect, "g_can_submit": g_can_submit,
     }
 
 
@@ -1354,6 +1364,97 @@ def ui_indexing_capture(site_id: int = Form(...), db: Session = Depends(get_db))
         url=f"{BP}/indexing?site_id={site_id}&msg={quote('Снимок страниц в индексе создаётся в фоне — обновите через минуту.')}",
         status_code=303,
     )
+
+
+async def _read_url_list(urls_text: str | None, file: UploadFile | None) -> list[str]:
+    """URLs from a textarea and/or an uploaded .txt/.csv (comma or newline separated)."""
+    raw = ""
+    if file is not None:
+        raw += (await file.read()).decode("utf-8", errors="ignore") + "\n"
+    if urls_text:
+        raw += urls_text
+    return [line.strip() for line in raw.replace(",", "\n").splitlines() if line.strip()]
+
+
+def _index_redirect(site_id: int, msg: str) -> RedirectResponse:
+    return RedirectResponse(url=f"{BP}/indexing?site_id={site_id}&msg={quote(msg)}", status_code=303)
+
+
+@router.post("/ui/indexing/google/check")
+async def ui_google_check(site_id: int = Form(...), urls_text: str | None = Form(None),
+                          file: UploadFile | None = File(None), db: Session = Depends(get_db)):
+    from app.services import google_index as gi
+
+    site = db.get(Site, site_id)
+    if site is None:
+        raise HTTPException(404, "site not found")
+    if not gi.supports_inspection(site):
+        return _index_redirect(site_id, "Проверка индексации постранично доступна только для сайтов Google Search Console.")
+    urls = await _read_url_list(urls_text, file)
+    if not urls:
+        return _index_redirect(site_id, "Добавьте список URL для проверки.")
+    _, msg = gi.start_inspect(site_id, urls)
+    return _index_redirect(site_id, msg)
+
+
+@router.post("/ui/indexing/google/submit")
+async def ui_google_submit(site_id: int = Form(...), urls_text: str | None = Form(None),
+                           file: UploadFile | None = File(None), confirm: str | None = Form(None),
+                           db: Session = Depends(get_db)):
+    from app.services import google_index as gi
+
+    site = db.get(Site, site_id)
+    if site is None:
+        raise HTTPException(404, "site not found")
+    if not gi.supports_submit(site):
+        return _index_redirect(site_id, "Отправка на индексацию доступна только для сайтов Google Search Console.")
+    if confirm != "yes":  # first of the two warnings (the second is a JS confirm dialog)
+        return _index_redirect(site_id, "Отправка не подтверждена — поставьте галочку подтверждения.")
+    urls = await _read_url_list(urls_text, file)
+    if not urls:
+        return _index_redirect(site_id, "Добавьте список URL для отправки.")
+    _, msg = gi.start_submit(site_id, urls, "URL_UPDATED")
+    return _index_redirect(site_id, msg)
+
+
+@router.post("/ui/indexing/google/check/export")
+def ui_google_check_export(site_id: int = Form(...), export: str = Form("out:txt"),
+                           db: Session = Depends(get_db)):
+    """Export the stored inspection result. `export` = "<only>:<fmt>",
+    only ∈ {out,in,all}, fmt ∈ {txt,csv}."""
+    import csv
+    import io
+
+    from app.services import google_index as gi
+
+    res = gi.load_result("inspect", site_id)
+    if not res or not res.get("rows"):
+        return _index_redirect(site_id, "Нет результатов проверки для выгрузки.")
+    only, _, fmt = export.partition(":")
+    rows = res["rows"]
+    if only == "in":
+        rows = [r for r in rows if r.get("indexed")]
+    elif only == "all":
+        pass
+    else:
+        only, rows = "out", [r for r in rows if not r.get("indexed")]
+    tag = {"in": "indexed", "all": "index_check", "out": "not_indexed"}[only]
+
+    if fmt == "csv":
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["url", "indexed", "verdict", "coverage", "last_crawl", "canonical", "error"])
+        for r in rows:
+            w.writerow([r["input"], "" if r.get("indexed") is None else int(bool(r.get("indexed"))),
+                        r.get("verdict") or "", r.get("coverage") or "",
+                        r.get("last_crawl") or "", r.get("canonical") or "", r.get("error") or ""])
+        body, media, ext = buf.getvalue(), "text/csv; charset=utf-8", "csv"
+    else:
+        body, media, ext = "".join(r["input"] + "\n" for r in rows), "text/plain; charset=utf-8", "txt"
+
+    fname = f"google_{tag}_site{site_id}.{ext}"
+    return Response(content=body, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 def _same_domain_site_ids(db: Session, site: Site) -> tuple[list[int], str]:
