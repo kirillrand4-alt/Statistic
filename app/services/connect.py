@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 GSC_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly"
+GSC_INDEX_SCOPE = "https://www.googleapis.com/auth/indexing"
+# Request both: the same refresh token then both reads GSC data AND submits URLs
+# for indexing. Reading needs only the first; the per-page "отправить на
+# индексацию" feature needs the second, so we ask for it up front.
+GSC_SCOPES = f"{GSC_SCOPE} {GSC_INDEX_SCOPE}"
 
 
 def google_auth_url(client_id: str, redirect_uri: str, state: str) -> str:
@@ -38,7 +43,7 @@ def google_auth_url(client_id: str, redirect_uri: str, state: str) -> str:
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": GSC_SCOPE,
+        "scope": GSC_SCOPES,
         "access_type": "offline",
         "prompt": "consent",
         "include_granted_scopes": "true",

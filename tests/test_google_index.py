@@ -41,6 +41,11 @@ class FakeGoogle(MockProvider):
         }
 
     def request_indexing(self, url, type_="URL_UPDATED"):
+        if "noscope" in url:
+            from google.auth.exceptions import RefreshError
+
+            raise RefreshError("invalid_scope: Bad Request",
+                               {"error": "invalid_scope", "error_description": "Bad Request"})
         if "fail" in url:
             raise RuntimeError("publish failed")
         return {"urlNotificationMetadata": {"url": url,
@@ -125,6 +130,17 @@ def test_run_submit_ok_and_failures():
     assert ok_rows["https://example.com/x"] is True
     assert ok_rows["https://example.com/fail-y"] is False
     assert state["rows"][0]["notify_time"] or any(r["notify_time"] for r in state["rows"])
+
+
+def test_run_submit_invalid_scope_stops_with_reauth_hint():
+    # the exact failure the user hit: refresh token granted without the indexing scope
+    register_override("gsc", FakeGoogle())
+    sid = _gsc_site()
+    state = gi.run_submit(sid, [
+        "https://example.com/noscope-1", "https://example.com/b", "https://example.com/c"])
+    assert state["done"] == 1 and state["total"] == 3   # stopped on the first call
+    assert state["error"] and "Переподключите" in state["error"]
+    assert state["ok"] == 0 and state["failed"] == 1
 
 
 # ----- routes: guards -----

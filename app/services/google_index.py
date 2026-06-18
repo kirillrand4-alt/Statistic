@@ -104,13 +104,26 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _http_error(exc: BaseException) -> tuple[int | None, str]:
-    """(status, short message) for a googleapiclient HttpError, else (None, str)."""
+def _describe_error(exc: BaseException) -> tuple[str, bool]:
+    """(human message, fatal?) — fatal errors (auth / scope / permission / quota)
+    apply to the whole batch, so the worker stops instead of hammering every URL."""
+    # OAuth refresh problems — most often the token was granted without the
+    # Indexing API scope ("invalid_scope").
+    try:
+        from google.auth.exceptions import RefreshError
+    except Exception:  # pragma: no cover
+        RefreshError = ()  # type: ignore[assignment]
+    if RefreshError and isinstance(exc, RefreshError):
+        if "invalid_scope" in str(exc).lower() or "scope" in str(exc).lower():
+            return ("Токен Google выдан без права на отправку в индекс. Переподключите "
+                    "Google в «Настройках» — повторная авторизация добавит доступ к Indexing API.", True)
+        return (f"Ошибка авторизации Google: {str(exc)[:200]}", True)
+
     try:
         from googleapiclient.errors import HttpError
     except Exception:  # pragma: no cover
-        return None, str(exc)
-    if isinstance(exc, HttpError):
+        HttpError = ()  # type: ignore[assignment]
+    if HttpError and isinstance(exc, HttpError):
         status = getattr(exc.resp, "status", None)
         try:
             status = int(status)
@@ -118,12 +131,17 @@ def _http_error(exc: BaseException) -> tuple[int | None, str]:
             status = None
         reason = ""
         try:
-            payload = json.loads(exc.content.decode("utf-8"))
-            reason = payload.get("error", {}).get("message", "")
+            reason = json.loads(exc.content.decode("utf-8")).get("error", {}).get("message", "")
         except Exception:  # noqa: BLE001
             reason = getattr(exc, "reason", "") or ""
-        return status, (reason or f"HTTP {status}")[:300]
-    return None, str(exc)[:300]
+        reason = (reason or f"HTTP {status}")[:300]
+        if status in (401, 403):
+            return (f"Доступ запрещён ({status}): {reason}. Сделайте аккаунт владельцем ресурса "
+                    "в Search Console; для отправки на индексацию ещё включите Indexing API в Google Cloud.", True)
+        if status == 429:
+            return (f"Лимит запросов Google исчерпан: {reason}", True)
+        return (reason, False)  # per-URL hiccup — keep going
+    return (str(exc)[:300], False)
 
 
 # ----- inspection -----
@@ -168,15 +186,15 @@ def run_inspect(site_id: int, raw_urls) -> dict:
                 else:
                     state["out_count"] += 1
             except Exception as exc:  # noqa: BLE001
-                status, msg = _http_error(exc)
+                msg, fatal = _describe_error(exc)
                 row = {"input": u, "indexed": None, "verdict": None, "coverage": None,
                        "last_crawl": None, "canonical": None, "robots": None,
                        "fetch": None, "error": msg}
                 state["out_count"] += 1
                 state["rows"].append(row)
                 state["done"] = i
-                if status == 429:  # daily quota / rate cap hit — stop the batch
-                    state["error"] = f"Лимит запросов Google исчерпан: {msg}"
+                if fatal:  # auth / scope / permission / quota — same for every URL
+                    state["error"] = msg
                     break
                 _write(_result_path("inspect", site_id), state)
                 continue
@@ -226,13 +244,13 @@ def run_submit(site_id: int, raw_urls, type_: str = "URL_UPDATED") -> dict:
                 row = {"url": u, "ok": True, "notify_time": latest.get("notifyTime"), "error": None}
                 state["ok"] += 1
             except Exception as exc:  # noqa: BLE001
-                status, msg = _http_error(exc)
+                msg, fatal = _describe_error(exc)
                 row = {"url": u, "ok": False, "notify_time": None, "error": msg}
                 state["failed"] += 1
                 state["rows"].append(row)
                 state["done"] = i
-                if status == 429:
-                    state["error"] = f"Дневная квота Indexing API исчерпана: {msg}"
+                if fatal:  # auth / scope / permission / quota — same for every URL
+                    state["error"] = msg
                     break
                 _write(_result_path("submit", site_id), state)
                 continue
