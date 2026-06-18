@@ -20,6 +20,7 @@ from app.api import (
     routes_projects,
 )
 from app.bootstrap import bootstrap
+from app.cache import PageCacheMiddleware
 from app.config import get_settings
 from app.formlimit import apply_upload_limit
 from app.db.base import SessionLocal, init_db
@@ -60,7 +61,18 @@ def create_app() -> FastAPI:
     # Make the configured prefix available to all templates for link/asset URLs.
     templates.env.globals["base_path"] = bp
 
+    # Per-page "refresh now" link target: current URL + ?nocache=1.
+    def _refresh_url(request) -> str:
+        u = request.url.include_query_params(nocache=1)
+        return u.path + ("?" + u.query if u.query else "")
+
+    templates.env.globals["refresh_url"] = _refresh_url
+
     app.mount(f"{bp}/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # Cache rendered analytics pages so they load instantly across browsers.
+    if settings.page_cache_ttl > 0:
+        app.add_middleware(PageCacheMiddleware, ttl=settings.page_cache_ttl, base_path=bp)
 
     for module in (
         routes_projects,

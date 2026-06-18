@@ -522,6 +522,7 @@ def ui_collect(site_id: list[int] = Form(...), domain: str = Form(""),
 def admin_page(request: Request, msg: str | None = None, db: Session = Depends(get_db)):
     from sqlalchemy import func
 
+    from app.cache import stats as cache_stats
     from app.credentials import get_cred
     from app.db.models import DeviceMetricDaily
 
@@ -564,7 +565,9 @@ def admin_page(request: Request, msg: str | None = None, db: Session = Depends(g
                 "enable_scheduler": s.enable_scheduler,
                 "collect_cron_hour": s.collect_cron_hour,
                 "collect_refetch_days": s.collect_refetch_days,
+                "page_cache_ttl": s.page_cache_ttl,
             },
+            "cache_stats": cache_stats(),
         },
     )
 
@@ -1364,6 +1367,17 @@ def ui_indexing_capture(site_id: int = Form(...), db: Session = Depends(get_db))
         url=f"{BP}/indexing?site_id={site_id}&msg={quote('Снимок страниц в индексе создаётся в фоне — обновите через минуту.')}",
         status_code=303,
     )
+
+
+@router.get("/ui/cache/flush")
+def ui_cache_flush(request: Request):
+    """Drop every cached page, then return to where you were."""
+    from app.cache import flush
+
+    n = flush()
+    ref = request.headers.get("referer")
+    base = ref.split("?")[0] if ref else f"{BP}/"
+    return RedirectResponse(url=f"{base}?msg={quote(f'Кэш страниц сброшен ({n} шт.).')}", status_code=303)
 
 
 async def _read_url_list(urls_text: str | None, file: UploadFile | None) -> list[str]:

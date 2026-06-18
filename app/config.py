@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     collect_cron_hour: int = 4
     collect_refetch_days: int = 5
 
+    # Server-side HTML cache for heavy analytics pages (seconds; 0 disables).
+    page_cache_ttl: int = 3600
+
     @property
     def base_path(self) -> str:
         """Normalized subpath prefix: "" or "/stat" (leading slash, no trailing)."""

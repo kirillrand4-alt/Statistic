@@ -187,6 +187,19 @@
 </article>
 
 <article>
+  <header>Кэш страниц</header>
+  <p>Тяжёлые страницы (дашборд, проекты, ключевые слова и т.п.) кэшируются на сервере
+  на <strong>{{ (config.page_cache_ttl // 60) if config.page_cache_ttl else 0 }} мин</strong>,
+  поэтому открываются мгновенно в любом браузере. Первая загрузка после сброса/истечения —
+  обычной скорости.</p>
+  {% if cache_stats %}<p><small>Сейчас в кэше: {{ cache_stats.live }} актуальных (всего {{ cache_stats.entries }}).</small></p>{% endif %}
+  <a role="button" href="{{ base_path }}/ui/cache/flush">🧹 Сбросить кэш всех страниц</a>
+  <small>Отдельную страницу можно пересчитать кнопкой <strong>↻</strong> в меню (или добавив
+  <code>?nocache=1</code> к её адресу). Кэш также можно отключить переменной
+  <code>PAGE_CACHE_TTL=0</code>.</small>
+</article>
+
+<article>
   <header>Конфигурация</header>
   <table>
     <tbody>

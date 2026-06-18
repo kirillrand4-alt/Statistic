@@ -15,5 +15,7 @@
     <li><a href="{{ base_path }}/donors">Доноры</a></li>
     <li><a href="{{ base_path }}/errors">Ошибки 404</a></li>
     <li><a href="{{ base_path }}/admin">Настройки</a></li>
+    {% if request %}<li><a href="{{ refresh_url(request) }}" title="Обновить эту страницу (пересчитать сейчас)">↻</a></li>{% endif %}
+    <li><a href="{{ base_path }}/ui/cache/flush" title="Сбросить кэш всех страниц">🧹</a></li>
   </ul>
 </nav>
