@@ -146,7 +146,7 @@
         <td>{{ s.source.code }}</td>
         <td><small>{{ s.property_uri }}</small></td>
         <td>{% if s.enabled %}✅{% else %}⏸{% endif %}</td>
-        <td><small>{{ device_cov.get(s.id, "—") }}</small></td>
+        <td class="devcov" data-site="{{ s.id }}"><small>…</small></td>
         <td>
           <div class="grid">
             <form method="post" action="{{ base_path }}/ui/collect"><input type="hidden" name="site_id" value="{{ s.id }}"><button class="outline secondary" type="submit">Собрать</button></form>
@@ -232,4 +232,16 @@
   </table>
   </figure>
 </article>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Render the page first, then fill the heavy "Device" column asynchronously.
+fetch("{{ base_path }}/ui/admin/device-cov")
+  .then(r => r.json())
+  .then(d => document.querySelectorAll(".devcov").forEach(td => {
+    td.querySelector("small").textContent = d[td.dataset.site] || "—";
+  }))
+  .catch(() => document.querySelectorAll(".devcov small").forEach(s => s.textContent = "—"));
+</script>
 {% endblock %}

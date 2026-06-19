@@ -131,6 +131,13 @@ def test_ui_admin_flows(client):
     assert client.get("/api/sites").json()[0]["enabled"] is False
 
 
+def test_admin_device_cov_endpoint(client):
+    # the heavy device coverage is served separately (lazy-loaded by the admin page)
+    r = client.get("/ui/admin/device-cov")
+    assert r.status_code == 200
+    assert isinstance(r.json(), dict)
+
+
 def test_gsc_connect_route_oauth(client):
     r = client.post(
         "/ui/gsc/connect",

@@ -520,27 +520,10 @@ def ui_collect(site_id: list[int] = Form(...), domain: str = Form(""),
 
 @router.get("/admin")
 def admin_page(request: Request, msg: str | None = None, db: Session = Depends(get_db)):
-    from sqlalchemy import func
-
     from app.cache import stats as cache_stats
     from app.credentials import get_cred
-    from app.db.models import DeviceMetricDaily
 
     s = get_settings()
-    cov = {
-        sid: (lo, hi, c)
-        for sid, lo, hi, c in db.execute(
-            select(
-                DeviceMetricDaily.site_id,
-                func.min(DeviceMetricDaily.date),
-                func.max(DeviceMetricDaily.date),
-                func.count(),
-            ).group_by(DeviceMetricDaily.site_id)
-        ).all()
-    }
-    device_cov = {
-        sid: (f"{lo}..{hi} ({c})" if c else "—") for sid, (lo, hi, c) in cov.items()
-    }
     return templates.TemplateResponse(
         request,
         "admin.html",
@@ -554,7 +537,6 @@ def admin_page(request: Request, msg: str | None = None, db: Session = Depends(g
             "miralinks_body_set": bool(get_cred("miralinks_body")),
             "oauth_redirect_uri": _public_redirect_uri(request),
             "sites": _sites(db),
-            "device_cov": device_cov,
             "sources": db.execute(select(Source).order_by(Source.id)).scalars().all(),
             "runs": db.execute(
                 select(CollectionRun).order_by(CollectionRun.started_at.desc()).limit(30)
@@ -570,6 +552,26 @@ def admin_page(request: Request, msg: str | None = None, db: Session = Depends(g
             "cache_stats": cache_stats(),
         },
     )
+
+
+@router.get("/ui/admin/device-cov")
+def ui_admin_device_cov(db: Session = Depends(get_db)):
+    """Per-site device-metric coverage (date span + row count). Loaded async by the
+    admin page so it renders instantly — the GROUP BY over device_metric_daily is
+    heavy on a large DB."""
+    from sqlalchemy import func
+
+    from app.db.models import DeviceMetricDaily
+
+    rows = db.execute(
+        select(
+            DeviceMetricDaily.site_id,
+            func.min(DeviceMetricDaily.date),
+            func.max(DeviceMetricDaily.date),
+            func.count(),
+        ).group_by(DeviceMetricDaily.site_id)
+    ).all()
+    return {str(sid): (f"{lo}..{hi} ({c})" if c else "—") for sid, lo, hi, c in rows}
 
 
 @router.post("/ui/sites")
