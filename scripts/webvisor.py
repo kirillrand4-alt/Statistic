@@ -412,11 +412,16 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5) 
     man = open(os.path.join(DATA_DIR, "manifest.csv"), "a", encoding="utf-8")
     ok = fail = 0
     _clear_profile_lock()
-    # Full Chromium in "new" headless mode renders CSS/images like a real browser
-    # (the lightweight chrome-headless-shell does NOT) and still needs no window, so
-    # it works in a background session. WEBVISOR_HEADLESS=1 forces the old shell.
-    shell = os.environ.get("WEBVISOR_HEADLESS", "0") == "1"
-    launch = dict(headless=True) if shell else dict(headless=False, args=["--headless=new"])
+    # Browser mode (env WEBVISOR_BROWSER): "shell" = chrome-headless-shell — reliable
+    # in the background but the Webvisor replay renders without CSS/images; "new" =
+    # full Chromium --headless=new; "headed" = visible window (needs a real desktop).
+    mode = os.environ.get("WEBVISOR_BROWSER", "shell").lower()
+    if mode == "new":
+        launch = dict(headless=False, args=["--headless=new"])
+    elif mode == "headed":
+        launch = dict(headless=False)
+    else:
+        launch = dict(headless=True)
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(
             PROFILE_DIR, viewport=VIEWPORT,
