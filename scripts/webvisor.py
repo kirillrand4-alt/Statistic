@@ -69,6 +69,33 @@ def _pw():
     return sync_playwright
 
 
+def _render_launch():
+    """Browser launch kwargs + user-agent for capturing the replay (env WEBVISOR_BROWSER).
+
+    The Webvisor replay re-fetches the page's CSS/images at play time. Both headless
+    modes — "shell" (chrome-headless-shell) and "new" (Chromium ``--headless=new``) —
+    render the replay WITHOUT styles (links go blue, images vanish, menus unwrap and a
+    10-item nav becomes 100). A real on-screen browser renders it like a human's; that's
+    how the old Linux box recorded clean video (headed under xvfb). So default to
+    "headed": a visible window on the interactive (auto-logon/RDP) desktop. We also pin a
+    normal desktop UA so neither Yandex's player nor the site's CDN/WAF serves a
+    degraded/blocked variant after spotting "HeadlessChrome".
+    """
+    mode = os.environ.get("WEBVISOR_BROWSER", "headed").lower()
+    if mode == "shell":
+        launch = dict(headless=True)
+    elif mode == "new":
+        launch = dict(headless=False, args=["--headless=new"])
+    else:  # "headed" (default) — render exactly like a real browser
+        launch = dict(headless=False)
+    ua = os.environ.get(
+        "WEBVISOR_UA",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    )
+    return launch, ua
+
+
 def cmd_login() -> None:
     os.makedirs(PROFILE_DIR, exist_ok=True)
     if not os.environ.get("DISPLAY"):
@@ -127,11 +154,17 @@ def cmd_probe(sessions, tmpl) -> None:
           "{ out.push({tag:e.tagName, t:(e.innerText||'').trim().slice(0,24), "
           "title:e.getAttribute('title')||'', aria:e.getAttribute('aria-label')||'', "
           "cls:(''+(e.className||'')).slice(0,70)}); } return out.slice(0,80); }")
+    launch, ua = _render_launch()  # same render path as --record, so the shot shows real CSS
     with _pw()() as p:
-        ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=True, viewport=VIEWPORT)
+        ctx = p.chromium.launch_persistent_context(
+            PROFILE_DIR, viewport=VIEWPORT, user_agent=ua, **launch)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(6000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
         shot = os.path.join(DEBUG_DIR, "probe.png")
         page.screenshot(path=shot, full_page=False)
         with open(os.path.join(DEBUG_DIR, "probe.html"), "w", encoding="utf-8") as f:
@@ -412,26 +445,22 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5) 
     man = open(os.path.join(DATA_DIR, "manifest.csv"), "a", encoding="utf-8")
     ok = fail = 0
     _clear_profile_lock()
-    # Browser mode (env WEBVISOR_BROWSER): "shell" = chrome-headless-shell — reliable
-    # in the background but the Webvisor replay renders without CSS/images; "new" =
-    # full Chromium --headless=new; "headed" = visible window (needs a real desktop).
-    mode = os.environ.get("WEBVISOR_BROWSER", "shell").lower()
-    if mode == "new":
-        launch = dict(headless=False, args=["--headless=new"])
-    elif mode == "headed":
-        launch = dict(headless=False)
-    else:
-        launch = dict(headless=True)
+    launch, ua = _render_launch()
+    pre_existing = {f for f in os.listdir(OUT_DIR) if f.endswith(".webm")}
+    written: list[str] = []
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(
-            PROFILE_DIR, viewport=VIEWPORT,
+            PROFILE_DIR, viewport=VIEWPORT, user_agent=ua,
             record_video_dir=OUT_DIR, record_video_size=VIEWPORT, **launch)
-        for pg in list(ctx.pages):  # drop the blank auto-opened page (and its stray video)
-            v = pg.video
+        # Keep ONE page as a "holder": closing the last page quits a headed Chromium,
+        # which would break ctx.new_page() for the next session. Drop only the extra
+        # blank auto-pages; each session then records on its own fresh page. The
+        # holder's (black) video and any stray error videos are swept up after close.
+        opened = list(ctx.pages)
+        _holder = opened[0] if opened else ctx.new_page()
+        for pg in opened[1:]:
             try:
                 pg.close()
-                if v:
-                    os.remove(v.path())
             except Exception:
                 pass
         for i, s in enumerate(todo, 1):
@@ -451,6 +480,10 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5) 
                     page.wait_for_load_state("load", timeout=15000)
                 except Exception:
                     pass
+                try:  # and let async CSS/images settle so the frame isn't unstyled
+                    page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    pass
                 if PLAY_SELECTOR:
                     try:
                         page.click(PLAY_SELECTOR, timeout=5000)
@@ -462,6 +495,7 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5) 
                 if src and os.path.exists(src):
                     os.replace(src, os.path.join(OUT_DIR, f"{vid}.webm"))
                     ok += 1
+                    written.append(str(vid))
                     man.write(f"{vid},ok,{secs}\n")
                 else:
                     fail += 1
@@ -476,6 +510,15 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5) 
             man.flush()
             print(f"  [{i}/{len(todo)}] visit={vid} ok={ok} fail={fail}", flush=True)
         ctx.close()
+    # Sweep the holder's black video and any stray error videos this run produced,
+    # keeping only what was there before plus the named {visit_id}.webm we wrote.
+    keep = pre_existing | {f"{v}.webm" for v in written}
+    for f in os.listdir(OUT_DIR):
+        if f.endswith(".webm") and f not in keep:
+            try:
+                os.remove(os.path.join(OUT_DIR, f))
+            except OSError:
+                pass
     man.close()
     print(f"Готово: записано {ok}, ошибок {fail}. Видео в {OUT_DIR}")
 
