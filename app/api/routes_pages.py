@@ -1507,6 +1507,10 @@ def errors_page(request: Request, site_id: str | None = None, start: str | None 
 @router.get("/webvisor")
 def webvisor_page(request: Request, limit: int = 300, db: Session = Depends(get_db)):
     """List recorded Webvisor replays (newest first) with full visit context; play inline."""
+    import re as _re
+
+    from app.services import goals as goals_svc
+
     videos, total = [], 0
     if WEBVISOR_VIDEOS.is_dir():
         files = sorted(WEBVISOR_VIDEOS.glob("*.webm"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -1514,17 +1518,46 @@ def webvisor_page(request: Request, limit: int = 300, db: Session = Depends(get_
         files = files[:max(1, limit)]
         ids = [p.stem for p in files]
         info, phrases = {}, _wv_phrases()
+        gnames, hit_url = {}, {}
         if ids:
-            from app.db.models import Visit
+            from app.db.models import Hit, Visit
             cols = (Visit.visit_id, Visit.date, Visit.date_time, Visit.duration, Visit.page_views,
                     Visit.traffic_source, Visit.search_engine, Visit.region_city, Visit.device,
                     Visit.os, Visit.browser, Visit.start_url, Visit.end_url, Visit.referer,
-                    Visit.counter_id, Visit.extra)
+                    Visit.counter_id, Visit.extra, Visit.watch_ids, Visit.site_id)
             for row in db.execute(select(*cols).where(Visit.visit_id.in_(ids))).all():
                 info[str(row[0])] = row
+            # goal names for counters whose visits reached goals (best-effort, cached)
+            for sid in {row[17] for row in info.values()
+                        if row[17] and "goalsID" in (row[15] or "")}:
+                try:
+                    gnames.update(goals_svc.goal_names(db, [sid]))
+                except Exception:  # noqa: BLE001
+                    pass
+            # pages visited: visit.watch_ids -> hit.url (grouped by site -> uses the index)
+            by_site: dict = {}
+            for row in info.values():
+                if row[17]:
+                    by_site.setdefault(row[17], []).extend(_re.findall(r"\d+", row[16] or ""))
+            for sid, wids in by_site.items():
+                wids = list(dict.fromkeys(wids))
+                for i in range(0, len(wids), 800):
+                    for wid, url in db.execute(
+                        select(Hit.watch_id, Hit.url).where(
+                            Hit.site_id == sid, Hit.watch_id.in_(wids[i:i + 800]))
+                    ).all():
+                        if url:
+                            hit_url[str(wid)] = url
         for p in files:
             r = info.get(p.stem)
             extra = r[15] if r else None
+            goal_ids = sorted(goals_svc.parse_goal_ids(extra))
+            pages, seen = [], set()
+            for w in (_re.findall(r"\d+", r[16] or "") if r else []):
+                u = hit_url.get(w)
+                if u and u not in seen:
+                    seen.add(u)
+                    pages.append(u)
             videos.append({
                 "visit_id": p.stem,
                 "size_mb": round(p.stat().st_size / 1048576, 2),
@@ -1545,6 +1578,8 @@ def webvisor_page(request: Request, limit: int = 300, db: Session = Depends(get_
                 "phrase": phrases.get(p.stem),
                 "roistat": _wv_roistat(r[11] if r else None, extra),
                 "utm": _wv_utm(extra),
+                "goals": [gnames.get(g, f"Цель {g}") for g in goal_ids],
+                "pages": pages,
             })
     return templates.TemplateResponse(
         request, "webvisor.html",

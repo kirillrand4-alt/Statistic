@@ -78,20 +78,26 @@
     if (v.date_time || v.date) r.push(['Дата/время', v.date_time || v.date]);
     if (v.duration) r.push(['Длительность', dur(v.duration)]);
     if (v.page_views) r.push(['Просмотров', v.page_views]);
+    r.push(['Цели', (v.goals && v.goals.length) ? '✓ ' + v.goals.join(', ') : 'нет']);
     if (v.city) r.push(['Город', v.city]);
     if (v.source) r.push(['Источник', v.source + (v.search_engine ? ' / ' + v.search_engine : '')]);
     if (v.phrase) r.push(['Поисковый запрос', v.phrase]);
     if (v.device || v.os || v.browser) r.push(['Устройство', [v.device, v.os, v.browser].filter(Boolean).join(' · ')]);
     if (v.entry) r.push(['Страница входа', '<a href="' + esc(v.entry) + '" target="_blank" rel="noopener">' + esc(v.entry) + '</a>']);
     if (v.exit) r.push(['Страница выхода', '<a href="' + esc(v.exit) + '" target="_blank" rel="noopener">' + esc(v.exit) + '</a>']);
+    if (v.pages && v.pages.length) {
+      r.push(['Посещённые страницы', v.pages.map(function (u) {
+        return '<a href="' + esc(u) + '" target="_blank" rel="noopener">' + esc(u) + '</a>';
+      }).join('<br>')]);
+    }
     if (v.referer) r.push(['Реферер', v.referer]);
     if (v.roistat) r.push(['Roistat ID', v.roistat]);
     var utm = v.utm || {};
     for (var k in utm) r.push([k, utm[k]]);
     r.push(['visit', v.visit_id + (v.counter_id ? ' · счётчик ' + v.counter_id : '') + ' · ' + v.size_mb + ' МБ']);
     return '<table><tbody>' + r.map(function (x) {
-      var val = (x[0] === 'Страница входа' || x[0] === 'Страница выхода') ? x[1] : esc(x[1]);
-      return '<tr><th>' + esc(x[0]) + '</th><td>' + val + '</td></tr>';
+      var html = (x[0] === 'Страница входа' || x[0] === 'Страница выхода' || x[0] === 'Посещённые страницы');
+      return '<tr><th>' + esc(x[0]) + '</th><td>' + (html ? x[1] : esc(x[1])) + '</td></tr>';
     }).join('') + '</tbody></table>';
   }
   function play(i, li) {
