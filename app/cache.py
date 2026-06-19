@@ -100,7 +100,10 @@ class PageCacheMiddleware(BaseHTTPMiddleware):
         self.bp = base_path
 
     async def dispatch(self, request, call_next):
-        if self.ttl <= 0 or request.method != "GET":
+        if request.method != "GET":
+            flush()  # a mutating request (form save etc.) — drop cached pages so the change shows at once
+            return await call_next(request)
+        if self.ttl <= 0:
             return await call_next(request)
         rel = _rel_path(request.url.path, self.bp)
         qp = request.query_params
