@@ -412,7 +412,7 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5) 
     man = open(os.path.join(DATA_DIR, "manifest.csv"), "a", encoding="utf-8")
     ok = fail = 0
     _clear_profile_lock()
-    headless = os.environ.get("WEBVISOR_HEADLESS", "0") == "1"  # default: headed (renders CSS like a real browser)
+    headless = os.environ.get("WEBVISOR_HEADLESS", "1") == "1"  # default headless (headed is unreliable as a bg session on Windows)
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(
             PROFILE_DIR, headless=headless, viewport=VIEWPORT,
