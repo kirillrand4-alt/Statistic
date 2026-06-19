@@ -412,9 +412,10 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5) 
     man = open(os.path.join(DATA_DIR, "manifest.csv"), "a", encoding="utf-8")
     ok = fail = 0
     _clear_profile_lock()
+    headless = os.environ.get("WEBVISOR_HEADLESS", "0") == "1"  # default: headed (renders CSS like a real browser)
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(
-            PROFILE_DIR, headless=True, viewport=VIEWPORT,
+            PROFILE_DIR, headless=headless, viewport=VIEWPORT,
             record_video_dir=OUT_DIR, record_video_size=VIEWPORT)
         for pg in list(ctx.pages):  # drop the blank auto-opened page (and its stray video)
             v = pg.video
@@ -437,6 +438,10 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5) 
             video = page.video
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                try:  # let the replay fetch+apply the page CSS before we capture
+                    page.wait_for_load_state("load", timeout=15000)
+                except Exception:
+                    pass
                 if PLAY_SELECTOR:
                     try:
                         page.click(PLAY_SELECTOR, timeout=5000)
