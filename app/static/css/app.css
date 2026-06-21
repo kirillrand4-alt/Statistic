@@ -1,8 +1,32 @@
 /* ============================================================================
-   «Императорское золото» — царская тема поверх Pico.css v2 (data-theme="dark").
-   app.css грузится ПОСЛЕ pico.min.css, поэтому переопределения побеждают по
-   порядку источника. Палитра: тёмный оксблад/бордо + сусальное золото + кремовый.
+   «Ivory & Gold» — дворцовая светлая тема поверх Pico.css v2 (data-theme="light").
+   Слоновая кость + тонкое золото + serif-типографика, много воздуха.
+   Шрифты: заголовки — Cinzel (латиница) / Playfair Display (кириллица);
+   текст — Cormorant Garamond (латиница) / PT Serif (кириллица). Cinzel и
+   Cormorant Garamond не содержат кириллицы, поэтому русский текст подхватывают
+   запасные Playfair Display / PT Serif (пер-глиф фолбэк).
    ============================================================================ */
+
+:root {
+  --iv-bg:     #f3ecdc;
+  --iv-panel1: #fffaf0;
+  --iv-panel2: #f6efe0;
+  --iv-gold1:  #b8902f;
+  --iv-gold2:  #e6c878;
+  --iv-gold3:  #fff1c9;
+  --iv-gold-d: #8f6f20;
+  --iv-txt:    #2a2418;
+  --iv-txt2:   #3a2f1c;
+  --iv-dim:    #9a8a6a;
+  --iv-dim2:   #cdbf9a;
+  --iv-green:  #2e8b57;
+  --iv-red:    #9c3b3b;
+  --iv-border: rgba(184,144,47,.38);
+  --font-head: 'Cinzel', 'Playfair Display', Georgia, serif;
+  --font-body: 'Cormorant Garamond', 'PT Serif', Georgia, 'Times New Roman', serif;
+}
+
+html { font-size: 106.25%; }  /* немного крупнее — serif-текст «дышит» */
 
 /* ---- functional tweaks (как было) ---------------------------------------- */
 hgroup h3 { margin-bottom: .1rem; }
@@ -17,176 +41,206 @@ nav > ul { flex-wrap: wrap; }
 
 /* Формы-фильтры (<form class="grid">) у Pico раскладываются в РАВНЫЕ колонки —
    из-за этого сложный селектор домена/поисковика сплющивается. Делаем гибкую
-   раскладку: каждый контрол по своему содержимому, переносится по необходимости.
-   Карточки (<div class="grid">) не трогаем — это только про формы. */
+   раскладку: каждый контрол по своему содержимому. Карточки (<div class="grid">)
+   не трогаем. */
 @media (min-width: 768px) {
   form.grid { display: flex; flex-wrap: wrap; align-items: end; gap: .4rem 1rem; }
   form.grid > * { margin-bottom: 0; }
 }
 
-/* ---- палитра ------------------------------------------------------------- */
-[data-theme="dark"] {
-  --gold:        #e7c869;
-  --gold-bright: #fbe7b0;
-  --gold-deep:   #b8860b;
-  --gold-line:   rgba(212,175,55,.20);
+/* ---- палитра Pico -------------------------------------------------------- */
+[data-theme="light"] {
+  --pico-background-color: var(--iv-bg);
+  --pico-color: var(--iv-txt2);
+  --pico-h1-color: var(--iv-gold1); --pico-h2-color: var(--iv-gold1);
+  --pico-h3-color: var(--iv-gold1); --pico-h4-color: var(--iv-gold-d);
+  --pico-h5-color: var(--iv-gold-d); --pico-h6-color: var(--iv-gold-d);
+  --pico-muted-color: var(--iv-dim);
+  --pico-muted-border-color: var(--iv-border);
+  --pico-border-radius: 10px;
+  --pico-font-family: var(--font-body);
 
-  --pico-background-color: #160b0e;
-  --pico-color: #efe6d0;                         /* тёплый кремовый текст */
-  --pico-h1-color: #f3e6c2; --pico-h2-color: #f3e6c2; --pico-h3-color: #f3e6c2;
-  --pico-h4-color: #ecd9a6; --pico-h5-color: #ecd9a6; --pico-h6-color: #ecd9a6;
-  --pico-muted-color: #b6a079;                   /* античное золото-серый */
-  --pico-muted-border-color: var(--gold-line);
-  --pico-border-radius: .5rem;
+  --pico-primary: var(--iv-gold-d);
+  --pico-primary-background: var(--iv-gold1);
+  --pico-primary-border: var(--iv-gold1);
+  --pico-primary-hover: var(--iv-txt);
+  --pico-primary-hover-background: var(--iv-gold-d);
+  --pico-primary-hover-border: var(--iv-gold-d);
+  --pico-primary-focus: rgba(230,200,120,.45);
+  --pico-primary-inverse: #fff;
+  --pico-primary-underline: rgba(184,144,47,.45);
 
-  /* акцент — золото */
-  --pico-primary: var(--gold);
-  --pico-primary-background: #cda23a;
-  --pico-primary-border: var(--gold-deep);
-  --pico-primary-hover: var(--gold-bright);
-  --pico-primary-hover-background: #ddb24a;
-  --pico-primary-hover-border: #caa01f;
-  --pico-primary-focus: rgba(212,175,55,.35);
-  --pico-primary-inverse: #2a1608;               /* тёмный текст на золоте */
-  --pico-primary-underline: rgba(231,200,105,.5);
+  --pico-card-background-color: var(--iv-panel1);
+  --pico-card-sectioning-background-color: var(--iv-panel2);
+  --pico-card-border-color: var(--iv-border);
+  --pico-card-box-shadow: 0 8px 30px rgba(120,90,30,.15), inset 0 0 0 1px rgba(255,255,255,.5);
 
-  /* карточки / панели */
-  --pico-card-background-color: #21121a;
-  --pico-card-sectioning-background-color: #2a1722;
-  --pico-card-border-color: rgba(212,175,55,.22);
-  --pico-card-box-shadow: 0 0 0 1px rgba(212,175,55,.06), 0 12px 30px rgba(0,0,0,.5);
+  --pico-form-element-background-color: #fffdf6;
+  --pico-form-element-border-color: var(--iv-gold1);
+  --pico-form-element-color: var(--iv-txt2);
+  --pico-form-element-placeholder-color: #b3a784;
+  --pico-form-element-active-background-color: #fffdf6;
+  --pico-form-element-active-border-color: var(--iv-gold1);
+  --pico-form-element-focus-color: var(--iv-gold1);
 
-  /* формы */
-  --pico-form-element-background-color: #1c1016;
-  --pico-form-element-border-color: rgba(212,175,55,.28);
-  --pico-form-element-color: #efe6d0;
-  --pico-form-element-placeholder-color: #8c7c5c;
-  --pico-form-element-active-background-color: #241420;
-  --pico-form-element-active-border-color: var(--gold);
-  --pico-form-element-focus-color: var(--gold);
+  --pico-table-border-color: var(--iv-border);
+  --pico-table-row-stripped-background-color: rgba(230,200,120,.10);
 
-  /* таблицы */
-  --pico-table-border-color: rgba(212,175,55,.16);
-  --pico-table-row-stripped-background-color: rgba(212,175,55,.045);
-
-  /* код / прочее */
-  --pico-code-background-color: #1c1016;
-  --pico-code-color: var(--gold);
-  --pico-mark-background-color: var(--gold);
-  --pico-mark-color: #2a1608;
-  --pico-blockquote-border-color: rgba(212,175,55,.3);
-  --pico-switch-checked-background-color: var(--gold-deep);
+  --pico-code-background-color: var(--iv-txt);     /* тёмный «островок» как в логе образца */
+  --pico-code-color: var(--iv-dim2);
+  --pico-mark-background-color: var(--iv-gold2);
+  --pico-mark-color: var(--iv-txt);
+  --pico-blockquote-border-color: var(--iv-border);
 }
 
-/* ---- фон: бордовая виньетка + лёгкая золотая решётка + золотая лента ------ */
-[data-theme="dark"] body {
-  background-color: #160b0e;
+/* ---- фон: тёплые золотые блики + тонкая золотая лента сверху -------------- */
+[data-theme="light"] body {
+  background-color: var(--iv-bg);
   background-image:
-    radial-gradient(1200px 620px at 50% -12%, rgba(135,32,46,.45), transparent 60%),
-    radial-gradient(900px 520px at 100% 0%, rgba(90,20,32,.30), transparent 55%),
-    repeating-linear-gradient(45deg,  rgba(212,175,55,.022) 0 2px, transparent 2px 24px),
-    repeating-linear-gradient(-45deg, rgba(212,175,55,.022) 0 2px, transparent 2px 24px),
-    linear-gradient(180deg, #1a0d11 0%, #120809 100%);
+    radial-gradient(circle at 12% 8%,  rgba(230,200,120,.18) 0, transparent 30%),
+    radial-gradient(circle at 88% 82%, rgba(184,144,47,.10) 0, transparent 35%);
   background-attachment: fixed;
+  font-family: var(--font-body); font-weight: 500;
 }
-[data-theme="dark"] body::before {        /* царская золотая лента сверху */
-  content: ""; position: fixed; left: 0; right: 0; top: 0; height: 4px; z-index: 1000;
-  background: linear-gradient(90deg,#7a5a12,#f0d480,#b8860b,#f0d480,#7a5a12);
+[data-theme="light"] body::before {
+  content: ""; position: fixed; left: 0; right: 0; top: 0; height: 3px; z-index: 1000;
+  background: linear-gradient(90deg, var(--iv-gold-d), var(--iv-gold2), var(--iv-gold1), var(--iv-gold2), var(--iv-gold-d));
 }
 
-/* ---- заголовки: золотой градиент + классический шрифт с засечками -------- */
-[data-theme="dark"] h1, [data-theme="dark"] h2, [data-theme="dark"] h3,
-[data-theme="dark"] nav strong {
-  font-family: Georgia, "Times New Roman", "PT Serif", serif;
-  letter-spacing: .015em;
+/* ---- типографика -------------------------------------------------------- */
+[data-theme="light"] h1, [data-theme="light"] h2, [data-theme="light"] h3,
+[data-theme="light"] h4, [data-theme="light"] h5, [data-theme="light"] h6,
+[data-theme="light"] nav strong, [data-theme="light"] article > header,
+[data-theme="light"] thead th, [data-theme="light"] label,
+[data-theme="light"] button, [data-theme="light"] [role="button"],
+[data-theme="light"] input[type="submit"], [data-theme="light"] input[type="button"],
+[data-theme="light"] summary {
+  font-family: var(--font-head);
 }
-@supports ((-webkit-background-clip: text) or (background-clip: text)) {
-  [data-theme="dark"] h1, [data-theme="dark"] h2, [data-theme="dark"] h3,
-  [data-theme="dark"] nav strong {
-    background: linear-gradient(180deg, var(--gold-bright) 0%, var(--gold) 42%, var(--gold-deep) 100%);
-    -webkit-background-clip: text; background-clip: text;
-    -webkit-text-fill-color: transparent; color: transparent;
-  }
+[data-theme="light"] h1, [data-theme="light"] h2 { font-weight: 700; letter-spacing: .02em; }
+[data-theme="light"] h2 {                       /* «дворцовый» подчёрк под заголовком */
+  padding-bottom: .25rem; border-bottom: 2px solid;
+  border-image: linear-gradient(90deg, var(--iv-gold1), transparent 75%) 1;
+}
+[data-theme="light"] hgroup h3 { letter-spacing: .01em; }
+
+/* подписи полей — капитель золотом; у чекбоксов/радио оставляем обычный текст */
+[data-theme="light"] label {
+  text-transform: uppercase; letter-spacing: .09em; font-size: .8rem;
+  font-weight: 600; color: var(--iv-gold1);
+}
+[data-theme="light"] label:has(> input[type="checkbox"]),
+[data-theme="light"] label:has(> input[type="radio"]) {
+  text-transform: none; letter-spacing: normal; font-family: var(--font-body);
+  font-weight: 500; font-size: 1rem; color: var(--iv-txt2);
 }
 
 /* ---- навигация + выпадающее меню ---------------------------------------- */
-[data-theme="dark"] nav {
-  border-bottom: 1px solid rgba(212,175,55,.22);
-  margin-bottom: 1rem; padding-bottom: .15rem;
+[data-theme="light"] nav {
+  border-bottom: 1px solid var(--iv-border); margin-bottom: 1rem; padding-bottom: .15rem;
 }
-nav strong { font-size: 1.15rem; }
-[data-theme="dark"] nav a {
-  color: #e8dcbe; border-radius: .4rem; padding-inline: .55rem;
+[data-theme="light"] nav strong { font-size: 1.2rem; color: var(--iv-gold1); letter-spacing: .04em; }
+[data-theme="light"] nav strong .orn { color: var(--iv-gold2); }
+[data-theme="light"] nav a { color: var(--iv-txt2); border-radius: .4rem; padding-inline: .55rem; }
+[data-theme="light"] nav a:hover { color: var(--iv-gold-d); background: rgba(230,200,120,.18); text-decoration: none; }
+[data-theme="light"] details.dropdown > summary { color: var(--iv-gold-d); font-weight: 600; white-space: nowrap; letter-spacing: .02em; }
+[data-theme="light"] details.dropdown > summary:hover { color: var(--iv-gold1); }
+[data-theme="light"] details.dropdown > ul {
+  background: var(--iv-panel1); border: 1px solid var(--iv-border); border-radius: 10px;
+  box-shadow: 0 14px 34px rgba(120,90,30,.22);
 }
-[data-theme="dark"] nav a:hover {
-  color: var(--gold-bright); background: rgba(212,175,55,.10); text-decoration: none;
-}
-[data-theme="dark"] details.dropdown > summary {
-  color: #f0dca0; font-weight: 600; white-space: nowrap;
-}
-[data-theme="dark"] details.dropdown > summary:hover { color: var(--gold-bright); }
-[data-theme="dark"] details.dropdown > ul {
-  background: #21121a; border: 1px solid rgba(212,175,55,.3); border-radius: .5rem;
-  box-shadow: 0 16px 38px rgba(0,0,0,.55);
-}
-[data-theme="dark"] details.dropdown > ul li a:hover {
-  background: rgba(212,175,55,.12); color: var(--gold-bright);
-}
+[data-theme="light"] details.dropdown > ul li a { font-family: var(--font-body); }
+[data-theme="light"] details.dropdown > ul li a:hover { background: rgba(230,200,120,.18); color: var(--iv-gold-d); }
 
-/* ---- карточки ----------------------------------------------------------- */
-[data-theme="dark"] article {
-  border: 1px solid rgba(212,175,55,.22);
-  background: linear-gradient(180deg, #23131c 0%, #1c0e16 100%);
-  box-shadow: inset 0 0 0 1px rgba(212,175,55,.05), 0 10px 30px rgba(0,0,0,.5);
+/* ---- карточки + угловая филигрань ---------------------------------------- */
+[data-theme="light"] article {
+  position: relative;
+  background: linear-gradient(180deg, var(--iv-panel1), var(--iv-panel2));
+  border: 1px solid var(--iv-border); border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(120,90,30,.15), inset 0 0 0 1px rgba(255,255,255,.5),
+              inset 0 0 50px rgba(230,200,120,.10);
 }
-[data-theme="dark"] article > header {
-  font-family: Georgia, "Times New Roman", serif; color: #f3e6c2;
-  border-bottom: 1px solid rgba(212,175,55,.22);
-  background: linear-gradient(180deg, rgba(212,175,55,.08), transparent);
+[data-theme="light"] article > header {
+  color: var(--iv-gold1); letter-spacing: .04em;
+  border-bottom: 1px solid var(--iv-border);
+  background: linear-gradient(180deg, rgba(230,200,120,.12), transparent);
 }
+/* две диагональные филиграни (не на маленьких KPI-карточках внутри .grid) */
+[data-theme="light"] article::before, [data-theme="light"] article::after {
+  content: ""; position: absolute; width: 40px; height: 40px; opacity: .5; pointer-events: none;
+  background: no-repeat center / contain;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cg fill='none' stroke='%23b8902f' stroke-width='2.5'%3E%3Cpath d='M4 96 L4 30 Q4 4 30 4 L96 4'/%3E%3Cpath d='M14 96 L14 34 Q14 14 34 14 L96 14'/%3E%3Cpath d='M14 50 Q34 50 34 30 Q34 14 50 14'/%3E%3Ccircle cx='24' cy='24' r='5' fill='%23b8902f'/%3E%3Cpath d='M24 96 Q24 70 40 60 Q52 52 50 40'/%3E%3C/g%3E%3C/svg%3E");
+}
+[data-theme="light"] article::before { top: 7px; left: 7px; }
+[data-theme="light"] article::after  { bottom: 7px; right: 7px; transform: rotate(180deg); }
+[data-theme="light"] .grid > article::before, [data-theme="light"] .grid > article::after { display: none; }
 
 /* ---- таблицы ------------------------------------------------------------ */
-[data-theme="dark"] table { border: 1px solid rgba(212,175,55,.16); border-radius: .5rem; }
-[data-theme="dark"] thead th {
-  background: linear-gradient(180deg, rgba(212,175,55,.16), rgba(212,175,55,.05));
-  color: #f3e6c2; font-family: Georgia, serif; letter-spacing: .02em;
-  border-bottom: 2px solid rgba(212,175,55,.4);
+[data-theme="light"] table { border: 1px solid var(--iv-border); border-radius: 10px; }
+[data-theme="light"] thead th {
+  background: linear-gradient(180deg, rgba(230,200,120,.22), rgba(230,200,120,.07));
+  color: var(--iv-gold-d); letter-spacing: .03em; border-bottom: 2px solid var(--iv-gold1);
 }
-[data-theme="dark"] tbody tr:nth-child(even) td { background: rgba(212,175,55,.04); }
-[data-theme="dark"] tbody tr:hover td { background: rgba(212,175,55,.09); }
-[data-theme="dark"] td, [data-theme="dark"] th { border-color: rgba(212,175,55,.14); }
+[data-theme="light"] tbody tr:nth-child(even) td { background: rgba(230,200,120,.07); }
+[data-theme="light"] tbody tr:hover td { background: rgba(230,200,120,.16); }
+[data-theme="light"] td, [data-theme="light"] th { border-color: var(--iv-border); }
 
-/* ---- кнопки: литое золото (кроме secondary/outline/contrast) ------------ */
-[data-theme="dark"] button:not(.secondary):not(.outline):not(.contrast),
-[data-theme="dark"] input[type="submit"]:not(.secondary):not(.outline),
-[data-theme="dark"] input[type="button"]:not(.secondary):not(.outline),
-[data-theme="dark"] [role="button"]:not(.secondary):not(.outline):not(.contrast) {
-  background-image: linear-gradient(180deg, #f0d480 0%, #d4af37 46%, #b8860b 100%);
-  color: #2a1608; border-color: var(--gold-deep); font-weight: 600; letter-spacing: .02em;
-  text-shadow: 0 1px 0 rgba(255,255,255,.25);
-  box-shadow: 0 2px 0 #7a5a12, 0 6px 16px rgba(0,0,0,.4);
+/* ---- кнопки: золотой градиент + блик (кроме secondary/outline/contrast) -- */
+[data-theme="light"] button:not(.secondary):not(.outline):not(.contrast),
+[data-theme="light"] input[type="submit"]:not(.secondary):not(.outline),
+[data-theme="light"] input[type="button"]:not(.secondary):not(.outline),
+[data-theme="light"] [role="button"]:not(.secondary):not(.outline):not(.contrast) {
+  position: relative; overflow: hidden;
+  color: #fff; border: none; font-weight: 600; letter-spacing: .04em;
+  background: linear-gradient(135deg, var(--iv-gold2) 0%, var(--iv-gold1) 45%, var(--iv-gold-d) 100%);
+  box-shadow: 0 4px 16px rgba(184,144,47,.4), inset 0 1px 0 rgba(255,255,255,.55);
+  transition: transform .18s, box-shadow .18s, filter .18s;
 }
-[data-theme="dark"] button:not(.secondary):not(.outline):not(.contrast):hover,
-[data-theme="dark"] input[type="submit"]:not(.secondary):not(.outline):hover,
-[data-theme="dark"] input[type="button"]:not(.secondary):not(.outline):hover,
-[data-theme="dark"] [role="button"]:not(.secondary):not(.outline):not(.contrast):hover {
-  background-image: linear-gradient(180deg, #f7e4a0 0%, #e3c24f 46%, #caa01f 100%);
-  color: #2a1608;
+[data-theme="light"] button:not(.secondary):not(.outline):not(.contrast)::after,
+[data-theme="light"] input[type="submit"]:not(.secondary):not(.outline)::after,
+[data-theme="light"] [role="button"]:not(.secondary):not(.outline):not(.contrast)::after {
+  content: ""; position: absolute; top: 0; left: -120%; width: 55%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent);
+  transform: skewX(-18deg);
 }
+[data-theme="light"] button:not(.secondary):not(.outline):not(.contrast):hover,
+[data-theme="light"] input[type="submit"]:not(.secondary):not(.outline):hover,
+[data-theme="light"] [role="button"]:not(.secondary):not(.outline):not(.contrast):hover {
+  transform: translateY(-2px); filter: brightness(1.06); color: #fff;
+}
+[data-theme="light"] button:not(.secondary):not(.outline):not(.contrast):hover::after,
+[data-theme="light"] input[type="submit"]:not(.secondary):not(.outline):hover::after,
+[data-theme="light"] [role="button"]:not(.secondary):not(.outline):not(.contrast):hover::after {
+  animation: iv-sheen .7s ease;
+}
+@keyframes iv-sheen { 0% { left: -120%; } 60%, 100% { left: 140%; } }
+
+/* secondary/outline — кремовая кнопка с золотой обводкой */
+[data-theme="light"] .secondary, [data-theme="light"] .outline {
+  background: #fffdf6; color: var(--iv-gold-d); border: 1px solid var(--iv-gold1);
+}
+
+/* ---- формы -------------------------------------------------------------- */
+[data-theme="light"] select, [data-theme="light"] input, [data-theme="light"] textarea {
+  font-family: var(--font-body);
+}
+[data-theme="light"] input[type="checkbox"], [data-theme="light"] input[type="radio"] { accent-color: var(--iv-gold1); }
+[data-theme="light"] :focus-visible { box-shadow: 0 0 0 3px var(--pico-primary-focus) !important; }
 
 /* ---- прочее ------------------------------------------------------------- */
-ins { color: #7ee08a; text-decoration: none; font-weight: 600; }
-del { color: #ff7b6b; text-decoration: none; font-weight: 600; }
-[data-theme="dark"] ::selection { background: var(--gold); color: #2a1608; }
-[data-theme="dark"] a { text-underline-offset: 2px; }
+ins { color: var(--iv-green); text-decoration: none; font-weight: 600; }
+del { color: var(--iv-red);   text-decoration: none; font-weight: 600; }
+[data-theme="light"] mark { padding: 0 .25em; border-radius: 4px; }
+[data-theme="light"] ::selection { background: var(--iv-gold2); color: var(--iv-txt); }
 
 footer {
-  margin-top: 2rem; padding-top: 1rem;
-  border-top: 1px solid rgba(212,175,55,.22); color: #b6a079; text-align: center;
+  margin-top: 2.5rem; padding-top: 1rem;
+  border-top: 1px solid var(--iv-border); color: var(--iv-dim); text-align: center;
 }
-[data-theme="dark"] footer::before {
-  content: "✦ ✦ ✦"; display: block; letter-spacing: .6rem;
-  color: var(--gold-deep); font-size: .7rem; margin-bottom: .6rem;
+[data-theme="light"] footer { font-family: var(--font-body); }
+[data-theme="light"] footer::before {
+  content: "❦ ✦ ❦"; display: block; letter-spacing: .5rem;
+  color: var(--iv-gold1); font-size: .85rem; margin-bottom: .6rem;
 }
 
 /* ---- searchable site (domain) selector (как было; берёт цвета из vars) --- */
@@ -196,7 +250,7 @@ footer {
   max-height: 16rem; overflow-y: auto; list-style: none; padding: .25rem;
   background: var(--pico-background-color);
   border: 1px solid var(--pico-form-element-border-color); border-radius: var(--pico-border-radius);
-  box-shadow: 0 6px 20px rgba(0,0,0,.45);
+  box-shadow: 0 6px 20px rgba(120,90,30,.22);
 }
 .site-search-list li {
   padding: .4rem .6rem; border-radius: var(--pico-border-radius); cursor: pointer;

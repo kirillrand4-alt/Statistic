@@ -1,17 +1,20 @@
 <!doctype html>
-<html lang="ru" data-theme="dark">
+<html lang="ru" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}SEO Статистика{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Cormorant+Garamond:wght@500;600;700&family=Playfair+Display:wght@600;700&family=PT+Serif:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ base_path }}/static/vendor/pico.min.css">
   <link rel="stylesheet" href="{{ base_path }}/static/css/app.css">
   <script src="{{ base_path }}/static/vendor/chart.umd.min.js"></script>
   <script>
-    if (window.Chart) {  /* tint charts to match the gold-on-burgundy theme */
-      Chart.defaults.color = '#d9c89c';
-      Chart.defaults.borderColor = 'rgba(212,175,55,.16)';
-      Chart.defaults.font.family = 'Georgia, "Times New Roman", serif';
+    if (window.Chart) {  /* tint charts to match the ivory & gold theme */
+      Chart.defaults.color = '#3a2f1c';
+      Chart.defaults.borderColor = 'rgba(184,144,47,.18)';
+      Chart.defaults.font.family = "'Cormorant Garamond','PT Serif',Georgia,serif";
     }
   </script>
 </head>
