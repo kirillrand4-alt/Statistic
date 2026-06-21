@@ -2,6 +2,8 @@
 <html lang="ru" data-theme="light">
 <head>
   <meta charset="utf-8">
+  <script>/* применяем выбранный скин до отрисовки, чтобы не мигало */
+    try { if (localStorage.getItem('skin') === 'green') document.documentElement.setAttribute('data-skin', 'green'); } catch (e) {}</script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}SEO Статистика{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -25,6 +27,20 @@
     <footer><small>SEO Статистика · источники: Google Search Console, Яндекс.Вебмастер, Яндекс.Метрика</small></footer>
   </main>
   {% block scripts %}{% endblock %}
+  <script>/* переключатель темы: золото <-> нежно салатовый (сохраняется в браузере) */
+    (function () {
+      var root = document.documentElement, btn = document.getElementById('skin-toggle');
+      function label() { if (btn) btn.textContent = root.getAttribute('data-skin') === 'green' ? '👑' : '🌿'; }
+      label();
+      if (btn) btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        var green = root.getAttribute('data-skin') === 'green';
+        if (green) root.removeAttribute('data-skin'); else root.setAttribute('data-skin', 'green');
+        try { localStorage.setItem('skin', green ? 'ivory' : 'green'); } catch (_) {}
+        label();
+      });
+    })();
+  </script>
   <script src="{{ base_path }}/static/js/sort.js"></script>
   <script src="{{ base_path }}/static/js/site-search.js"></script>
 </body>

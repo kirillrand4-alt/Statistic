@@ -1,31 +1,57 @@
 /* ============================================================================
-   «Ivory & Gold» — дворцовая светлая тема поверх Pico.css v2 (data-theme="light").
-   Слоновая кость + тонкое золото + serif-типографика, много воздуха.
-   Шрифты: заголовки — Cinzel (латиница) / Playfair Display (кириллица);
-   текст — Cormorant Garamond (латиница) / PT Serif (кириллица). Cinzel и
-   Cormorant Garamond не содержат кириллицы, поэтому русский текст подхватывают
-   запасные Playfair Display / PT Serif (пер-глиф фолбэк).
+   Светлая тема поверх Pico.css v2 (data-theme="light") с двумя «скинами»:
+     • по умолчанию      — «Ivory & Gold» (слоновая кость + золото);
+     • [data-skin=green] — «нежно салатовый» (мягкий зелёный).
+   Все цвета идут через --iv-* переменные, поэтому скин — это просто их
+   переопределение (переключатель в шапке хранит выбор в localStorage).
+   Шрифты: заголовки/подписи/кнопки — serif (Cinzel/Playfair); проза — serif
+   (Cormorant/PT Serif); данные (цифры/ссылки/таблицы/поля) — читаемый sans.
    ============================================================================ */
 
 :root {
   --iv-bg:     #f3ecdc;
   --iv-panel1: #fffaf0;
   --iv-panel2: #f6efe0;
-  --iv-gold1:  #b8902f;
-  --iv-gold2:  #e6c878;
+  --iv-gold1:  #b8902f;   /* основной акцент (рамки/подписи) */
+  --iv-gold2:  #e6c878;   /* светлый акцент */
   --iv-gold3:  #fff1c9;
-  --iv-gold-d: #8f6f20;
+  --iv-gold-d: #8f6f20;   /* тёмный акцент (заголовки/кнопки/ссылки) */
   --iv-txt:    #2a2418;
   --iv-txt2:   #3a2f1c;
   --iv-dim:    #9a8a6a;
   --iv-dim2:   #cdbf9a;
-  --iv-green:  #2e8b57;
-  --iv-red:    #9c3b3b;
+  --iv-field:  #fffdf6;   /* фон полей ввода */
+  --iv-ph:     #b3a784;   /* плейсхолдер */
+  --iv-green:  #2e8b57;   /* статус: рост */
+  --iv-red:    #9c3b3b;   /* статус: падение */
   --iv-border: rgba(184,144,47,.38);
+  --iv-g1-rgb: 184,144,47;   /* акцент (для полупрозрачных заливок) */
+  --iv-g2-rgb: 230,200,120;  /* светлый акцент */
+  --iv-shadow-rgb: 120,90,30;
   --font-head: 'Cinzel', 'Playfair Display', Georgia, serif;
   --font-body: 'Cormorant Garamond', 'PT Serif', Georgia, 'Times New Roman', serif;
-  /* данные (цифры/ссылки/таблицы/поля) — чистый sans, чтобы было читаемо */
   --font-data: system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* «нежно салатовый» скин — мягкий зелёный (только переопределение палитры) */
+[data-skin="green"] {
+  --iv-bg:     #eaf1da;
+  --iv-panel1: #f6faec;
+  --iv-panel2: #edf3dd;
+  --iv-gold1:  #7aa53a;
+  --iv-gold2:  #cfe6a8;
+  --iv-gold3:  #e8f4cf;
+  --iv-gold-d: #4f7d22;
+  --iv-txt:    #283318;
+  --iv-txt2:   #36421f;
+  --iv-dim:    #7e8a64;
+  --iv-dim2:   #b9c79a;
+  --iv-field:  #fbfdf5;
+  --iv-ph:     #9bad7e;
+  --iv-border: rgba(122,165,58,.42);
+  --iv-g1-rgb: 122,165,58;
+  --iv-g2-rgb: 207,230,168;
+  --iv-shadow-rgb: 70,95,30;
 }
 
 html { font-size: 106.25%; }  /* немного крупнее — serif-текст «дышит» */
@@ -40,6 +66,7 @@ figure { overflow-x: auto; }
    они вылезают за край и обрезаются. Разрешаем перенос на вторую строку. */
 nav { flex-wrap: wrap; row-gap: .1rem; }
 nav > ul { flex-wrap: wrap; }
+#skin-toggle { font-size: 1.05rem; }
 
 /* Формы-фильтры (<form class="grid">) у Pico раскладываются в РАВНЫЕ колонки —
    из-за этого сложный селектор домена/поисковика сплющивается. Делаем гибкую
@@ -68,41 +95,45 @@ nav > ul { flex-wrap: wrap; }
   --pico-primary-hover: var(--iv-txt);
   --pico-primary-hover-background: var(--iv-gold-d);
   --pico-primary-hover-border: var(--iv-gold-d);
-  --pico-primary-focus: rgba(230,200,120,.45);
+  --pico-primary-focus: rgba(var(--iv-g2-rgb),.45);
   --pico-primary-inverse: #fff;
-  --pico-primary-underline: rgba(184,144,47,.45);
+  --pico-primary-underline: rgba(var(--iv-g1-rgb),.45);
 
   --pico-card-background-color: var(--iv-panel1);
   --pico-card-sectioning-background-color: var(--iv-panel2);
   --pico-card-border-color: var(--iv-border);
-  --pico-card-box-shadow: 0 8px 30px rgba(120,90,30,.15), inset 0 0 0 1px rgba(255,255,255,.5);
+  --pico-card-box-shadow: 0 8px 30px rgba(var(--iv-shadow-rgb),.15), inset 0 0 0 1px rgba(255,255,255,.5);
 
-  --pico-form-element-background-color: #fffdf6;
+  --pico-form-element-background-color: var(--iv-field);
   --pico-form-element-border-color: var(--iv-gold1);
   --pico-form-element-color: var(--iv-txt2);
-  --pico-form-element-placeholder-color: #b3a784;
-  --pico-form-element-active-background-color: #fffdf6;
+  --pico-form-element-placeholder-color: var(--iv-ph);
+  --pico-form-element-active-background-color: var(--iv-field);
   --pico-form-element-active-border-color: var(--iv-gold1);
   --pico-form-element-focus-color: var(--iv-gold1);
 
   --pico-table-border-color: var(--iv-border);
-  --pico-table-row-stripped-background-color: rgba(230,200,120,.10);
+  --pico-table-row-stripped-background-color: rgba(var(--iv-g2-rgb),.10);
 
-  --pico-code-background-color: var(--iv-txt);     /* тёмный «островок» как в логе образца */
+  --pico-code-background-color: var(--iv-txt);
   --pico-code-color: var(--iv-dim2);
   --pico-mark-background-color: var(--iv-gold2);
   --pico-mark-color: var(--iv-txt);
   --pico-blockquote-border-color: var(--iv-border);
 }
 
-/* ---- фон: тёплые золотые блики + тонкая золотая лента сверху -------------- */
+/* ---- фон: тёплые блики + тонкая лента сверху ----------------------------- */
 [data-theme="light"] body {
   background-color: var(--iv-bg);
   background-image:
-    radial-gradient(circle at 12% 8%,  rgba(230,200,120,.18) 0, transparent 30%),
-    radial-gradient(circle at 88% 82%, rgba(184,144,47,.10) 0, transparent 35%);
+    radial-gradient(circle at 12% 8%,  rgba(var(--iv-g2-rgb),.18) 0, transparent 30%),
+    radial-gradient(circle at 88% 82%, rgba(var(--iv-g1-rgb),.10) 0, transparent 35%);
   background-attachment: fixed;
-  font-family: var(--font-body); font-weight: 500;
+  font-family: var(--font-data); font-weight: 500;   /* данные/списки — читаемым sans */
+}
+/* проза остаётся изящным serif */
+[data-theme="light"] p, [data-theme="light"] blockquote, [data-theme="light"] figcaption {
+  font-family: var(--font-body);
 }
 [data-theme="light"] body::before {
   content: ""; position: fixed; left: 0; right: 0; top: 0; height: 3px; z-index: 1000;
@@ -120,13 +151,13 @@ nav > ul { flex-wrap: wrap; }
   font-family: var(--font-head);
 }
 [data-theme="light"] h1, [data-theme="light"] h2 { font-weight: 700; letter-spacing: .02em; }
-[data-theme="light"] h2 {                       /* «дворцовый» подчёрк под заголовком */
+[data-theme="light"] h2 {                       /* подчёрк под заголовком */
   padding-bottom: .25rem; border-bottom: 2px solid;
   border-image: linear-gradient(90deg, var(--iv-gold1), transparent 75%) 1;
 }
 [data-theme="light"] hgroup h3 { letter-spacing: .01em; }
 
-/* подписи полей — капитель золотом; у чекбоксов/радио оставляем обычный текст */
+/* подписи полей — капитель акцентом; у чекбоксов/радио — обычный текст */
 [data-theme="light"] label {
   text-transform: uppercase; letter-spacing: .09em; font-size: .8rem;
   font-weight: 600; color: var(--iv-gold1);
@@ -144,28 +175,28 @@ nav > ul { flex-wrap: wrap; }
 [data-theme="light"] nav strong { font-size: 1.2rem; color: var(--iv-gold1); letter-spacing: .04em; }
 [data-theme="light"] nav strong .orn { color: var(--iv-gold2); }
 [data-theme="light"] nav a { color: var(--iv-txt2); border-radius: .4rem; padding-inline: .55rem; }
-[data-theme="light"] nav a:hover { color: var(--iv-gold-d); background: rgba(230,200,120,.18); text-decoration: none; }
+[data-theme="light"] nav a:hover { color: var(--iv-gold-d); background: rgba(var(--iv-g2-rgb),.18); text-decoration: none; }
 [data-theme="light"] details.dropdown > summary { color: var(--iv-gold-d); font-weight: 600; white-space: nowrap; letter-spacing: .02em; }
 [data-theme="light"] details.dropdown > summary:hover { color: var(--iv-gold1); }
 [data-theme="light"] details.dropdown > ul {
   background: var(--iv-panel1); border: 1px solid var(--iv-border); border-radius: 10px;
-  box-shadow: 0 14px 34px rgba(120,90,30,.22);
+  box-shadow: 0 14px 34px rgba(var(--iv-shadow-rgb),.22);
 }
 [data-theme="light"] details.dropdown > ul li a { font-family: var(--font-body); }
-[data-theme="light"] details.dropdown > ul li a:hover { background: rgba(230,200,120,.18); color: var(--iv-gold-d); }
+[data-theme="light"] details.dropdown > ul li a:hover { background: rgba(var(--iv-g2-rgb),.18); color: var(--iv-gold-d); }
 
 /* ---- карточки + угловая филигрань ---------------------------------------- */
 [data-theme="light"] article {
   position: relative;
   background: linear-gradient(180deg, var(--iv-panel1), var(--iv-panel2));
   border: 1px solid var(--iv-border); border-radius: 12px;
-  box-shadow: 0 8px 30px rgba(120,90,30,.15), inset 0 0 0 1px rgba(255,255,255,.5),
-              inset 0 0 50px rgba(230,200,120,.10);
+  box-shadow: 0 8px 30px rgba(var(--iv-shadow-rgb),.15), inset 0 0 0 1px rgba(255,255,255,.5),
+              inset 0 0 50px rgba(var(--iv-g2-rgb),.10);
 }
 [data-theme="light"] article > header {
   color: var(--iv-gold1); letter-spacing: .04em;
   border-bottom: 1px solid var(--iv-border);
-  background: linear-gradient(180deg, rgba(230,200,120,.12), transparent);
+  background: linear-gradient(180deg, rgba(var(--iv-g2-rgb),.12), transparent);
 }
 /* две диагональные филиграни (не на маленьких KPI-карточках внутри .grid) */
 [data-theme="light"] article::before, [data-theme="light"] article::after {
@@ -180,14 +211,14 @@ nav > ul { flex-wrap: wrap; }
 /* ---- таблицы ------------------------------------------------------------ */
 [data-theme="light"] table { border: 1px solid var(--iv-border); border-radius: 10px; }
 [data-theme="light"] thead th {
-  background: linear-gradient(180deg, rgba(230,200,120,.22), rgba(230,200,120,.07));
+  background: linear-gradient(180deg, rgba(var(--iv-g2-rgb),.22), rgba(var(--iv-g2-rgb),.07));
   color: var(--iv-gold-d); letter-spacing: .03em; border-bottom: 2px solid var(--iv-gold1);
 }
-[data-theme="light"] tbody tr:nth-child(even) td { background: rgba(230,200,120,.07); }
-[data-theme="light"] tbody tr:hover td { background: rgba(230,200,120,.16); }
+[data-theme="light"] tbody tr:nth-child(even) td { background: rgba(var(--iv-g2-rgb),.07); }
+[data-theme="light"] tbody tr:hover td { background: rgba(var(--iv-g2-rgb),.16); }
 [data-theme="light"] td, [data-theme="light"] th { border-color: var(--iv-border); }
 
-/* ---- кнопки: золотой градиент + блик (кроме secondary/outline/contrast) -- */
+/* ---- кнопки: акцентный градиент + блик (кроме secondary/outline/contrast) - */
 [data-theme="light"] button:not(.secondary):not(.outline):not(.contrast),
 [data-theme="light"] input[type="submit"]:not(.secondary):not(.outline),
 [data-theme="light"] input[type="button"]:not(.secondary):not(.outline),
@@ -195,7 +226,7 @@ nav > ul { flex-wrap: wrap; }
   position: relative; overflow: hidden;
   color: #fff; border: none; font-weight: 600; letter-spacing: .04em;
   background: linear-gradient(135deg, var(--iv-gold2) 0%, var(--iv-gold1) 45%, var(--iv-gold-d) 100%);
-  box-shadow: 0 4px 16px rgba(184,144,47,.4), inset 0 1px 0 rgba(255,255,255,.55);
+  box-shadow: 0 4px 16px rgba(var(--iv-g1-rgb),.4), inset 0 1px 0 rgba(255,255,255,.55);
   transition: transform .18s, box-shadow .18s, filter .18s;
 }
 [data-theme="light"] button:not(.secondary):not(.outline):not(.contrast)::after,
@@ -217,19 +248,24 @@ nav > ul { flex-wrap: wrap; }
 }
 @keyframes iv-sheen { 0% { left: -120%; } 60%, 100% { left: 140%; } }
 
-/* secondary/outline — кремовая кнопка с золотой обводкой */
+/* secondary/outline — светлая кнопка с акцентной обводкой */
 [data-theme="light"] .secondary, [data-theme="light"] .outline {
-  background: #fffdf6; color: var(--iv-gold-d); border: 1px solid var(--iv-gold1);
+  background: var(--iv-field); color: var(--iv-gold-d); border: 1px solid var(--iv-gold1);
 }
 
 /* ---- формы -------------------------------------------------------------- */
 [data-theme="light"] select, [data-theme="light"] input, [data-theme="light"] textarea {
   font-family: var(--font-data); font-variant-numeric: tabular-nums lining-nums;
+  /* подпись <label> делает капитель/разрядку акцентом — НЕ даём ей утечь в поля
+     (иначе текст в выпадающем списке сайтов становится КАПСОМ и нечитаемым) */
+  text-transform: none; letter-spacing: normal; color: var(--iv-txt2);
+}
+[data-theme="light"] option {
+  background: var(--iv-field); color: var(--iv-txt2);
+  text-transform: none; letter-spacing: normal; font-weight: 500;
 }
 
 /* ---- читаемые данные: цифры, ссылки, ячейки таблиц, KPI ------------------ */
-/* serif оставляем заголовкам/меню/кнопкам/подписям; здесь — чистый sans с
-   табличными «банковскими» цифрами и чуть жирнее, чтобы данные легко читались. */
 [data-theme="light"] td, [data-theme="light"] tbody th,
 [data-theme="light"] table a, [data-theme="light"] article a,
 [data-theme="light"] hgroup h3 {
@@ -259,14 +295,19 @@ footer {
   color: var(--iv-gold1); font-size: .85rem; margin-bottom: .6rem;
 }
 
-/* ---- searchable site (domain) selector (как было; берёт цвета из vars) --- */
+/* зелёный скин: угловая филигрань тем же зелёным акцентом (#7aa53a) */
+[data-skin="green"] article::before, [data-skin="green"] article::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cg fill='none' stroke='%237aa53a' stroke-width='2.5'%3E%3Cpath d='M4 96 L4 30 Q4 4 30 4 L96 4'/%3E%3Cpath d='M14 96 L14 34 Q14 14 34 14 L96 14'/%3E%3Cpath d='M14 50 Q34 50 34 30 Q34 14 50 14'/%3E%3Ccircle cx='24' cy='24' r='5' fill='%237aa53a'/%3E%3Cpath d='M24 96 Q24 70 40 60 Q52 52 50 40'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* ---- searchable site (domain) selector (берёт цвета из vars) ------------- */
 .site-search { position: relative; }
 .site-search-list {
   position: absolute; z-index: 50; left: 0; right: 0; margin: .15rem 0 0;
   max-height: 16rem; overflow-y: auto; list-style: none; padding: .25rem;
   background: var(--pico-background-color);
   border: 1px solid var(--pico-form-element-border-color); border-radius: var(--pico-border-radius);
-  box-shadow: 0 6px 20px rgba(120,90,30,.22);
+  box-shadow: 0 6px 20px rgba(var(--iv-shadow-rgb),.22);
 }
 .site-search-list li {
   padding: .4rem .6rem; border-radius: var(--pico-border-radius); cursor: pointer;
