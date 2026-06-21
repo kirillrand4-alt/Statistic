@@ -9,9 +9,9 @@
    ============================================================================ */
 
 :root {
-  --iv-bg:     #f3ecdc;
-  --iv-panel1: #fffaf0;
-  --iv-panel2: #f6efe0;
+  --iv-bg:     #fcf9f2;   /* почти белый, лишь намёк на тёплый оттенок */
+  --iv-panel1: #ffffff;
+  --iv-panel2: #fcf8ef;
   --iv-gold1:  #b8902f;   /* основной акцент (рамки/подписи) */
   --iv-gold2:  #e6c878;   /* светлый акцент */
   --iv-gold3:  #fff1c9;
@@ -35,9 +35,9 @@
 
 /* «нежно салатовый» скин — мягкий зелёный (только переопределение палитры) */
 [data-skin="green"] {
-  --iv-bg:     #eaf1da;
-  --iv-panel1: #f6faec;
-  --iv-panel2: #edf3dd;
+  --iv-bg:     #f6fbf0;   /* почти белый, лишь намёк на салатовый */
+  --iv-panel1: #ffffff;
+  --iv-panel2: #f6fcef;
   --iv-gold1:  #7aa53a;
   --iv-gold2:  #cfe6a8;
   --iv-gold3:  #e8f4cf;
@@ -126,8 +126,8 @@ nav > ul { flex-wrap: wrap; }
 [data-theme="light"] body {
   background-color: var(--iv-bg);
   background-image:
-    radial-gradient(circle at 12% 8%,  rgba(var(--iv-g2-rgb),.18) 0, transparent 30%),
-    radial-gradient(circle at 88% 82%, rgba(var(--iv-g1-rgb),.10) 0, transparent 35%);
+    radial-gradient(circle at 12% 8%,  rgba(var(--iv-g2-rgb),.12) 0, transparent 32%),
+    radial-gradient(circle at 88% 82%, rgba(var(--iv-g1-rgb),.06) 0, transparent 35%);
   background-attachment: fixed;
   font-family: var(--font-data); font-weight: 500;   /* данные/списки — читаемым sans */
 }
