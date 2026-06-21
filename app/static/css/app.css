@@ -24,6 +24,8 @@
   --iv-border: rgba(184,144,47,.38);
   --font-head: 'Cinzel', 'Playfair Display', Georgia, serif;
   --font-body: 'Cormorant Garamond', 'PT Serif', Georgia, 'Times New Roman', serif;
+  /* данные (цифры/ссылки/таблицы/поля) — чистый sans, чтобы было читаемо */
+  --font-data: system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
 html { font-size: 106.25%; }  /* немного крупнее — serif-текст «дышит» */
@@ -222,8 +224,22 @@ nav > ul { flex-wrap: wrap; }
 
 /* ---- формы -------------------------------------------------------------- */
 [data-theme="light"] select, [data-theme="light"] input, [data-theme="light"] textarea {
-  font-family: var(--font-body);
+  font-family: var(--font-data); font-variant-numeric: tabular-nums lining-nums;
 }
+
+/* ---- читаемые данные: цифры, ссылки, ячейки таблиц, KPI ------------------ */
+/* serif оставляем заголовкам/меню/кнопкам/подписям; здесь — чистый sans с
+   табличными «банковскими» цифрами и чуть жирнее, чтобы данные легко читались. */
+[data-theme="light"] td, [data-theme="light"] tbody th,
+[data-theme="light"] table a, [data-theme="light"] article a,
+[data-theme="light"] hgroup h3 {
+  font-family: var(--font-data); font-variant-numeric: tabular-nums lining-nums;
+}
+[data-theme="light"] td, [data-theme="light"] tbody th,
+[data-theme="light"] table a, [data-theme="light"] article a { font-weight: 500; }
+[data-theme="light"] hgroup h3 { color: var(--iv-txt); font-weight: 700; letter-spacing: 0; }
+[data-theme="light"] table a { color: var(--iv-gold-d); text-underline-offset: 2px; }
+[data-theme="light"] table a:hover { color: var(--iv-txt); }
 [data-theme="light"] input[type="checkbox"], [data-theme="light"] input[type="radio"] { accent-color: var(--iv-gold1); }
 [data-theme="light"] :focus-visible { box-shadow: 0 0 0 3px var(--pico-primary-focus) !important; }
 
