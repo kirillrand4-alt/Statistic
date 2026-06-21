@@ -10,6 +10,20 @@ article hgroup p { color: var(--pico-muted-color); margin: 0; }
 table small { word-break: break-all; }
 figure { overflow-x: auto; }
 
+/* Pico делает nav (и его ul) display:flex БЕЗ переноса — при многих пунктах меню
+   они вылезают за край и обрезаются. Разрешаем перенос на вторую строку. */
+nav { flex-wrap: wrap; row-gap: .1rem; }
+nav > ul { flex-wrap: wrap; }
+
+/* Формы-фильтры (<form class="grid">) у Pico раскладываются в РАВНЫЕ колонки —
+   из-за этого сложный селектор домена/поисковика сплющивается. Делаем гибкую
+   раскладку: каждый контрол по своему содержимому, переносится по необходимости.
+   Карточки (<div class="grid">) не трогаем — это только про формы. */
+@media (min-width: 768px) {
+  form.grid { display: flex; flex-wrap: wrap; align-items: end; gap: .4rem 1rem; }
+  form.grid > * { margin-bottom: 0; }
+}
+
 /* ---- палитра ------------------------------------------------------------- */
 [data-theme="dark"] {
   --gold:        #e7c869;
