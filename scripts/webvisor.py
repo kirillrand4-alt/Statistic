@@ -159,6 +159,24 @@ def cmd_probe(sessions, tmpl) -> None:
         ctx = p.chromium.launch_persistent_context(
             PROFILE_DIR, viewport=VIEWPORT, user_agent=ua, **launch)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        # Track resource loads — CSS/JS/img/font — to see what the replay can't fetch
+        # (a single styleless site usually = its CSS is blocked by robots.txt/CDN).
+        netlog = {"ok": [], "bad": []}
+        def _on_resp(r):
+            try:
+                rt = r.request.resource_type
+                if rt in ("stylesheet", "script", "image", "font"):
+                    (netlog["bad"] if r.status >= 400 else netlog["ok"]).append((rt, r.status, r.url))
+            except Exception:
+                pass
+        def _on_failed(req):
+            try:
+                if req.resource_type in ("stylesheet", "script", "image", "font"):
+                    netlog["bad"].append((req.resource_type, "FAIL", req.url))
+            except Exception:
+                pass
+        page.on("response", _on_resp)
+        page.on("requestfailed", _on_failed)
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(6000)
         try:
@@ -170,6 +188,15 @@ def cmd_probe(sessions, tmpl) -> None:
         with open(os.path.join(DEBUG_DIR, "probe.html"), "w", encoding="utf-8") as f:
             f.write(page.content())
         print(f"  URL: {page.url}\n  скриншот: {shot}")
+        css_ok = sum(1 for t, _, _ in netlog["ok"] if t == "stylesheet")
+        print(f"  Ресурсы реплея: CSS загружено={css_ok}, всего ok={len(netlog['ok'])}, "
+              f"не загрузилось={len(netlog['bad'])}")
+        if css_ok == 0:
+            print("  ⚠ НИ ОДНОГО CSS не загрузилось — поэтому «в одну колонку». "
+                  "Чаще всего CSS закрыт в robots.txt сайта (Bitrix: /bitrix/, /local/) "
+                  "или режется CDN/WAF. Открой CSS для Яндекса в robots.txt.")
+        for rt, st, u in netlog["bad"][:30]:
+            print(f"    ✗ {rt} {st} {u[:130]}")
         if "passport" in page.url or "auth" in page.url:
             print("  ⚠ не залогинен — сначала пройди --login.")
         for fr in page.frames:
