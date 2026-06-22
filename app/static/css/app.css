@@ -264,6 +264,11 @@ nav > ul { flex-wrap: wrap; }
   background: var(--iv-field); color: var(--iv-txt2);
   text-transform: none; letter-spacing: normal; font-weight: 500;
 }
+/* списки выбора сайта/домена содержат длинные URL — нативный <select> делает
+   выпадашку шириной с само поле и режет варианты («GOOGLE · HTTPS://PR…»).
+   Даём таким селектам запас ширины, чтобы домены читались целиком. */
+[data-theme="light"] select[name="site_id"],
+[data-theme="light"] select[name="domain"] { min-width: 24rem; max-width: 100%; }
 
 /* ---- читаемые данные: цифры, ссылки, ячейки таблиц, KPI ------------------ */
 [data-theme="light"] td, [data-theme="light"] tbody th,
