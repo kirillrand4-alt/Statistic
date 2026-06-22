@@ -119,6 +119,9 @@ def spec(o):
     if o.get("ff"): p.append("FF")
     if o.get("vsd"): p.append("VSD")
     return " ".join(p)
+def cname(c):
+    # engerair кладёт все давления на 1 URL с общим именем -> дописываем бар, чтобы строки не выглядели дублями
+    return c["name"] + (f" [{c['bar']:g} бар]" if c.get("bar") is not None and f"{c['bar']:g}" not in c["name"] else "")
 
 def run(ours, comp, label):
     rows=[]; matched=set()
@@ -132,7 +135,7 @@ def run(ours, comp, label):
                 for c in mm:
                     matched.add(c["url"])
                     rows.append(["есть у обоих", b, o["name"], spec(o), fmtp(o.get("price")),
-                                 c["name"], spec(c), fmtp(c.get("price")), o["url"], c["url"]])
+                                 cname(c), spec(c), fmtp(c.get("price")), o["url"], c["url"]])
             elif b in comp:   # «только у нас» показываем лишь по брендам, которые конкурент ВОЗИТ
                 rows.append(["только у нас", b, o["name"], spec(o), fmtp(o.get("price")),"","","",o["url"],""])
     for b,lst in comp.items():
@@ -140,7 +143,7 @@ def run(ours, comp, label):
         for c in lst:
             if c["url"] in matched or c["url"] in seen: continue
             seen.add(c["url"])
-            rows.append(["нет у нас (GAP)", b, "","","", c["name"], spec(c), fmtp(c.get("price")),"",c["url"]])
+            rows.append(["нет у нас (GAP)", b, "","","", cname(c), spec(c), fmtp(c.get("price")),"",c["url"]])
     HEAD=["статус","бренд","наш товар","наши спеки","цена наша,₽","товар конкурента","спеки конкур",
           "цена конкур,₽","наша ссылка","ссылка конкурента"]
     ST={"есть у обоих":0,"только у нас":1,"нет у нас (GAP)":2}
