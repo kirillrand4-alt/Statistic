@@ -462,6 +462,7 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5,
           flush=True)
     man = open(os.path.join(DATA_DIR, "manifest.csv"), "a", encoding="utf-8")
     ok = fail = 0
+    DEBUG_SHOT = bool(os.environ.get("WEBVISOR_DEBUG_SHOT"))  # тест: скрин кадра рядом с видео
     _clear_profile_lock()
     launch, ua = _render_launch()
     pre_existing = {f for f in os.listdir(OUT_DIR) if f.endswith(".webm")}
@@ -512,6 +513,12 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5,
                     except Exception:
                         pass
                 page.wait_for_timeout(secs * 1000)
+                if DEBUG_SHOT:  # тест: скриншот того же кадра (способ probe) для сравнения с .webm
+                    os.makedirs(DEBUG_DIR, exist_ok=True)
+                    try:
+                        page.screenshot(path=os.path.join(DEBUG_DIR, f"rec_{vid}.png"))
+                    except Exception:
+                        pass
                 page.close()
                 src = video.path() if video else None
                 if src and os.path.exists(src):
