@@ -491,6 +491,10 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5,
             url = _replay_url(s.get("counter_id"), vid, s.get("date"), hashes[str(vid)], tmpl)
             secs = _secs(s["duration"])
             page = ctx.new_page()
+            try:  # headed Chromium paints only the ACTIVE tab — make this one active,
+                page.bring_to_front()  # иначе видео фоновой вкладки выходит без стилей
+            except Exception:
+                pass
             video = page.video
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
