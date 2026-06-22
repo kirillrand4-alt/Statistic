@@ -66,45 +66,50 @@ MAP={
 
 def load(path, kind):
     m=MAP[kind]
-    # merge по URL: у engerair спеки на sku-строках, у товара пусто -> сливаем поля по карточке
-    merged={}
-    for r in csv.DictReader(open(path,encoding="utf-8-sig"),delimiter=";"):
-        u=(r.get("URL") or "").strip()
-        nm=(r.get("Название") or "").strip()
+    rows=list(csv.DictReader(open(path,encoding="utf-8-sig"),delimiter=";"))
+    # группируем по URL. У engerair давление/произв. лежат на РАЗНЫХ sku-строках одного URL
+    # (OF-110W: 8 бар и 10 бар) — нельзя сливать в одну, иначе теряется второй вариант.
+    tname={}; byurl=defaultdict(list)
+    for r in rows:
+        u=(r.get("URL") or "").strip(); nm=(r.get("Название") or "").strip()
         if not u or not nm: continue
-        cur=merged.setdefault(u, {"Название":nm})
-        for k,v in r.items():
-            if v and not cur.get(k): cur[k]=v
-    out=defaultdict(list)
-    for u,r in merged.items():
-        nm=r["Название"]
+        byurl[u].append(r)
+        if r.get("Тип")=="товар": tname.setdefault(u, nm)   # чистое имя (sku-имена с хвостами)
+    def g(r,key): return r.get(m[key]) if m.get(key) else None
+    def specced(r): return any(g(r,k) for k in ("kw","bar","flmin","flm3min","flm3ch"))
+    out=defaultdict(list); seen=set()
+    for u, group in byurl.items():
+        nm=tname.get(u) or group[0].get("Название","").strip()
         if not is_compressor(nm): continue
         b=brand_from_text(nm) or BRAND_ALIASES.get(nm.lower().split()[0] if nm else "", None)
         if not b: continue
         sn=ser_of(nm, b)
         if not sn: continue
-        def g(key): return r.get(m[key]) if m.get(key) else None
-        kw=parse_kw(fix_excel(g("kw")))                 # Excel-автодата чинится для ЛЮБОГО файла
-        bar=bar_value(fix_excel(g("bar"))) or bar_from_text(nm)   # 884 «бар» ackompressor тоже побиты Excel
-        # производительность: л/мин -> м³/мин -> м³/ч (что заполнено); engerair flkey форсит м³/мин
-        fl=None
-        if m["flkey"]: fl=flow_value(fix_excel(g("flmin")), m["flkey"])
-        else:
-            for src,key in (("flmin","л/мин"),("flm3min","м3/мин"),("flm3ch","м3/час")):
-                if g(src): fl=flow_value(fix_excel(g(src)), key); break
-        ff,vsd,rv=text_flags(nm)                       # из названия (FF/VSD/ресивер в имени)
-        ff,rv=suffix_flags(nm, b, ff, rv)
-        if vsd is None: vsd=flag(g("vsd"))
-        if flag(g("ff"))==1: ff=1
-        if rv is None:
-            rvol=num(g("rvol")) if g("rvol") else None
-            if rvol: rv=rvol
-            elif flag(g("rflag"))==1: rv=1
-        drv=(str(g("dr") or "")).strip().lower() or None
-        if drv: drv="ремен" if "ремен" in drv else ("прямой" if "прям" in drv else None)
-        out[b].append(dict(sn=sn, kw=kw, bar=bar, fl=fl, vsd=vsd, ff=ff, rv=rv, dr=drv,
-                           ip=ip_class(nm), cool=cool_class(nm, g("cool") or ""),
-                           name=nm, url=u, price=price_num(g("price"), m["mult"])))
+        # приоритет строкам с давлением/произв. (реальные вариации); kw-only товар-строку
+        # берём только если ничего лучше нет — иначе она даёт рыхлый дубль-матч (бар молчит)
+        rich=[x for x in group if g(x,"bar") or g(x,"flmin") or g(x,"flm3min") or g(x,"flm3ch")]
+        for r in (rich or [x for x in group if specced(x)] or group[:1]):   # карточка на КАЖДУЮ спек-вариацию
+            kw=parse_kw(fix_excel(g(r,"kw")))               # Excel-автодата чинится для любого файла
+            bar=bar_value(fix_excel(g(r,"bar"))) or bar_from_text(nm)   # 884 «бар» ackompressor тоже побиты
+            fl=None
+            if m["flkey"]: fl=flow_value(fix_excel(g(r,"flmin")), m["flkey"])
+            else:
+                for src,key in (("flmin","л/мин"),("flm3min","м3/мин"),("flm3ch","м3/час")):
+                    if g(r,src): fl=flow_value(fix_excel(g(r,src)), key); break
+            k=(u, kw, bar, fl)
+            if k in seen: continue                          # одинаковые sku не плодим
+            seen.add(k)
+            ff,vsd,rv=text_flags(nm); ff,rv=suffix_flags(nm, b, ff, rv)
+            if vsd is None: vsd=flag(g(r,"vsd"))
+            if flag(g(r,"ff"))==1: ff=1
+            if rv is None:
+                rvol=num(g(r,"rvol")) if g(r,"rvol") else None
+                rv=rvol if rvol else (1 if flag(g(r,"rflag"))==1 else None)
+            drv=(str(g(r,"dr") or "")).strip().lower() or None
+            if drv: drv="ремен" if "ремен" in drv else ("прямой" if "прям" in drv else None)
+            out[b].append(dict(sn=sn, kw=kw, bar=bar, fl=fl, vsd=vsd, ff=ff, rv=rv, dr=drv,
+                               ip=ip_class(nm), cool=cool_class(nm, g(r,"cool") or ""),
+                               name=nm, url=u, price=price_num(g(r,"price"), m["mult"])))
     return out
 
 def fmt(v): return "" if v is None else (f"{v:g}" if isinstance(v,float) else str(v))
