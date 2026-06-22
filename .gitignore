@@ -12,6 +12,7 @@ matching/
 brand11_cards/
 brand11_reports/
 match_new/
+nash_po_brendam/
 *.txt
 !requirements.txt
 GAP_почти_матч.csv
