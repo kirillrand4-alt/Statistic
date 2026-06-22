@@ -1242,6 +1242,7 @@ def compare_page(request: Request, site_id: int | None = None, metric: str = "cl
 def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None, gran="day"):
     from app.services import google_index as gi
     from app.services import indexing
+    from app.services import indexnow as inx
 
     sites = _sites(db)
     site = _resolve_site(db, site_id)
@@ -1264,12 +1265,14 @@ def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None, gr
         g_inspect = gi.load_result("inspect", site.id)
         g_submit = gi.load_result("submit", site.id)
     g_running = bool((g_inspect and g_inspect.get("running")) or (g_submit and g_submit.get("running")))
+    indexnow_info = inx.info(db, site) if site is not None else None
     return {
         "request": request, "msg": msg, "sites": sites, "site": site,
         "snapshots": snapshots, "history": history, "cmp": cmp,
         "a": a, "b": b, "can_capture": can_capture, "check": check, "gran": gran,
         "g_inspect": g_inspect, "g_submit": g_submit, "g_running": g_running,
         "g_can_inspect": g_can_inspect, "g_can_submit": g_can_submit,
+        "indexnow": indexnow_info,
     }
 
 
@@ -1473,6 +1476,33 @@ def ui_google_check_export(site_id: int = Form(...), export: str = Form("out:txt
     fname = f"google_{tag}_site{site_id}.{ext}"
     return Response(content=body, media_type=media,
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@router.post("/ui/indexing/indexnow/submit")
+async def ui_indexnow_submit(site_id: int = Form(...), urls_text: str | None = Form(None),
+                             file: UploadFile | None = File(None), db: Session = Depends(get_db)):
+    """Push the URL list to IndexNow (Bing/Yandex) — one request, no OAuth."""
+    from app.services import indexnow
+
+    site = db.get(Site, site_id)
+    if site is None:
+        raise HTTPException(404, "site not found")
+    urls = await _read_url_list(urls_text, file)
+    if not urls:
+        return _index_redirect(site_id, "Добавьте список URL для отправки в IndexNow.")
+    res = indexnow.submit(db, site, urls)
+    msg = f"IndexNow ({res['host']}): {res['message']}"
+    return _index_redirect(site_id, msg)
+
+
+@router.get("/ui/indexing/indexnow/keyfile")
+def ui_indexnow_keyfile(db: Session = Depends(get_db)):
+    """Download the IndexNow key file to upload to the site root as <key>.txt."""
+    from app.services import indexnow
+
+    key = indexnow.get_key(db)
+    return Response(content=key, media_type="text/plain; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{key}.txt"'})
 
 
 def _same_domain_site_ids(db: Session, site: Site) -> tuple[list[int], str]:

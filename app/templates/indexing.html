@@ -146,6 +146,30 @@
 </article>
 {% endif %}
 
+{% if indexnow %}
+<article>
+  <header>⚡ IndexNow — быстрая отправка в Bing и Яндекс (не Google)</header>
+  <p><small>IndexNow мгновенно уведомляет <strong>Bing и Яндекс</strong> (и Seznam/Naver) об изменённых URL — без OAuth и квот OAuth.
+  Google IndexNow <strong>не поддерживает</strong>. За один запрос — до {{ 10000|numfmt }} URL.</small></p>
+  <p><small><strong>Однократная настройка для <code>{{ indexnow.host }}</code>:</strong> положи в корень сайта файл
+  <code>{{ indexnow.key }}.txt</code> с содержимым <code>{{ indexnow.key }}</code>
+  (<a href="{{ base_path }}/ui/indexing/indexnow/keyfile">⬇ скачать готовый файл-ключ</a>).
+  Проверка: <code>{{ indexnow.key_url }}</code> должен открываться и показывать этот ключ.</small></p>
+  <form method="post" action="{{ base_path }}/ui/indexing/indexnow/submit" enctype="multipart/form-data">
+    <input type="hidden" name="site_id" value="{{ site.id }}">
+    <div class="grid">
+      <label>Список URL (по одному в строке; можно путь вида <code>/page</code>)
+        <textarea name="urls_text" rows="6" placeholder="https://{{ indexnow.host }}/page1&#10;/otnositelnyy-put"></textarea>
+      </label>
+      <label>…или файл (.txt / .csv)
+        <input type="file" name="file" accept=".txt,.csv,.tsv">
+      </label>
+    </div>
+    <button type="submit">⚡ Отправить в IndexNow</button>
+  </form>
+</article>
+{% endif %}
+
 <article>
   <header>Проверить свой список по последнему снимку</header>
   <form method="post" action="{{ base_path }}/ui/indexing/check" enctype="multipart/form-data">
