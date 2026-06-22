@@ -4,7 +4,7 @@
 import csv, os, sys, zipfile
 csv.field_size_limit(sys.maxsize)
 from collections import Counter, defaultdict
-from matcher import brand_from_text
+from matcher import brand_from_text, find_brand
 from spec_match import num, sane_kw, bar_value, flow_value, is_compressor
 
 SRC="/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/426094e6-prokompressor.ru.csv"
@@ -36,7 +36,10 @@ def build():
     for r in csv.DictReader(open(SRC,encoding="utf-8-sig"),delimiter=";"):
         nm=(r.get("Название") or "").strip()
         if not nm: continue
-        b=brand_from_text(nm) or "_не_распознан"
+        # ИМЯ первично; URL (find_brand) — только фолбэк для «AC + серия Atlas» (ac-ga22/ac-zr-110),
+        # которое brand_from_text режет как «ac»=воздушное охлаждение. Порядок важен: brand_of (URL
+        # first) ошибочно ловит токен «buster» в слаге бустеров -> enger/dalgakiran становились buster.
+        b=brand_from_text(nm) or find_brand(r.get("URL") or "") or "_не_распознан"
         cnt[b]+=1
         rows[b].append([cat(nm), nm, fmt(sane_kw(num(r.get("Св-во: MOSHCHNOST_KVT")))),
             fmt(bar_value(r.get("Св-во: RABOCHEE_DAVLENIE_BAR"))), fmtp(flowlmin(r)),

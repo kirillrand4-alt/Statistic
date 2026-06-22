@@ -5,7 +5,7 @@ load_ours_all, и гоняет тот же match()+фильтры. Засады 
 import csv, sys, os, re, zipfile
 csv.field_size_limit(sys.maxsize)
 from collections import defaultdict
-from matcher import brand_from_text, BRAND_ALIASES
+from matcher import brand_from_text, find_brand, BRAND_ALIASES
 from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value, is_compressor,
                         text_flags, ip_class, cool_class, match, receiver_filter, ff_filter,
                         ip_filter, cool_filter)
@@ -81,7 +81,9 @@ def load(path, kind):
     for u, group in byurl.items():
         nm=tname.get(u) or group[0].get("Название","").strip()
         if not is_compressor(nm): continue
-        b=brand_from_text(nm) or BRAND_ALIASES.get(nm.lower().split()[0] if nm else "", None)
+        # имя первично; URL-фолбэк (find_brand) ловит «AC ZR/ZT/GA»=Atlas, но НЕ перебивает бренд
+        # токеном «buster» из слага (это и был баг brand_of: enger/dalgakiran -> buster)
+        b=brand_from_text(nm) or find_brand(u) or BRAND_ALIASES.get(nm.lower().split()[0] if nm else "", None)
         if not b: continue
         sn=ser_of(nm, b)
         if not sn: continue
