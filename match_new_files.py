@@ -84,14 +84,14 @@ def load(path, kind):
         sn=ser_of(nm, b)
         if not sn: continue
         def g(key): return r.get(m[key]) if m.get(key) else None
-        kw=parse_kw(g("kw") if not m["kwfix"] else fix_excel(g("kw")))
-        bar=bar_value(g("bar")) or bar_from_text(nm)
+        kw=parse_kw(fix_excel(g("kw")))                 # Excel-автодата чинится для ЛЮБОГО файла
+        bar=bar_value(fix_excel(g("bar"))) or bar_from_text(nm)   # 884 «бар» ackompressor тоже побиты Excel
         # производительность: л/мин -> м³/мин -> м³/ч (что заполнено); engerair flkey форсит м³/мин
         fl=None
-        if m["flkey"]: fl=flow_value(g("flmin"), m["flkey"])
+        if m["flkey"]: fl=flow_value(fix_excel(g("flmin")), m["flkey"])
         else:
             for src,key in (("flmin","л/мин"),("flm3min","м3/мин"),("flm3ch","м3/час")):
-                if g(src): fl=flow_value(g(src), key); break
+                if g(src): fl=flow_value(fix_excel(g(src)), key); break
         ff,vsd,rv=text_flags(nm)                       # из названия (FF/VSD/ресивер в имени)
         ff,rv=suffix_flags(nm, b, ff, rv)
         if vsd is None: vsd=flag(g("vsd"))
@@ -151,9 +151,12 @@ def run(ours, comp, label):
 def main():
     os.makedirs(OUTDIR, exist_ok=True)
     ours=load(PROKO,"proko"); print("наших компрессоров(с серией):", sum(len(v) for v in ours.values()))
-    ack =load(ACK,"ack");     print("ackompressor:", sum(len(v) for v in ack.values()))
+    ack =load(ACK,"ack")
+    # на ac-kompressor.ru активен ТОЛЬКО Atlas Copco, остальные бренды в файле есть, но не активны
+    ack={b:v for b,v in ack.items() if b=="atlas"}
+    print("ackompressor АКТИВНЫХ (Atlas Copco):", sum(len(v) for v in ack.values()))
     eng =load(ENG,"eng");     print("engerair:", sum(len(v) for v in eng.values()))
-    made=[run(ours,ack,"prokompressor_VS_ackompressor"), run(ours,eng,"prokompressor_VS_engerair")]
+    made=[run(ours,ack,"prokompressor_VS_ackompressor_Atlas"), run(ours,eng,"prokompressor_VS_engerair")]
     with zipfile.ZipFile(ZIP,"w",zipfile.ZIP_DEFLATED) as z:
         for p in made: z.write(p, os.path.basename(p))
     print("->", ZIP)
