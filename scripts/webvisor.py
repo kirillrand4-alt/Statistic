@@ -137,98 +137,85 @@ def _load_hashes() -> dict:
     return out
 
 
-def cmd_probe(sessions, tmpl) -> None:
-    os.makedirs(DEBUG_DIR, exist_ok=True)
-    hashes = _load_hashes()
-    s = (next((x for x in sessions if str(x.get("visit_id")) in hashes), None)
-         or (sessions[0] if sessions else {"counter_id": "", "visit_id": "", "date": ""}))
-    uh = hashes.get(str(s.get("visit_id")), "")
-    if not uh:
-        print("  ⚠ нет сессии с user_id_hash — сначала запусти --harvest (иначе откроется ошибка).")
-    url = _replay_url(s.get("counter_id"), s.get("visit_id"), s.get("date"), uh, tmpl)
-    print(f"Probe: открываю {url}")
-    js = ("() => { const out=[]; "
-          "for (const e of document.querySelectorAll("
-          "'button,[role=button],[class*=speed],[class*=Speed],[class*=rate],[class*=Rate],"
-          "[class*=playback],[class*=Playback],[class*=control],[class*=Control],[data-speed]')) "
-          "{ out.push({tag:e.tagName, t:(e.innerText||'').trim().slice(0,24), "
-          "title:e.getAttribute('title')||'', aria:e.getAttribute('aria-label')||'', "
-          "cls:(''+(e.className||'')).slice(0,70)}); } return out.slice(0,80); }")
-    launch, ua = _render_launch()  # same render path as --record, so the shot shows real CSS
-    with _pw()() as p:
-        ctx = p.chromium.launch_persistent_context(
-            PROFILE_DIR, viewport=VIEWPORT, user_agent=ua, **launch)
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        # Track resource loads — CSS/JS/img/font — to see what the replay can't fetch
-        # (a single styleless site usually = its CSS is blocked by robots.txt/CDN).
-        netlog = {"ok": [], "bad": []}
-        def _on_resp(r):
-            try:
-                rt = r.request.resource_type
-                if rt in ("stylesheet", "script", "image", "font"):
-                    (netlog["bad"] if r.status >= 400 else netlog["ok"]).append((rt, r.status, r.url))
-            except Exception:
-                pass
-        def _on_failed(req):
-            try:
-                if req.resource_type in ("stylesheet", "script", "image", "font"):
-                    netlog["bad"].append((req.resource_type, "FAIL", req.url))
-            except Exception:
-                pass
-        page.on("response", _on_resp)
-        page.on("requestfailed", _on_failed)
+def _probe_one(page, url):
+    """Open one replay, wait for it to settle, return its CSS/JS/img/font load stats."""
+    net = {"ok": [], "bad": []}
+    def _on_resp(r):
+        try:
+            rt = r.request.resource_type
+            if rt in ("stylesheet", "script", "image", "font"):
+                (net["bad"] if r.status >= 400 else net["ok"]).append((rt, r.status, r.url))
+        except Exception:
+            pass
+    def _on_failed(req):
+        try:
+            if req.resource_type in ("stylesheet", "script", "image", "font"):
+                net["bad"].append((req.resource_type, "FAIL", req.url))
+        except Exception:
+            pass
+    page.on("response", _on_resp)
+    page.on("requestfailed", _on_failed)
+    try:
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(6000)
         try:
             page.wait_for_load_state("networkidle", timeout=8000)
         except Exception:
             pass
-        shot = os.path.join(DEBUG_DIR, "probe.png")
-        page.screenshot(path=shot, full_page=False)
-        with open(os.path.join(DEBUG_DIR, "probe.html"), "w", encoding="utf-8") as f:
-            f.write(page.content())
-        print(f"  URL: {page.url}\n  скриншот: {shot}")
-        css_ok = sum(1 for t, _, _ in netlog["ok"] if t == "stylesheet")
-        print(f"  Ресурсы реплея: CSS загружено={css_ok}, всего ok={len(netlog['ok'])}, "
-              f"не загрузилось={len(netlog['bad'])}")
-        if css_ok == 0:
-            print("  ⚠ НИ ОДНОГО CSS не загрузилось — поэтому «в одну колонку». "
-                  "Чаще всего CSS закрыт в robots.txt сайта (Bitrix: /bitrix/, /local/) "
-                  "или режется CDN/WAF. Открой CSS для Яндекса в robots.txt.")
-        for rt, st, u in netlog["bad"][:30]:
-            print(f"    ✗ {rt} {st} {u[:130]}")
-        if "passport" in page.url or "auth" in page.url:
-            print("  ⚠ не залогинен — сначала пройди --login.")
-        for fr in page.frames:
-            try:
-                ctrls = fr.evaluate(js)
-            except Exception:
-                continue
-            if not ctrls:
-                continue
-            print(f"  -- frame {fr.url[:55]} : {len(ctrls)} контролов")
-            for c in ctrls:
-                blob = (c["t"] + c["title"] + c["aria"] + c["cls"]).lower()
-                star = "  ⭐" if any(k in blob for k in
-                                    ("speed", "rate", "playback", "скорост", "x2", "x4", "x8")) else "    "
-                print(f"{star}<{c['tag']}> t='{c['t']}' title='{c['title']}' "
-                      f"aria='{c['aria']}' cls='{c['cls']}'")
-        try:  # role-based scan pierces shadow DOM, where player controls may live
-            btns = page.get_by_role("button")
-            n = btns.count()
-            print(f"  role=button (сквозь shadow): {n}")
-            for i in range(min(n, 70)):
-                b = btns.nth(i)
-                txt = ((b.text_content() or "").strip())[:24]
-                aria = b.get_attribute("aria-label") or ""
-                title = b.get_attribute("title") or ""
-                if txt or aria or title:
-                    blob = (txt + aria + title).lower()
-                    star = "  ⭐" if any(k in blob for k in
-                                        ("speed", "скорост", "x2", "x4", "x8", "×")) else "    "
-                    print(f"{star}btn[{i}] '{txt}' aria='{aria}' title='{title}'")
-        except Exception as e:
-            print("  role-scan:", e)
+    finally:
+        page.remove_listener("response", _on_resp)
+        page.remove_listener("requestfailed", _on_failed)
+    return net
+
+
+def cmd_probe(sessions, tmpl, n=1, visit="") -> None:
+    """Open Webvisor replays and report which resources (CSS/JS/img/font) load — to
+    find why SOME sessions of a site render styleless while others are fine.
+    ``--visit ID`` probes one specific session; ``--probe-n N`` opens N sessions in a
+    row and prints a per-session line (device + landing + CSS counts), so a pattern
+    (e.g. only mobile, or one landing page, or one date) becomes obvious."""
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+    hashes = _load_hashes()
+    pool = [s for s in sessions if str(s.get("visit_id")) in hashes]
+    if visit:
+        pool = [s for s in pool if str(s.get("visit_id")) == str(visit)]
+        if not pool:
+            print(f"  ⚠ visit {visit} не найден среди сессий с user_id_hash (проверь фильтры/--harvest).")
+            return
+    if not pool:
+        print("  ⚠ нет сессий с user_id_hash — сначала запусти --harvest.")
+        return
+    targets = pool[:max(1, n)]
+    single = len(targets) == 1
+    launch, ua = _render_launch()  # same render path as --record
+    print(f"Probe: опрашиваю сессий {len(targets)} "
+          f"(браузер {'headless' if launch.get('headless') else 'headed'})")
+    with _pw()() as p:
+        ctx = p.chromium.launch_persistent_context(
+            PROFILE_DIR, viewport=VIEWPORT, user_agent=ua, **launch)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        for idx, s in enumerate(targets, 1):
+            uh = hashes.get(str(s.get("visit_id")), "")
+            url = _replay_url(s.get("counter_id"), s.get("visit_id"), s.get("date"), uh, tmpl)
+            net = _probe_one(page, url)
+            if "passport" in page.url or "auth" in page.url:
+                print("  ⚠ не залогинен — сначала пройди --login.")
+                break
+            css_ok = sum(1 for t, _, _ in net["ok"] if t == "stylesheet")
+            css_bad = sum(1 for t, _, _ in net["bad"] if t == "stylesheet")
+            flag = " ← БЕЗ СТИЛЕЙ" if css_ok == 0 else ""
+            print(f"  [{idx}/{len(targets)}] visit={s.get('visit_id')} дата={s.get('date')} "
+                  f"устр.={s.get('device') or '?'} CSS ok={css_ok} bad={css_bad} "
+                  f"(ресурсов ok={len(net['ok'])}, плохих={len(net['bad'])}){flag}")
+            print(f"          вход: {(s.get('start_url') or '')[:90]}")
+            for rt, st, u in net["bad"][:8]:
+                print(f"          ✗ {rt} {st} {u[:120]}")
+            if single:
+                shot = os.path.join(DEBUG_DIR, "probe.png")
+                page.screenshot(path=shot, full_page=False)
+                with open(os.path.join(DEBUG_DIR, "probe.html"), "w", encoding="utf-8") as f:
+                    f.write(page.content())
+                print(f"          скриншот: {shot}")
         ctx.close()
 
 
@@ -567,7 +554,10 @@ def main() -> None:
     ap.add_argument("--list", action="store_true", help="вывести visit_id сессий")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--login", action="store_true", help="войти в Яндекс (headful, через VNC)")
-    ap.add_argument("--probe", action="store_true", help="открыть 1 сессию: скриншот+html+URL (рекон)")
+    ap.add_argument("--probe", action="store_true", help="открыть сессию(и) и проверить, грузятся ли стили")
+    ap.add_argument("--probe-n", dest="probe_n", type=int, default=1,
+                    help="сколько сессий опросить подряд (таблица: устройство+вход+CSS)")
+    ap.add_argument("--visit", default="", help="probe конкретной сессии по visit_id")
     ap.add_argument("--discover", action="store_true", help="найти внутренний API списка Вебвизора (перехват сети)")
     ap.add_argument("--inspect", action="store_true", help="разобрать сохранённые ответы --discover (имена полей)")
     ap.add_argument("--harvest", action="store_true", help="собрать visit_id+user_id_hash из getList (нужно перед --record)")
@@ -629,7 +619,7 @@ def main() -> None:
             cmd_harvest(counters, d1.isoformat(), d2.isoformat())
             return
         if a.probe:
-            cmd_probe(sessions, a.replay)
+            cmd_probe(sessions, a.replay, a.probe_n, a.visit)
             return
         if a.record:
             cmd_record(sessions, a.replay, a.speed, a.buffer, a.limit, a.max_sec, a.min_free)
