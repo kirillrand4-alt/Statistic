@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+import time
 
 import httpx
 from sqlalchemy.orm import Session
@@ -21,7 +22,13 @@ from app.utils import domain_of, normalize_url
 
 logger = logging.getLogger(__name__)
 
-ENDPOINT = "https://api.indexnow.org/indexnow"  # neutral endpoint; fans out to all engines
+# Submit to each engine's own endpoint (not just the neutral aggregator): Yandex
+# validates the key itself, so a stale Microsoft/Bing key-cache 403 won't block it,
+# and we can show a per-engine result.
+ENDPOINTS = [
+    ("Яндекс", "https://yandex.com/indexnow"),
+    ("Bing", "https://www.bing.com/indexnow"),
+]
 KEY_SETTING = "indexnow_key"
 MAX_URLS = 10000
 
@@ -83,21 +90,29 @@ def _describe(status: int, text: str) -> str:
 
 
 def submit(db: Session, site: Site, raw_urls) -> dict:
-    """Send the URL list to IndexNow. One HTTP call; returns a summary dict."""
+    """Send the URL list to each IndexNow engine; returns per-engine results."""
     host = domain_of(site.property_uri)
     key = get_key(db)
     urls = _prep_urls(host, raw_urls)
-    base = {"host": host, "key": key, "key_url": key_file_url(host, key)}
+    base = {"host": host, "key": key, "key_url": key_file_url(host, key), "count": len(urls)}
     if not urls:
-        return {**base, "ok": False, "status": 0, "count": 0,
+        return {**base, "ok": False, "results": [],
                 "message": f"Нет подходящих URL для домена {host}."}
     body = {"host": host, "key": key, "keyLocation": base["key_url"], "urlList": urls}
-    try:
-        r = httpx.post(ENDPOINT, json=body, timeout=30,
-                       headers={"Content-Type": "application/json; charset=utf-8"})
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("IndexNow request failed for %s: %s", host, exc)
-        return {**base, "ok": False, "status": 0, "count": len(urls),
-                "message": f"Сеть/ошибка: {str(exc)[:200]}"}
-    return {**base, "ok": r.status_code in (200, 202), "status": r.status_code,
-            "count": len(urls), "message": _describe(r.status_code, r.text)}
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    results = []
+    for name, url in ENDPOINTS:
+        status, text = 0, ""
+        for attempt in range(2):  # one retry on network error / 429
+            try:
+                r = httpx.post(url, json=body, timeout=30, headers=headers)
+                status, text = r.status_code, r.text
+                if status != 429:
+                    break
+            except Exception as exc:  # noqa: BLE001
+                text = str(exc)[:200]
+            if attempt == 0:
+                time.sleep(1)
+        results.append({"engine": name, "status": status, "ok": status in (200, 202),
+                        "message": _describe(status, text)})
+    return {**base, "results": results, "ok": any(r["ok"] for r in results)}

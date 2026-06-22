@@ -1491,7 +1491,11 @@ async def ui_indexnow_submit(site_id: int = Form(...), urls_text: str | None = F
     if not urls:
         return _index_redirect(site_id, "Добавьте список URL для отправки в IndexNow.")
     res = indexnow.submit(db, site, urls)
-    msg = f"IndexNow ({res['host']}): {res['message']}"
+    if res.get("results"):
+        parts = "; ".join(f"{r['engine']} — {r['message']}" for r in res["results"])
+        msg = f"IndexNow {res['host']} ({res['count']} URL): {parts}"
+    else:
+        msg = f"IndexNow ({res['host']}): {res.get('message', '')}"
     return _index_redirect(site_id, msg)
 
 
