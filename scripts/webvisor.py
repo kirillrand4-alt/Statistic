@@ -435,14 +435,17 @@ def _done_ids() -> set[str]:
     return {f[:-5] for f in os.listdir(OUT_DIR) if f.endswith(".webm")}
 
 
-def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5) -> None:
+def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5,
+               refresh=False) -> None:
     hashes = _load_hashes()
     if not hashes:
         sys.exit("Нет собранных user_id_hash — сначала запусти --harvest.")
     os.makedirs(OUT_DIR, exist_ok=True)
     done = _done_ids()
     with_hash = [s for s in sessions if str(s["visit_id"]) in hashes]
-    todo = [s for s in with_hash if s["visit_id"] not in done]
+    # --refresh: перезаписать ВСЕ сессии в диапазоне (старые .webm затрутся), иначе
+    # пропускаем уже записанные. (str() — иначе int-id не сравнится со строками done.)
+    todo = with_hash if refresh else [s for s in with_hash if str(s["visit_id"]) not in done]
     if limit:
         todo = todo[:limit]
 
@@ -451,8 +454,9 @@ def cmd_record(sessions, tmpl, speed, buffer_s, limit, max_sec=0, min_free=1.5) 
         return min(n, max_sec) if max_sec else n
 
     rec_secs = sum(_secs(s["duration"]) for s in todo)
-    print(f"К записи: {len(todo)} (уже есть {len(done)}; "
-          f"без записи в Вебвизоре: {len(sessions) - len(with_hash)}). Скорость x{speed}"
+    print(f"К записи: {len(todo)} (уже есть {len(done)}"
+          + (", ПЕРЕЗАПИСЬ всех" if refresh else "")
+          + f"; без записи в Вебвизоре: {len(sessions) - len(with_hash)}). Скорость x{speed}"
           + (f", кап {max_sec}с" if max_sec else "")
           + f". Ориентир: ~{rec_secs // 60} мин, ~{rec_secs * 0.06 / 1024:.1f} ГБ (грубо).",
           flush=True)
@@ -562,6 +566,8 @@ def main() -> None:
     ap.add_argument("--inspect", action="store_true", help="разобрать сохранённые ответы --discover (имена полей)")
     ap.add_argument("--harvest", action="store_true", help="собрать visit_id+user_id_hash из getList (нужно перед --record)")
     ap.add_argument("--record", action="store_true", help="записать видео сессий")
+    ap.add_argument("--refresh", action="store_true",
+                    help="перезаписать и уже записанные сессии (обновить старые видео в диапазоне)")
     ap.add_argument("--replay-url", dest="replay", default="", help="шаблон URL реплея ({counter},{visit_id})")
     ap.add_argument("--speed", type=float, default=1.0, help="множитель скорости плеера (бюджет времени)")
     ap.add_argument("--buffer", type=int, default=4, help="доп. секунд на сессию (загрузка/буфер)")
@@ -622,7 +628,7 @@ def main() -> None:
             cmd_probe(sessions, a.replay, a.probe_n, a.visit)
             return
         if a.record:
-            cmd_record(sessions, a.replay, a.speed, a.buffer, a.limit, a.max_sec, a.min_free)
+            cmd_record(sessions, a.replay, a.speed, a.buffer, a.limit, a.max_sec, a.min_free, a.refresh)
             return
 
         n = W.count_sessions(db, sid, dr, **kw)
