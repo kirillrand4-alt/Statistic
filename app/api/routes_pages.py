@@ -1342,7 +1342,8 @@ async def ui_indexing_check_export(site_id: int = Form(...), urls_text: str | No
         w.writerow(["url", "in_index", "title"])
         for r in rows:
             w.writerow([r["input"], int(r["in_index"]), r["title"] or ""])
-        body, media, ext = buf.getvalue(), "text/csv; charset=utf-8", "csv"
+        # BOM, иначе Excel на русской Windows читает UTF-8 как cp1251 («кракозябры»)
+        body, media, ext = "\ufeff" + buf.getvalue(), "text/csv; charset=utf-8", "csv"
     else:
         body = "".join(r["input"] + "\n" for r in rows)
         body, media, ext = body, "text/plain; charset=utf-8", "txt"
@@ -1464,7 +1465,8 @@ def ui_google_check_export(site_id: int = Form(...), export: str = Form("out:txt
             w.writerow([r["input"], "" if r.get("indexed") is None else int(bool(r.get("indexed"))),
                         r.get("verdict") or "", r.get("coverage") or "",
                         r.get("last_crawl") or "", r.get("canonical") or "", r.get("error") or ""])
-        body, media, ext = buf.getvalue(), "text/csv; charset=utf-8", "csv"
+        # BOM, иначе Excel на русской Windows читает UTF-8 как cp1251 («кракозябры»)
+        body, media, ext = "\ufeff" + buf.getvalue(), "text/csv; charset=utf-8", "csv"
     else:
         body, media, ext = "".join(r["input"] + "\n" for r in rows), "text/plain; charset=utf-8", "txt"
 
