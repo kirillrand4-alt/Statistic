@@ -14,6 +14,8 @@ import json
 import logging
 import os
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,6 +32,32 @@ DATA_DIR = Path(os.environ.get(
 
 MAX_INSPECT = 2000  # URL Inspection API daily quota (per property)
 MAX_SUBMIT = 200    # Indexing API default daily quota (per project)
+
+# URL Inspection is one request per URL and network-bound, so we run a small thread
+# pool and pace request *starts* to INSPECT_RATE/sec (Google allows 600/min = 10/s
+# per property; default 5/s leaves headroom). Both are env-overridable.
+INSPECT_RATE = float(os.environ.get("GOOGLE_INSPECT_RATE", "5"))
+INSPECT_WORKERS = int(os.environ.get("GOOGLE_INSPECT_WORKERS", "8"))
+
+
+class _RateLimiter:
+    """Space request starts to at most ``per_sec`` across threads (token by time)."""
+
+    def __init__(self, per_sec: float):
+        self.interval = 1.0 / per_sec if per_sec > 0 else 0.0
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def acquire(self) -> None:
+        if self.interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next)
+            self._next = start + self.interval
+            delay = start - now
+        if delay > 0:
+            time.sleep(delay)
 
 # In-process guard so the same (kind, site) batch can't run twice at once.
 _LOCK = threading.Lock()
@@ -165,43 +193,63 @@ def run_inspect(site_id: int, raw_urls) -> dict:
         urls = _prep_urls(site, raw_urls, MAX_INSPECT)
         state["total"] = len(urls)
         _write(_result_path("inspect", site_id), state)
-        for i, u in enumerate(urls, 1):
+
+        rate = _RateLimiter(INSPECT_RATE)        # ≤5/сек по умолчанию
+        stop = threading.Event()                 # ставится при фатальной ошибке
+        tl = threading.local()                   # свой клиент на поток (thread-safe)
+        wlock = threading.Lock()                 # защищает state при сборе результатов
+
+        def _service():
+            svc = getattr(tl, "sc", None)
+            if svc is None:
+                svc = provider.new_sc_service()  # own transport per worker thread
+                tl.sc = svc
+            return svc
+
+        def _inspect_one(u):
+            if stop.is_set():
+                return None
+            rate.acquire()
+            if stop.is_set():
+                return None
             try:
-                res = provider.inspect_url(site_url, u)
-                idx = res.get("indexStatusResult", {}) or {}
+                idx = (provider.inspect_url(site_url, u, service=_service())
+                       .get("indexStatusResult", {}) or {})
                 verdict = idx.get("verdict")
-                row = {
-                    "input": u,
-                    "indexed": verdict == "PASS",
-                    "verdict": verdict,
-                    "coverage": idx.get("coverageState"),
-                    "last_crawl": idx.get("lastCrawlTime"),
-                    "canonical": idx.get("googleCanonical"),
-                    "robots": idx.get("robotsTxtState"),
-                    "fetch": idx.get("pageFetchState"),
-                    "error": None,
-                }
-                if row["indexed"]:
-                    state["in_count"] += 1
-                else:
-                    state["out_count"] += 1
+                return {
+                    "input": u, "indexed": verdict == "PASS", "verdict": verdict,
+                    "coverage": idx.get("coverageState"), "last_crawl": idx.get("lastCrawlTime"),
+                    "canonical": idx.get("googleCanonical"), "robots": idx.get("robotsTxtState"),
+                    "fetch": idx.get("pageFetchState"), "error": None,
+                }, None
             except Exception as exc:  # noqa: BLE001
                 msg, fatal = _describe_error(exc)
-                row = {"input": u, "indexed": None, "verdict": None, "coverage": None,
-                       "last_crawl": None, "canonical": None, "robots": None,
-                       "fetch": None, "error": msg}
-                state["out_count"] += 1
-                state["rows"].append(row)
-                state["done"] = i
-                if fatal:  # auth / scope / permission / quota — same for every URL
-                    state["error"] = msg
-                    break
-                _write(_result_path("inspect", site_id), state)
-                continue
-            state["rows"].append(row)
-            state["done"] = i
-            if i % 3 == 0:
-                _write(_result_path("inspect", site_id), state)
+                if fatal:
+                    stop.set()  # auth/scope/permission/quota — keep other workers from starting
+                return ({"input": u, "indexed": None, "verdict": None, "coverage": None,
+                         "last_crawl": None, "canonical": None, "robots": None,
+                         "fetch": None, "error": msg}, msg if fatal else None)
+
+        workers = max(1, min(INSPECT_WORKERS, len(urls) or 1))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = [ex.submit(_inspect_one, u) for u in urls]
+            for fut in as_completed(futs):
+                out = fut.result()
+                if out is None:
+                    continue
+                row, fatal_msg = out
+                with wlock:
+                    state["rows"].append(row)
+                    if row["indexed"] is True:
+                        state["in_count"] += 1
+                    else:
+                        state["out_count"] += 1
+                    state["done"] += 1
+                    if fatal_msg and not state["error"]:
+                        state["error"] = fatal_msg  # auth/scope/permission/quota — stop batch
+                        stop.set()
+                    if state["done"] % 5 == 0:
+                        _write(_result_path("inspect", site_id), state)
         # not-indexed / errors first, like the Yandex check
         state["rows"].sort(key=lambda r: (r["indexed"] is True, r["input"]))
         state["running"] = False

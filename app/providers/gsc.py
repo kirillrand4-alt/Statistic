@@ -130,6 +130,16 @@ class GSCProvider(SearchDataProvider):
             )
         return self._sc
 
+    def new_sc_service(self):
+        """A FRESH URL-Inspection client with its own credentials/transport — for
+        concurrent use, since the cached service's httplib2 isn't thread-safe."""
+        from googleapiclient.discovery import build
+
+        return build(
+            "searchconsole", "v1", credentials=self._credentials([SCOPE]),
+            cache_discovery=False,
+        )
+
     def _index_service(self):
         """Indexing API v3 client — needs the separate ``indexing`` scope and the
         service account to be an *owner* of the property."""
@@ -273,11 +283,12 @@ class GSCProvider(SearchDataProvider):
         wait=wait_exponential(multiplier=1, min=2, max=30),
         reraise=True,
     )
-    def inspect_url(self, site_url: str, url: str, language: str = "ru-RU") -> dict:
+    def inspect_url(self, site_url: str, url: str, language: str = "ru-RU", service=None) -> dict:
         """URL Inspection API: index status of one page. Returns ``inspectionResult``
-        ({} on empty). ``site_url`` must be the exact verified property URI."""
+        ({} on empty). ``site_url`` must be the exact verified property URI. Pass a
+        per-thread ``service`` (``new_sc_service()``) for concurrent batches."""
         resp = (
-            self._sc_service()
+            (service or self._sc_service())
             .urlInspection()
             .index()
             .inspect(body={"inspectionUrl": url, "siteUrl": site_url, "languageCode": language})

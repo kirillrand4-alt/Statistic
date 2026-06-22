@@ -17,7 +17,10 @@ class FakeGoogle(MockProvider):
 
     capabilities = MockProvider.capabilities | {"url_inspection", "index_submit"}
 
-    def inspect_url(self, site_url, url, language="ru-RU"):
+    def new_sc_service(self):
+        return self  # offline fake — no real per-thread client needed
+
+    def inspect_url(self, site_url, url, language="ru-RU", service=None):
         if "boom" in url:
             raise RuntimeError("network blew up")
         if "quota" in url:
@@ -55,6 +58,10 @@ class FakeGoogle(MockProvider):
 @pytest.fixture(autouse=True)
 def _tmp_results(tmp_path, monkeypatch):
     monkeypatch.setattr(gi, "DATA_DIR", tmp_path)
+    # deterministic + fast: one worker, no pacing sleeps (concurrency/rate are
+    # exercised in production via env, not in these logic tests)
+    monkeypatch.setattr(gi, "INSPECT_WORKERS", 1)
+    monkeypatch.setattr(gi, "INSPECT_RATE", 10000.0)
 
 
 @pytest.fixture()
