@@ -11,6 +11,7 @@ our_pages/
 matching/
 brand11_cards/
 brand11_reports/
+match_new/
 *.txt
 !requirements.txt
 GAP_почти_матч.csv
