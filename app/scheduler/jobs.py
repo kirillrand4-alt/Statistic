@@ -101,6 +101,19 @@ def collect_site(db: Session, site: Site, dr: DateRange, job_type: str = "daily"
         run.finished_at = datetime.now(timezone.utc)
         db.commit()
         logger.info("Collected %s rows for site %s (%s..%s)", total, site.id, dr.start, dr.end)
+        # Yandex "pages in index" snapshot — capture on EVERY collect (dashboard
+        # «Собрать», admin, or the scheduler), so it stays fresh on any path, not
+        # only the nightly job. A snapshot failure must not fail the collection.
+        try:
+            from app.services import indexing
+            if indexing.supports(site):
+                indexing.capture_indexed_urls(db, site)
+        except Exception:  # noqa: BLE001
+            logger.exception("Index snapshot failed for site %s", site.id)
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
         return total
     except Exception as exc:  # noqa: BLE001
         db.rollback()
@@ -115,8 +128,6 @@ def collect_site(db: Session, site: Site, dr: DateRange, job_type: str = "daily"
 
 
 def run_daily_collect(db: Session) -> dict[int, int]:
-    from app.services import indexing
-
     settings = get_settings()
     today = date.today()
     results: dict[int, int] = {}
@@ -124,16 +135,10 @@ def run_daily_collect(db: Session) -> dict[int, int]:
     for site in sites:
         dr = compute_window(db, site, today, settings.collect_refetch_days)
         try:
+            # collect_site also captures the Yandex index snapshot (where supported)
             results[site.id] = collect_site(db, site, dr, job_type="daily")
         except Exception:  # noqa: BLE001 - already logged; continue with other sites
             results[site.id] = -1
-        # Accumulate an index snapshot daily where supported (Yandex), so the
-        # set of indexed pages builds history beyond the API's live window.
-        try:
-            if indexing.supports(site):
-                indexing.capture_indexed_urls(db, site)
-        except Exception:  # noqa: BLE001
-            logger.exception("Daily index snapshot failed for site %s", site.id)
     return results
 
 
