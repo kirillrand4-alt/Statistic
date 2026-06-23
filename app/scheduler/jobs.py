@@ -140,6 +140,7 @@ def run_daily_collect(db: Session) -> dict[int, int]:
             results[site.id] = collect_site(db, site, dr, job_type="daily")
         except Exception:  # noqa: BLE001 - already logged; continue with other sites
             results[site.id] = -1
+        _ensure_snapshot(db, site)  # snapshot even if the stats collect above failed
     return results
 
 
@@ -159,8 +160,22 @@ def run_backfill(db: Session, site_id: int, days: int = 480, chunk_days: int = 3
 
 
 # ----- APScheduler wiring -----
+def _ensure_snapshot(db: Session, site: Site) -> None:
+    """Capture today's Yandex index snapshot if it's missing — independent of the
+    stats collect, so a failed stats pull doesn't also skip the snapshot."""
+    try:
+        from app.services import indexing
+        indexing.ensure_snapshot(db, site)
+    except Exception:  # noqa: BLE001
+        logger.exception("Index snapshot failed for site %s", site.id)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def last_daily_ok(db: Session) -> datetime | None:
-    """When the last successful daily collect finished (UTC-aware), or None."""
+    """When the last successful daily collect (any site) finished — for the admin."""
     dt = db.execute(
         select(CollectionRun.finished_at).where(
             CollectionRun.job_type == "daily",
@@ -173,16 +188,51 @@ def last_daily_ok(db: Session) -> datetime | None:
     return dt
 
 
-def _overdue(min_hours: int = 20) -> bool:
-    db = SessionLocal()
-    try:
-        last = last_daily_ok(db)
-    finally:
-        db.close()
-    return last is None or (datetime.now(timezone.utc) - last) > timedelta(hours=min_hours)
+def _last_ok_for_site(db: Session, site_id: int) -> datetime | None:
+    dt = db.execute(
+        select(CollectionRun.finished_at).where(
+            CollectionRun.site_id == site_id,
+            CollectionRun.status == "ok",
+            CollectionRun.finished_at.is_not(None),
+        ).order_by(CollectionRun.finished_at.desc()).limit(1)
+    ).scalar_one_or_none()
+    if dt is not None and dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
-def _run_daily_in_thread() -> None:
+def stale_site_ids(db: Session, min_hours: int = 20) -> list[int]:
+    """Enabled sites whose last successful collect is older than min_hours (or never)
+    — checked PER SITE, so one fresh site doesn't mask another that's behind."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=min_hours)
+    ids = db.execute(select(Site.id).where(Site.enabled.is_(True))).scalars().all()
+    return [sid for sid in ids
+            if (_last_ok_for_site(db, sid) or datetime.min.replace(tzinfo=timezone.utc)) < cutoff]
+
+
+def _collect_sites_in_thread(site_ids: list[int]) -> None:
+    def _r():
+        d = SessionLocal()
+        try:
+            settings = get_settings()
+            today = date.today()
+            for sid in site_ids:
+                site = d.get(Site, sid)
+                if site is None or not site.enabled:
+                    continue
+                try:
+                    dr = compute_window(d, site, today, settings.collect_refetch_days)
+                    collect_site(d, site, dr, job_type="daily")
+                except Exception:  # noqa: BLE001
+                    logger.exception("Catch-up collect failed for site %s", sid)
+                _ensure_snapshot(d, site)
+        finally:
+            d.close()
+    threading.Thread(target=_r, daemon=True).start()
+
+
+def _daily_job():
+    """Primary cron run — collect every enabled site (in a worker thread)."""
     def _r():
         d = SessionLocal()
         try:
@@ -194,25 +244,29 @@ def _run_daily_in_thread() -> None:
     threading.Thread(target=_r, daemon=True).start()
 
 
-def _daily_job():
-    """Primary cron run — always collect."""
-    _run_daily_in_thread()
-
-
 def _catchup_job():
-    """Safety net (interval): run only if the cron was missed (no ok daily in ~20h),
-    so a server that wasn't up at the cron hour still collects within a few hours."""
-    if _overdue():
-        logger.info("Scheduler catch-up: daily collect overdue, running now")
-        _run_daily_in_thread()
+    """Safety net (interval): collect any site whose data is overdue, so a missed
+    cron OR a single failing/stale site is recovered within a few hours."""
+    db = SessionLocal()
+    try:
+        stale = stale_site_ids(db)
+    finally:
+        db.close()
+    if stale:
+        logger.info("Scheduler catch-up: %d site(s) overdue, collecting", len(stale))
+        _collect_sites_in_thread(stale)
 
 
 def catch_up_if_overdue() -> bool:
-    """Called at startup: if a daily collect is overdue, run one now (in background).
-    Makes collection robust to a process that wasn't alive at the cron hour."""
-    if _overdue():
-        logger.info("Startup catch-up: daily collect overdue, running now")
-        _run_daily_in_thread()
+    """At startup: collect each site whose data is overdue (per-site), in background."""
+    db = SessionLocal()
+    try:
+        stale = stale_site_ids(db)
+    finally:
+        db.close()
+    if stale:
+        logger.info("Startup catch-up: %d site(s) overdue, collecting", len(stale))
+        _collect_sites_in_thread(stale)
         return True
     return False
 

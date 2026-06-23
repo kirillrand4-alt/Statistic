@@ -524,6 +524,7 @@ def admin_page(request: Request, msg: str | None = None, db: Session = Depends(g
     from app.credentials import get_cred
     from app.scheduler.jobs import last_daily_ok as _last_daily_ok
     from app.scheduler.jobs import scheduler_status as _scheduler_status
+    from app.scheduler.jobs import stale_site_ids as _stale_site_ids
 
     s = get_settings()
     return templates.TemplateResponse(
@@ -554,6 +555,7 @@ def admin_page(request: Request, msg: str | None = None, db: Session = Depends(g
             "cache_stats": cache_stats(),
             "scheduler": _scheduler_status(),
             "last_daily": _last_daily_ok(db),
+            "stale_sites": len(_stale_site_ids(db)),
         },
     )
 

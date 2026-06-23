@@ -206,7 +206,7 @@
       <tr><td>Режим авторизации GSC</td><td><code>{{ config.gsc_auth_mode }}</code></td></tr>
       <tr><td>GSC_SITE_URL</td><td><code>{{ config.gsc_site_url }}</code></td></tr>
       <tr><td>Планировщик</td><td>{{ '✅ включён' if config.enable_scheduler else '⏸ выключен' }} (ежедневно в {{ config.collect_cron_hour }}:00){% if scheduler %} — {{ '🟢 запущен' if scheduler.running else '🔴 НЕ запущен' }}{% if scheduler.next_run %}, следующий запуск {{ scheduler.next_run }}{% endif %}{% endif %}</td></tr>
-      <tr><td>Последний авто-сбор (daily)</td><td>{{ last_daily.strftime('%Y-%m-%d %H:%M UTC') if last_daily else '— ещё не было' }}</td></tr>
+      <tr><td>Последний авто-сбор (daily)</td><td>{{ last_daily.strftime('%Y-%m-%d %H:%M UTC') if last_daily else '— ещё не было' }}{% if stale_sites %} · <strong>⚠ просрочено сайтов: {{ stale_sites }}</strong> (>24ч без сбора — догонятся автоматически){% endif %}</td></tr>
       <tr><td>Перезабор последних дней</td><td>{{ config.collect_refetch_days }}</td></tr>
     </tbody>
   </table>

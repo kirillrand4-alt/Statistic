@@ -22,6 +22,25 @@ def supports(site: Site) -> bool:
         return False
 
 
+def has_snapshot_today(db: Session, site: Site) -> bool:
+    return bool(db.execute(
+        select(func.count()).select_from(IndexedUrlSnapshot).where(
+            IndexedUrlSnapshot.site_id == site.id,
+            IndexedUrlSnapshot.captured_on == date.today(),
+        )
+    ).scalar())
+
+
+def ensure_snapshot(db: Session, site: Site) -> bool:
+    """Capture today's index snapshot only if it's still missing (so it runs even
+    when the regular collect failed, but isn't repeated needlessly). Returns True
+    if a snapshot was taken."""
+    if not supports(site) or has_snapshot_today(db, site):
+        return False
+    capture_indexed_urls(db, site)
+    return True
+
+
 def capture_indexed_urls(db: Session, site: Site) -> int:
     """Fetch the current indexed-URL list and store today's snapshot."""
     provider = get_provider(site.source.code)
