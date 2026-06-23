@@ -8,6 +8,7 @@ pulls a long history on demand.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -158,12 +159,76 @@ def run_backfill(db: Session, site_id: int, days: int = 480, chunk_days: int = 3
 
 
 # ----- APScheduler wiring -----
-def _daily_job():
+def last_daily_ok(db: Session) -> datetime | None:
+    """When the last successful daily collect finished (UTC-aware), or None."""
+    dt = db.execute(
+        select(CollectionRun.finished_at).where(
+            CollectionRun.job_type == "daily",
+            CollectionRun.status == "ok",
+            CollectionRun.finished_at.is_not(None),
+        ).order_by(CollectionRun.finished_at.desc()).limit(1)
+    ).scalar_one_or_none()
+    if dt is not None and dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _overdue(min_hours: int = 20) -> bool:
     db = SessionLocal()
     try:
-        run_daily_collect(db)
+        last = last_daily_ok(db)
     finally:
         db.close()
+    return last is None or (datetime.now(timezone.utc) - last) > timedelta(hours=min_hours)
+
+
+def _run_daily_in_thread() -> None:
+    def _r():
+        d = SessionLocal()
+        try:
+            run_daily_collect(d)
+        except Exception:  # noqa: BLE001
+            logger.exception("Daily collect failed")
+        finally:
+            d.close()
+    threading.Thread(target=_r, daemon=True).start()
+
+
+def _daily_job():
+    """Primary cron run — always collect."""
+    _run_daily_in_thread()
+
+
+def _catchup_job():
+    """Safety net (interval): run only if the cron was missed (no ok daily in ~20h),
+    so a server that wasn't up at the cron hour still collects within a few hours."""
+    if _overdue():
+        logger.info("Scheduler catch-up: daily collect overdue, running now")
+        _run_daily_in_thread()
+
+
+def catch_up_if_overdue() -> bool:
+    """Called at startup: if a daily collect is overdue, run one now (in background).
+    Makes collection robust to a process that wasn't alive at the cron hour."""
+    if _overdue():
+        logger.info("Startup catch-up: daily collect overdue, running now")
+        _run_daily_in_thread()
+        return True
+    return False
+
+
+def scheduler_status() -> dict:
+    """Live scheduler state for the admin page (running? next daily run?)."""
+    out = {"running": False, "next_run": None}
+    if _scheduler is not None:
+        try:
+            out["running"] = bool(_scheduler.running)
+            job = _scheduler.get_job("daily_collect")
+            if job is not None and job.next_run_time is not None:
+                out["next_run"] = job.next_run_time.isoformat(timespec="minutes")
+        except Exception:  # noqa: BLE001
+            pass
+    return out
 
 
 def start_scheduler():
@@ -174,13 +239,24 @@ def start_scheduler():
         return None
     from apscheduler.schedulers.background import BackgroundScheduler
 
-    _scheduler = BackgroundScheduler()
+    try:
+        _scheduler = BackgroundScheduler(timezone=settings.timezone or "UTC")
+    except Exception:  # noqa: BLE001 - bad tz name -> machine local/UTC
+        _scheduler = BackgroundScheduler()
     _scheduler.add_job(
         _daily_job, "cron", hour=settings.collect_cron_hour,
-        id="daily_collect", max_instances=1, coalesce=True, replace_existing=True,
+        id="daily_collect", max_instances=1, coalesce=True,
+        misfire_grace_time=6 * 3600, replace_existing=True,
+    )
+    # Safety net: if the cron was missed (server off at that hour / restart), re-check
+    # every 6h and run when no successful daily collect happened in ~20h.
+    _scheduler.add_job(
+        _catchup_job, "interval", hours=6, id="daily_catchup",
+        max_instances=1, coalesce=True, replace_existing=True,
     )
     _scheduler.start()
-    logger.info("Scheduler started (daily collect at hour %s)", settings.collect_cron_hour)
+    logger.info("Scheduler started (daily collect at hour %s %s; +6h catch-up)",
+                settings.collect_cron_hour, settings.timezone)
     return _scheduler
 
 

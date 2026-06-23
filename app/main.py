@@ -39,6 +39,12 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
     start_scheduler()
+    if get_settings().enable_scheduler:
+        try:  # catch up a missed daily collect (e.g. server was off at the cron hour)
+            from app.scheduler.jobs import catch_up_if_overdue
+            catch_up_if_overdue()
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).exception("Startup catch-up failed")
     try:
         yield
     finally:

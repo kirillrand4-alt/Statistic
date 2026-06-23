@@ -522,6 +522,8 @@ def ui_collect(site_id: list[int] = Form(...), domain: str = Form(""),
 def admin_page(request: Request, msg: str | None = None, db: Session = Depends(get_db)):
     from app.cache import stats as cache_stats
     from app.credentials import get_cred
+    from app.scheduler.jobs import last_daily_ok as _last_daily_ok
+    from app.scheduler.jobs import scheduler_status as _scheduler_status
 
     s = get_settings()
     return templates.TemplateResponse(
@@ -550,6 +552,8 @@ def admin_page(request: Request, msg: str | None = None, db: Session = Depends(g
                 "page_cache_ttl": s.page_cache_ttl,
             },
             "cache_stats": cache_stats(),
+            "scheduler": _scheduler_status(),
+            "last_daily": _last_daily_ok(db),
         },
     )
 
