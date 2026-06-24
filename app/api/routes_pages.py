@@ -1639,6 +1639,70 @@ def webvisor_video(name: str):
     return FileResponse(str(path), media_type="video/webm")
 
 
+@router.get("/leads")
+def leads_page(request: Request, domain: str | None = None, start: str | None = None,
+               end: str | None = None, g: list[int] = Query(default=[]), f: int = 0,
+               msg: str | None = None, db: Session = Depends(get_db)):
+    """Заявки с рекламы: ad visits that reached a goal — entry page, page path,
+    goal page. Standalone; pick one domain or all. (f=1 ⇒ use checked goals;
+    otherwise the saved favourites for the scope.)"""
+    from app.services import leads as L
+
+    dr = parse_date_range(start, end)
+    doms = L.domains_with_ads(db, dr)
+    cur = domain if (domain and domain in doms) else (domain or "")  # "" = все домены
+    site_ids = L.visit_site_ids(db, cur or None)
+    available = L.available_goals(db, site_ids, dr)
+    selected = set(g) if f else L.get_favorites(db, cur or "all")
+    rows = L.leads(db, site_ids, dr, selected or None)
+    return templates.TemplateResponse(request, "leads.html", {
+        "request": request, "msg": msg, "domains": doms, "cur_domain": cur,
+        "range": dr, "available": available, "selected": selected, "rows": rows,
+        "has_hits": any(r["path"] for r in rows),
+    })
+
+
+@router.post("/ui/leads/goals")
+def ui_leads_goals(domain: str = Form(""), start: str = Form(""), end: str = Form(""),
+                   g: list[int] = Form(default=[]), db: Session = Depends(get_db)):
+    from app.services import leads as L
+
+    L.set_favorites(db, domain or "all", g)
+    qs = f"?domain={quote(domain)}&f=1" + "".join(f"&g={x}" for x in g)
+    qs += (f"&start={start}" if start else "") + (f"&end={end}" if end else "")
+    return RedirectResponse(url=f"{BP}/leads{qs}&msg={quote('Избранные цели сохранены.')}",
+                            status_code=303)
+
+
+@router.get("/leads/export")
+def leads_export(domain: str | None = None, start: str | None = None, end: str | None = None,
+                 g: list[int] = Query(default=[]), f: int = 0, db: Session = Depends(get_db)):
+    import csv
+    import io
+
+    from app.services import leads as L
+
+    dr = parse_date_range(start, end)
+    cur = domain or ""
+    site_ids = L.visit_site_ids(db, cur or None)
+    selected = set(g) if f else L.get_favorites(db, cur or "all")
+    rows = L.leads(db, site_ids, dr, selected or None)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["дата", "источник", "utm", "входная страница", "путь",
+                "страница цели", "цели", "город", "устройство"])
+    for r in rows:
+        w.writerow([
+            r["date_time"] or r["date"] or "", r["source"] or "",
+            " ".join(f"{k}={v}" for k, v in r["utm"].items()),
+            r["entry"] or "", " → ".join(r["path"]), r["goal_page"] or "",
+            ", ".join(r["goals"]), r["city"] or "", r["device"] or "",
+        ])
+    fname = f"leads_{cur or 'all'}_{dr.start}_{dr.end}.csv"
+    return Response(content="\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 @router.get("/metrika")
 def metrika_page(request: Request, site_id: int | None = None, start: str | None = None,
                  end: str | None = None, msg: str | None = None, db: Session = Depends(get_db)):

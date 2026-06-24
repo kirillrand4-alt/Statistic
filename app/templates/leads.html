@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Заявки с рекламы · SEO Статистика{% endblock %}
+{% block content %}
+<h2>Заявки с рекламы</h2>
+{% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
+
+<form method="get" action="{{ base_path }}/leads" class="grid">
+  <label>Домен
+    <select name="domain" onchange="this.form.submit()">
+      <option value="">— все домены (с рекламой) —</option>
+      {% for d in domains %}<option value="{{ d }}" {% if d==cur_domain %}selected{% endif %}>{{ d }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>С <input type="date" name="start" value="{{ range.start }}"></label>
+  <label>По <input type="date" name="end" value="{{ range.end }}"></label>
+  <label>&nbsp;
+    <div role="group">
+      <button type="submit" name="f" value="1">Показать</button>
+      <button type="submit" name="f" value="1" class="secondary" formaction="{{ base_path }}/leads/export">⬇ CSV</button>
+      <button type="submit" class="outline" formmethod="post" formaction="{{ base_path }}/ui/leads/goals">★ В избранные</button>
+    </div>
+  </label>
+
+  <fieldset style="grid-column: 1 / -1;">
+    <legend><strong>Цели = заявка</strong> (отметь, что считать заявкой; «★ В избранные» — запомнить выбор для этого домена)</legend>
+    {% for go in available %}
+    <label style="display:inline-flex; gap:.3rem; margin-right:1.2rem;">
+      <input type="checkbox" name="g" value="{{ go.id }}" {% if go.id in selected %}checked{% endif %}>
+      {{ go.name }} <small>({{ go.visits }})</small>
+    </label>
+    {% else %}
+    <small>За период нет достигнутых целей по рекламным визитам.</small>
+    {% endfor %}
+  </fieldset>
+</form>
+
+<p><small>Берутся только <strong>рекламные</strong> визиты (источник «реклама», рекламная система или UTM-метка).
+«Страница цели» = страница выхода визита (точный URL срабатывания цели Метрика в логах не отдаёт).
+«Путь» — страницы, по которым ходил пользователь (нужны загруженные хиты Метрики).</small></p>
+
+{% if cur_domain or rows %}
+<p>Найдено заявок: <strong>{{ rows|length }}</strong>
+  {% if not has_hits %} · <small>путь по страницам пуст — хиты Метрики не загружены (грузятся вместе с визитами)</small>{% endif %}
+</p>
+<figure>
+<table class="sortable">
+  <thead><tr>
+    <th>Дата</th><th>Источник / UTM</th><th>Входная страница</th>
+    <th>Путь по страницам</th><th>Страница цели</th><th>Цели</th><th>Город · устройство</th>
+  </tr></thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td><small>{{ r.date_time or r.date or '—' }}</small></td>
+      <td><small>{{ r.source or '—' }}{% for k, v in r.utm.items() %}<br>{{ k }}={{ v }}{% endfor %}</small></td>
+      <td><small><a href="{{ r.entry }}" target="_blank" rel="noopener">{{ r.entry or '—' }}</a></small></td>
+      <td><small>{% for u in r.path %}<a href="{{ u }}" target="_blank" rel="noopener">{{ u }}</a>{% if not loop.last %} → {% endif %}{% else %}—{% endfor %}</small></td>
+      <td><small><a href="{{ r.goal_page }}" target="_blank" rel="noopener">{{ r.goal_page or '—' }}</a></small></td>
+      <td><small>{{ r.goals|join(', ') }}</small></td>
+      <td><small>{{ r.city or '' }}{% if r.device %} · {{ r.device }}{% endif %}</small></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7"><small>Заявок по выбранным целям за период нет.</small></td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</figure>
+{% endif %}
+{% endblock %}
