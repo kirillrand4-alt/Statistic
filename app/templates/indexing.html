@@ -13,6 +13,8 @@
     </select>
   </label>
   {{ gran_select(gran) }}
+  <label>С <input type="date" name="start" value="{{ h_start or '' }}"></label>
+  <label>По <input type="date" name="end" value="{{ h_end or '' }}"></label>
   <label>&nbsp;<button type="submit">Показать</button></label>
 </form>
 

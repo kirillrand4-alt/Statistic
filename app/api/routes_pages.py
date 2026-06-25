@@ -1245,7 +1245,8 @@ def compare_page(request: Request, site_id: int | None = None, metric: str = "cl
     )
 
 
-def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None, gran="day"):
+def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None, gran="day",
+                  start=None, end=None):
     from app.services import google_index as gi
     from app.services import indexing
     from app.services import indexnow as inx
@@ -1259,7 +1260,11 @@ def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None, gr
         can_capture = indexing.supports(site)
         snapshots = indexing.list_snapshots(db, site.id)
         # index size is a STOCK, not a flow — roll up by last snapshot per bucket
-        history = totals_svc.bucket_series(indexing.count_history(db, site), gran, agg="last")
+        hist = indexing.count_history(db, site)
+        if start or end:  # optional period filter for the chart
+            lo, hi = start or "0000-01-01", end or "9999-12-31"
+            hist = [h for h in hist if lo <= (h.get("date") or "") <= hi]
+        history = totals_svc.bucket_series(hist, gran, agg="last")
         dates = [s["date"] for s in snapshots]
         da = a or (dates[0] if dates else None)
         db_ = b or (dates[1] if len(dates) > 1 else None)
@@ -1276,6 +1281,7 @@ def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None, gr
         "request": request, "msg": msg, "sites": sites, "site": site,
         "snapshots": snapshots, "history": history, "cmp": cmp,
         "a": a, "b": b, "can_capture": can_capture, "check": check, "gran": gran,
+        "h_start": start, "h_end": end,
         "g_inspect": g_inspect, "g_submit": g_submit, "g_running": g_running,
         "g_can_inspect": g_can_inspect, "g_can_submit": g_can_submit,
         "indexnow": indexnow_info,
@@ -1285,9 +1291,11 @@ def _indexing_ctx(db, request, site_id, a=None, b=None, msg=None, check=None, gr
 @router.get("/indexing")
 def indexing_page(request: Request, site_id: int | None = None, a: str | None = None,
                   b: str | None = None, msg: str | None = None, gran: str = "day",
+                  start: str | None = None, end: str | None = None,
                   db: Session = Depends(get_db)):
     return templates.TemplateResponse(
-        request, "indexing.html", _indexing_ctx(db, request, site_id, a, b, msg, gran=gran)
+        request, "indexing.html",
+        _indexing_ctx(db, request, site_id, a, b, msg, gran=gran, start=start, end=end),
     )
 
 
