@@ -13,6 +13,7 @@ brand11_cards/
 brand11_reports/
 match_new/
 nash_po_brendam/
+brand3_reports/
 *.txt
 !requirements.txt
 GAP_почти_матч.csv
@@ -20,6 +21,7 @@ GAP_почти_матч.csv
 Atlas_ssylki_po_nazvaniyam.csv
 Berg_3sites_compare.csv
 Berg_ru_predicted_missing.csv
+Nesovpavshie_s_cenami.csv
 _names_input.txt
 night_run/
 specs/
