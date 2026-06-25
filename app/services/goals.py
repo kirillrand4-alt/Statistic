@@ -110,15 +110,10 @@ def goal_stats(db, site_ids, dr: DateRange, url_for_key: dict[str, str],
     }
 
 
-def goal_names(db, site_ids) -> dict[int, str]:
-    """Goal id -> name from the Metrica API (best-effort, cached per counter)."""
-    counter = db.execute(
-        select(Visit.counter_id).where(
-            Visit.site_id.in_(_ids(site_ids)), Visit.counter_id.isnot(None)
-        ).group_by(Visit.counter_id).order_by(func.count().desc()).limit(1)
-    ).scalar_one_or_none()
-    if not counter:
-        return {}
+def _goal_names_for_counter(counter: int) -> dict[int, str]:
+    """Goal id -> name for ONE Metrica counter (Management API, cached). Includes
+    DELETED goals (useDeleted=true) — they still appear in historical visits, so
+    without this they'd show as bare 'Цель <id>'."""
     if counter in _NAME_CACHE:
         return _NAME_CACHE[counter]
 
@@ -132,7 +127,8 @@ def goal_names(db, site_ids) -> dict[int, str]:
     names: dict[int, str] = {}
     if token:
         try:
-            r = httpx.get(f"{_API}/management/v1/counter/{int(counter)}/goals",
+            r = httpx.get(f"{_API}/management/v1/counter/{counter}/goals",
+                          params={"useDeleted": "true"},
                           headers={"Authorization": f"OAuth {token}"}, timeout=10)
             if r.status_code == 200:
                 for g in r.json().get("goals", []):
@@ -142,4 +138,21 @@ def goal_names(db, site_ids) -> dict[int, str]:
             pass
     if names:  # cache only a successful fetch (so transient failures retry later)
         _NAME_CACHE[counter] = names
+    return names
+
+
+def goal_names(db, site_ids) -> dict[int, str]:
+    """Goal id -> name across ALL Metrica counters present in the visits, so goals
+    from a second counter (or deleted ones) aren't left as bare ids."""
+    counters = db.execute(
+        select(Visit.counter_id).where(
+            Visit.site_id.in_(_ids(site_ids)), Visit.counter_id.isnot(None)
+        ).group_by(Visit.counter_id)
+    ).scalars().all()
+    names: dict[int, str] = {}
+    for c in counters:
+        try:
+            names.update(_goal_names_for_counter(int(c)))
+        except (TypeError, ValueError):
+            continue
     return names
