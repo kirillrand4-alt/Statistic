@@ -23,14 +23,20 @@
 
   <fieldset style="grid-column: 1 / -1;">
     <legend><strong>Цели = заявка</strong> (отметь, что считать заявкой; «★ В избранные» — запомнить выбор для этого домена)</legend>
-    {% for go in available %}
-    <label style="display:inline-flex; gap:.3rem; margin-right:1.2rem;">
-      <input type="checkbox" name="g" value="{{ go.id }}" {% if go.id in selected %}checked{% endif %}>
-      {{ go.name }} <small>({{ go.visits }})</small>
-    </label>
+    {% if available %}
+    <input type="search" id="goal-filter" placeholder="фильтр целей по названию или id…" autocomplete="off" style="margin:.25rem 0 .5rem;">
+    <div class="goal-grid">
+      {% for go in available %}
+      <label class="goal-item" title="{{ go.name }} (id {{ go.id }})">
+        <input type="checkbox" name="g" value="{{ go.id }}" {% if go.id in selected %}checked{% endif %}>
+        <span>{{ go.name }}</span>
+        <small>id {{ go.id }} · {{ go.visits }}</small>
+      </label>
+      {% endfor %}
+    </div>
     {% else %}
     <small>За период нет достигнутых целей по рекламным визитам.</small>
-    {% endfor %}
+    {% endif %}
   </fieldset>
 </form>
 
@@ -66,4 +72,29 @@
 </table>
 </figure>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .goal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: .15rem .9rem; max-height: 17rem; overflow: auto; padding: .4rem .6rem;
+    border: 1px solid var(--pico-muted-border-color); border-radius: 8px; }
+  .goal-item { display: flex; align-items: center; gap: .45rem; margin: 0; font-weight: 500; cursor: pointer; }
+  .goal-item input { margin: 0; flex: none; }
+  .goal-item span { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .goal-item small { flex: none; color: var(--pico-muted-color); white-space: nowrap; }
+</style>
+<script>
+(function () {
+  var f = document.getElementById('goal-filter');
+  if (!f) return;
+  var items = Array.prototype.slice.call(document.querySelectorAll('.goal-item'));
+  f.oninput = function () {
+    var q = this.value.trim().toLowerCase();
+    items.forEach(function (l) {
+      l.style.display = (!q || l.textContent.toLowerCase().indexOf(q) >= 0) ? '' : 'none';
+    });
+  };
+})();
+</script>
 {% endblock %}
