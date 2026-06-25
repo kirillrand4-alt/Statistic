@@ -28,7 +28,7 @@ def _setup():
     db.commit()
     sid = site.id
     db.add_all([
-        _visit(sid, "101", "ad", "[111]", "1,2,3",
+        _visit(sid, "101", "ad", "[111]", "1,2,7,3",
                "https://prokompressor.ru/lp?utm_source=yandex", "https://prokompressor.ru/thanks"),
         _visit(sid, "102", "organic", "[111]", "4",
                "https://prokompressor.ru/x", "https://prokompressor.ru/x", utm=False),  # not ad
@@ -38,6 +38,7 @@ def _setup():
     db.add_all([
         Hit(site_id=sid, watch_id="1", url="https://prokompressor.ru/lp", date=dt.date(2026, 6, 20)),
         Hit(site_id=sid, watch_id="2", url="https://prokompressor.ru/catalog", date=dt.date(2026, 6, 20)),
+        Hit(site_id=sid, watch_id="7", url="goal://prokompressor.ru/B24_FORM_END", date=dt.date(2026, 6, 20)),
         Hit(site_id=sid, watch_id="3", url="https://prokompressor.ru/thanks", date=dt.date(2026, 6, 20)),
     ])
     db.commit()
@@ -63,11 +64,13 @@ def test_leads_ad_filter_goal_filter_and_path():
         # /thanks is a confirmation page -> lead page = the page BEFORE it
         assert r["goal_page"] == "https://prokompressor.ru/catalog"
         assert r["exit"] == "https://prokompressor.ru/thanks"
+        # goal://… form events are dropped from the path; only real pages remain
         assert r["path"] == [
             "https://prokompressor.ru/lp",
             "https://prokompressor.ru/catalog",
             "https://prokompressor.ru/thanks",
         ]
+        assert all(u.startswith("http") for u in r["path"])
         assert r["utm"]["utm_source"] == "yandex"
 
         # no goal filter -> all ad visits with a goal (101 + 103), organic excluded

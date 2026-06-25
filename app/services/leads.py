@@ -36,10 +36,16 @@ def _is_thankyou(url: str | None) -> bool:
     return any(t in u for t in THANKYOU)
 
 
+def _is_real_page(url: str | None) -> bool:
+    """A real site page — not a Metrica event pseudo-URL (goal://, form://, …)."""
+    u = (url or "").lower()
+    return u.startswith("http://") or u.startswith("https://")
+
+
 def _lead_page(path: list[str], end_url: str | None) -> str | None:
     """Real site page the user was on before the thank-you/confirmation page:
-    the last page of the path that is NOT a thank-you page. Falls back to the exit
-    URL when there are no hits (path empty) to find the previous page."""
+    the last REAL page (http/https) in the path that is not a thank-you page.
+    ``path`` is already filtered to real pages; falls back to the exit URL."""
     for u in reversed(path):
         if not _is_thankyou(u):
             return u
@@ -168,7 +174,7 @@ def leads(db: Session, site_ids: list[int], dr: DateRange,
         path, s = [], set()
         for w in _INT.findall(r[6] or ""):
             u = hit_url.get(w)
-            if u and u not in s:
+            if u and _is_real_page(u) and u not in s:  # drop goal://, form:// events
                 s.add(u)
                 path.append(u)
         out.append({
