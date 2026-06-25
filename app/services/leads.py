@@ -23,6 +23,28 @@ from app.utils import domain_of
 
 _INT = re.compile(r"\d+")
 
+# "Спасибо"/подтверждение — заявку оставляют на странице ПЕРЕД ними, поэтому такие
+# страницы пропускаем и показываем реальную страницу сайта. Подстроки в URL.
+THANKYOU = (
+    "spasibo", "thank", "blagodar", "success", "zayavka-prin", "order-success",
+    "/sent", "/sended", "/spasibo", "/spsibo",
+)
+
+
+def _is_thankyou(url: str | None) -> bool:
+    u = (url or "").lower()
+    return any(t in u for t in THANKYOU)
+
+
+def _lead_page(path: list[str], end_url: str | None) -> str | None:
+    """Real site page the user was on before the thank-you/confirmation page:
+    the last page of the path that is NOT a thank-you page. Falls back to the exit
+    URL when there are no hits (path empty) to find the previous page."""
+    for u in reversed(path):
+        if not _is_thankyou(u):
+            return u
+    return end_url
+
 
 def _ad_clause():
     """Visit looks like advertising: source 'ad', a paid engine, or UTM-tagged."""
@@ -151,7 +173,8 @@ def leads(db: Session, site_ids: list[int], dr: DateRange,
                 path.append(u)
         out.append({
             "visit_id": str(r[0]), "date": r[2].isoformat() if r[2] else None,
-            "date_time": r[3], "entry": r[4], "goal_page": r[5], "path": path,
+            "date_time": r[3], "entry": r[4], "goal_page": _lead_page(path, r[5]),
+            "exit": r[5], "path": path,
             "utm": _utm(r[7]), "goals": [names.get(g) or f"Цель {g}" for g in sel],
             "city": r[8], "device": r[9], "source": r[11] or r[10],
         })

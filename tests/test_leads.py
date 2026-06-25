@@ -60,7 +60,9 @@ def test_leads_ad_filter_goal_filter_and_path():
         assert len(rows) == 1
         r = rows[0]
         assert r["entry"] == "https://prokompressor.ru/lp?utm_source=yandex"
-        assert r["goal_page"] == "https://prokompressor.ru/thanks"  # exit = goal page proxy
+        # /thanks is a confirmation page -> lead page = the page BEFORE it
+        assert r["goal_page"] == "https://prokompressor.ru/catalog"
+        assert r["exit"] == "https://prokompressor.ru/thanks"
         assert r["path"] == [
             "https://prokompressor.ru/lp",
             "https://prokompressor.ru/catalog",

@@ -1690,7 +1690,7 @@ def leads_export(domain: str | None = None, start: str | None = None, end: str |
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["дата", "источник", "utm", "входная страница", "путь",
-                "страница цели", "цели", "город", "устройство"])
+                "страница заявки", "цели", "город", "устройство"])
     for r in rows:
         w.writerow([
             r["date_time"] or r["date"] or "", r["source"] or "",
