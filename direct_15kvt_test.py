@@ -27,6 +27,19 @@ for r in csv.DictReader(open(NP,encoding="utf-8-sig")):
     p=(r.get("price") or "").strip()
     if p: PRICE[nrm(r.get("product_url"))]=str(int(float(num(p))))
 _TYPE=re.compile(r"^.*?компрессор\s+", re.I)        # «Винтовой безмасляный компрессор » -> срез
+def clean_model(s):                                 # убираем электро-мусор -> короткий ключ (лимит 7 слов)
+    s=re.sub(r"(?<=\d),(?=\d)", ".", s)             # «7,5» -> «7.5» (иначе рвётся на 2 слова + дубль бара)
+    s=re.sub(r"\d{3,4}\s*/\s*[13]\s*/\s*\d{2}(\s*/\s*[A-ZА-Я]{1,3})?"," ",s)  # 400/3/50(/YD)
+    s=re.sub(r"\b\d{3,4}\s?[Вв]\b"," ",s)           # напряжение 400В / 6000 В
+    s=re.sub(r"\b[13]\s?ф\b"," ",s)                 # фазность 3ф
+    s=re.sub(r"\b\d{2}\s?Гц\b"," ",s)               # частота 50 Гц
+    s=re.sub(r"без\s*N\s*/?\s*CE"," ",s,flags=re.I)
+    s=re.sub(r"\bN\s*/\s*CE\b|/?\s*\bCE\b"," ",s,flags=re.I)
+    s=re.sub(r"\(\s*с\s*осушителем\s*\)"," ",s,flags=re.I)
+    s=re.sub(r"[/,]"," ",s)
+    s=re.sub(r"\b\d{3,4}\s+\d{1,2}(\s+YD)?\b"," ",s,flags=re.I)   # остаток «400 50», «400 3 50 YD»
+    s=re.sub(r"\bYD\b"," ",s,flags=re.I)
+    return re.sub(r"\s+"," ",s).strip(" -")
 def trim(s,n): return s if len(s)<=n else s[:n].rstrip()
 
 # фикс-значения и шапку берём из исходного файла-шаблона
@@ -44,38 +57,55 @@ for r in csv.DictReader(open(SRC,encoding="utf-8-sig"),delimiter=";"):
     if b not in SAMPLE_BRANDS: continue
     if num(r.get("Св-во: MOSHCHNOST_KVT") or "")!=15.0: continue
     bar=bar_value(r.get("Св-во: RABOCHEE_DAVLENIE_BAR"))
-    core=re.sub(r"\s+"," ",_TYPE.sub("",nm)).strip()    # бренд+код, без типа
+    core=clean_model(re.sub(r"\s+"," ",_TYPE.sub("",nm)).strip())   # бренд+код, без типа и эл.мусора
     url=(r.get("URL") or "").strip(); bp=r.get("Цена: Сайт (RUB)") or ""
     price=PRICE.get(nrm(url)) or (str(int(float(num(bp)))) if num(bp) else "")
-    prods.append(dict(brand=b, core=core, bar=bar, url=url, price=price))
+    ipm=re.search(r"IP\s?(\d{2})", nm)               # класс защиты из имени
+    e=(r.get("Св-во: CHASTOTNYY_PREOBRAZOVATEL") or "").strip().lower()=="да" or \
+      bool(re.search(r"(?<![a-zа-яё])VSD(?![a-zа-яё])", nm, re.I))   # частотник: проп или VSD в имени
+    prods.append(dict(brand=b, core=core, bar=bar, url=url, price=price,
+                      ip=(ipm.group(1) if ipm else None), e=e))
 
-# двойники: база = core без значения давления; внутри базы собираем все давления
+# база модели = core без давления/IP/частотника -> внутри собираем варианты (бар, IP, частотник)
 def base_of(p):
     c=p["core"]
     if p["bar"]: c=re.sub(r"[-/ ]?"+re.escape(f"{p['bar']:g}")+r"\b","",c)
-    return (p["brand"], re.sub(r"\s+"," ",c).strip())
-twins=defaultdict(set)
+    c=re.sub(r"IP\s?\d{2}","",c,flags=re.I)
+    c=re.sub(r"(?<![a-zа-яё])(VSD|частотник)(?![a-zа-яё])","",c,flags=re.I)
+    return (p["brand"], re.sub(r"[ ,]+"," ",c).strip())
+bbar=defaultdict(set); bip=defaultdict(set); be=defaultdict(set)
 for p in prods:
-    if p["bar"]: twins[base_of(p)].add(p["bar"])
+    k=base_of(p)
+    if p["bar"]: bbar[k].add(p["bar"])
+    if p["ip"]: bip[k].add(p["ip"])
+    be[k].add(p["e"])
 
-def group_minus(p):                                   # минус др. давлений соседей-двойников
-    if not p["bar"]: return ""
-    others=sorted(twins[base_of(p)]-{p["bar"]})
-    return " ".join(f"-{o:g}" for o in others)
+def group_minus(p):     # минус: др. давления + др. IP + (частотник, если у группы его НЕТ)
+    k=base_of(p); parts=[]
+    for b in sorted(bbar[k]-{p["bar"]}): parts.append(f"-{b:g}")
+    for ip in sorted(bip[k]-({p["ip"]} if p["ip"] else set())): parts.append(f"-IP {ip}")
+    if (not p["e"]) and (True in be[k]): parts += ["-частотник","-vsd","-инвертор"]
+    return " ".join(parts)
+def has_std_sibling(p): return False in be[base_of(p)]   # есть ли у модели версия БЕЗ частотника
 
 rows=[]; gnum=0
 for p in prods:
     gnum+=1
     grp=p["core"] + (f" {p['bar']:g} бар" if p["bar"] and f"{p['bar']:g}" not in p["core"] else "")
     broad=grp.replace(" бар","").strip()
-    exact="["+re.sub(r"\s+"," ",re.sub(r"[-/]"," ",broad)).strip()+"]"
+    inner=re.sub(r"\s+"," ",re.sub(r"[-/]"," ",broad)).strip()
+    exact="["+inner+"]"
     h1=trimw(f"Купить компрессор {p['core']} по спец цене",56)
     h2="Компрессор Центр"
     txt=trimw(f"Надежный поставщик компрессоров {p['brand']} — нам доверяют лидеры рынка. Звоните!",81)
     disp_link=trimw(re.sub(r"\s+","-",broad),20)
     gmin=group_minus(p)
-    # фразы группы: (фраза, ставка)
-    phrases=[(broad,""),(exact,""),("---autotargeting","50")]
+    # фразы группы: частотная версия (при наличии стандартной) — только по слову частотник/vsd
+    if p["e"] and has_std_sibling(p):
+        phrases=[(broad+" частотник",""),("["+inner+" частотник]",""),
+                 (broad+" vsd",""),("["+inner+" vsd]",""),("---autotargeting","50")]
+    else:
+        phrases=[(broad,""),(exact,""),("---autotargeting","50")]
     for i,(phrase,bid) in enumerate(phrases):
         row=[""]*NCOL
         for j in FIXED: row[j]=TEMPLATE[j]
@@ -93,7 +123,7 @@ for r in rows: ws.append(r)
 for row in ws.iter_rows():                           # текст -> Excel не считает «-8 -10» и «---autotargeting»
     for c in row: c.number_format="@"
 wb.save(OUT)
-print(f"товаров(групп): {gnum} | строк: {len(rows)} | двойников-баз: {sum(1 for v in twins.values() if len(v)>1)}")
+print(f"товаров(групп): {gnum} | строк: {len(rows)} | баз-моделей: {len(bbar)}")
 print(f"-> {OUT}")
 # показать группы с минус-фразами
 shown=0
