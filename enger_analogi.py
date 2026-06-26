@@ -34,9 +34,11 @@ def near(a,b,tol): return a is not None and b is not None and abs(a-b)<=tol*max(
 _NOISE=re.compile(r"(?i)\b(винтов\w*|поршнев\w*|спиральн\w*|роторн\w*|центробежн\w*|безмасл\w*|"
                   r"маслян\w*|электрическ\w*|electric|screw|piston|передвижн\w*|дизельн\w*|"
                   r"высокого|низкого|давлени\w*|дожимн\w*|компрессор\w*|kompressor\w*|compressor)\b")
-def short_name(name):                                    # для ячейки: бренд+код без типовых слов
-    s=_NOISE.sub(" ", name or "")
-    return re.sub(r"\s+"," ",s).strip(" -·()")[:34] or (name or "")[:34]
+def short_name(name):                                    # для ячейки: бренд+код без типовых слов/скобок
+    s=re.sub(r"\([^)]*\)"," ", name or "")               # (IP54)/(с осушителем) — не нужно в ячейке
+    s=_NOISE.sub(" ", s); s=re.sub(r"(?i)\bip\s*\d{2}\b"," ",s)
+    s=re.sub(r"\s+"," ",s).strip(" -·()")
+    return (s[:34].rsplit(" ",1)[0] if len(s)>34 else s) or (name or "")[:34]
 
 def analog_ok(o,c):
     """Строгий аналог. Возврат True/False. Тип ОБЯЗАН быть подтверждён (формой или масло+произв)."""
@@ -99,11 +101,14 @@ def build():
         for gk,offers in groups.items():
             b=gk[0]
             priced=[x for x in offers if x.get("price") and x.get("status")!="снято"]
-            best=min(priced,key=lambda x:x["price"]) if priced else offers[0]
+            ct=[x for x in priced if CT in (x["site"] or "")]         # офферы на compressortyt
+            # есть на compressortyt -> показываем ИМЕННО его цену/ссылку (главный конкурент);
+            # иначе — самый дешёвый оффер по всем сайтам
+            head=(min(ct,key=lambda x:x["price"]) if ct else
+                  (min(priced,key=lambda x:x["price"]) if priced else offers[0]))
             name=max(offers,key=lambda x:len(x.get("name") or "")).get("name") or ""
-            has_ct=any(CT in (x["site"] or "") for x in offers)        # есть ли товар на compressortyt
-            analogs.append(dict(brand=b, name=name, why=why(o,best), price=best.get("price"),
-                                site=best["site"], url=best["url"], has_ct=has_ct))
+            analogs.append(dict(brand=b, name=name, price=head.get("price"),
+                                site=head["site"], url=head["url"], has_ct=bool(ct)))
         if not analogs: continue
         # compressortyt — первыми (главный конкурент), внутри и дальше — по возрастанию цены
         analogs.sort(key=lambda a:(not a["has_ct"], a["price"] is None, a["price"] or 0))
