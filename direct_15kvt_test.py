@@ -75,7 +75,6 @@ for r in csv.DictReader(open(SRC,encoding="utf-8-sig"),delimiter=";"):
     bar=bar_value(r.get("Св-во: RABOCHEE_DAVLENIE_BAR"))
     typ=product_type(nm)
     core=clean_model(re.sub(r"\s+"," ",TYPE_RE.sub(" ",nm)).strip())   # бренд+код, без типовых слов
-    if bl=="atlas": core=re.sub(r"(?<!\w)AC(?!\w)","Atlas Copco",core)   # AC -> полное имя бренда
     url=(r.get("URL") or "").strip(); bp=r.get("Цена: Сайт (RUB)") or ""
     price=PRICE.get(nrm(url)) or (str(int(float(num(bp)))) if num(bp) else "")
     ipm=re.search(r"IP\s?(\d{2})", nm)               # класс защиты из имени
