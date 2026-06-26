@@ -51,9 +51,25 @@ def clean_model(s):
     s=re.sub(r"\bN\s*/\s*CE\b|/?\s*\bCE\b"," ",s,flags=re.I)
     s=re.sub(r"\(\s*с\s*осушителем\s*\)"," ",s,flags=re.I)
     s=re.sub(r"[/,]"," ",s)
-    s=re.sub(r"\b\d{3,4}\s+\d{1,2}(\s+YD)?\b"," ",s,flags=re.I)
+    s=re.sub(r"\b(220|230|380|400|660|690)\s+\d{1,2}(\s+YD)?\b"," ",s,flags=re.I)  # «400 50» (напряж+част), НЕ «500 10» (ресивер+бар)
     s=re.sub(r"\b(380|400|660|690)\b"," ",s); s=re.sub(r"\bYD\b"," ",s,flags=re.I)
+    s=re.sub(r"(?<=\d)\.\s+(?=\d)",".",s)               # «10. 4» -> «10.4» (артефакт разбивки бара у ZR 55)
+    s=re.sub(r"\b(bar|бар)\b"," ",s,flags=re.I)         # лишнее слово bar/бар внутри кода (бар добавим сами)
+    s=re.sub(r"(?:^|(?<=\s))-(?=\s|$)"," ",s)           # одиночный дефис-токен «ZT 90 VSD - 10.4 FF»
     return re.sub(r"\s+"," ",s).strip(" -")
+def kw_stem(s):                                          # основа для КЛЮЧА: без (...)-конфигов и спец-слов
+    s=re.sub(r"\([^)]*\)"," ",s)                         # (на шасси)/(IP55)/(с осушителем)/(500)/(до -25С)
+    s=re.sub(r"\bс\s+(осушител\w+|доохладител\w+|влагоотделит\w+|влагомаслоотделит\w+)\b"," ",s,flags=re.I)
+    s=re.sub(r"\bна\s+раме\b|\bМоноблок\b|\bSkid\b|\bна\s+шасси\b|\bбез\s+шасси\b|\bв\s+кожухе\b"," ",s,flags=re.I)
+    s=re.sub(r"\b\d+(?:[.,]\d+)?\s*к[Вв]т\b"," ",s,flags=re.I)   # «5 кВт» — мощность уже = название кампании
+    return re.sub(r"\s+"," ",s).strip(" -")
+def cap(s, n, bar=None):                                 # лимит Я.Директа 7 слов; бар (различитель давлений) не терять
+    t=re.split(r"[ \-/]+", s.strip())                    # дефис/слэш у Директа = граница слова («5.5-10» -> 2)
+    if len(t)<=n: return s                               # влезает — оставляем как есть (с дефисами)
+    bt=("%g"%bar) if bar else None
+    head=t[:n]
+    if bt and (bt in t) and (bt not in head): head=t[:n-1]+[bt]   # выкидываем хвостовой спец-токен, бар оставляем
+    return " ".join(head)
 
 PRICE={}
 for r in csv.DictReader(open(NP,encoding="utf-8-sig")):
@@ -102,22 +118,22 @@ def group_minus(p):
     if (not p["e"]) and (True in be[k]): parts += ["-частотник","-vsd","-инвертор"]
     return " ".join(parts)
 def has_std_sibling(p): return False in be[base_of(p)]
-def wc(s): return len(s.split())
+def wc(s): return len(re.split(r"[ \-/]+", s.strip()))   # дефис/слэш — граница слова (как считает Я.Директ)
 
 def build_phrases(p, broad, inner):
     # частотная версия при наличии стандартной — только по слову
     if p["e"] and has_std_sibling(p):
-        out=[]
+        out=[]; bw=cap(broad,6,p["bar"]); iw=cap(inner,6,p["bar"])   # +«частотник/vsd» -> остаёмся в 7 словах
         for w in ("частотник","vsd"):
-            out.append((f"{broad} {w}",""))
-            if wc(f"{inner} {w}")<=7: out.append((f"[{inner} {w}]",""))
+            out.append((f"{bw} {w}",""))
+            out.append((f"[{iw} {w}]",""))
         out.append(("---autotargeting","50")); return out
-    adj=p["adj"]
-    kompr=f"компрессор {broad}"; adjp=f"{adj} компрессор {broad}"
+    adj=p["adj"]; tn="бустер" if p["typ"]=="бустер" else "компрессор"   # тип-существительное в ключ
+    kompr=f"{tn} {broad}"; adjp=f"{adj} {tn} {broad}"   # «бустер X»/«компрессор X», «поршневой бустер X»
     kupit=f"{broad} купить"; cena=f"{broad} цена"
     hk=wc(kompr)<=7; ha=wc(adjp)<=7; hu=wc(kupit)<=7; hc=wc(cena)<=7
     bmin=[]                                     # кросс-минус на широкую: убрать пересечения
-    if hk or ha: bmin.append("-компрессор")     # -компрессор покрывает и «винтовой компрессор»
+    if hk or ha: bmin.append(f"-{tn}")          # -компрессор/-бустер покрывает и «{adj} {tn}»
     if hu: bmin.append("-купить")
     if hc: bmin.append("-цена")
     out=[(broad+(" "+" ".join(bmin) if bmin else ""),""), (f"[{inner}]","")]
@@ -142,18 +158,26 @@ def build():
     camp=defaultdict(list)
     for p in prods: camp[p["nom"]].append(p)
     def sk(k): return (k=="без мощности", float(k.split()[0]) if k!="без мощности" else 0)
-    made=[]; total=0
+    made=[]; total=0; collapsed=0
     for nom in sorted(camp, key=sk):
-        rows=[]; gnum=0
+        rows=[]; gnum=0; seen=set()                      # фразы кампании: дубли -> «конкуренция фраз», дедупим
         for p in camp[nom]:
             gnum+=1
             grp=p["core"] + (f" {p['bar']:g} бар" if p["bar"] and f"{p['bar']:g}" not in p["core"] else "")
-            broad=grp.replace(" бар","").strip()
+            stem=kw_stem(p["core"])                      # основа ключа: без конфиг-хвостов
+            broad=stem + (f" {p['bar']:g}" if p["bar"] and f"{p['bar']:g}" not in stem else "")
+            broad=cap(broad, 7, p["bar"])                # держим лимит 7 слов, бар сохраняем
             inner=re.sub(r"\s+"," ",re.sub(r"[-/]"," ",broad)).strip()
-            h1=headline(p["typ"], p["core"])
+            h1=headline(p["typ"], stem)                  # модель в заголовке — без (...)/конфигов
             txt=trimw(f"Надежный поставщик компрессоров {p['brand']} — нам доверяют лидеры рынка. Звоните!",81)
             disp_link=trimw(re.sub(r"\s+","-",broad),20); gmin=group_minus(p)
-            for i,(ph,bid) in enumerate(build_phrases(p,broad,inner)):
+            kept=[]                                      # двойники (шасси/спец-суффикс) схлопываются в один ключ
+            for ph,bid in build_phrases(p,broad,inner):
+                if ph.startswith("---"): kept.append((ph,bid)); continue   # autotargeting — у каждой группы свой
+                if ph in seen: continue                  # фраза уже есть в кампании -> не дублируем
+                seen.add(ph); kept.append((ph,bid))
+            if all(ph.startswith("---") for ph,_ in kept): collapsed+=1     # остались только на autotargeting
+            for i,(ph,bid) in enumerate(kept):
                 rows.append(make_row(p,nom,gnum,ph,bid,h1,txt,disp_link,grp,gmin,i==0))
         wb=openpyxl.Workbook(); ws=wb.active
         ws.append(["Предложение текстовых блоков для кампании"]+[""]*(NCOL-1)); ws.append(HDR)
@@ -165,6 +189,7 @@ def build():
     with zipfile.ZipFile(ZIP,"w",zipfile.ZIP_DEFLATED) as z:
         for p in made: z.write(p, os.path.basename(p))
     print(f"кампаний(файлов): {len(made)} | товаров: {len(prods)} | строк всего: {total}")
+    print(f"групп-двойников (только autotargeting, ключ занят родственной моделью): {collapsed}")
     print(f"-> {ZIP}")
 
 if __name__=="__main__":
