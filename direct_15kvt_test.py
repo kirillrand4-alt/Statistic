@@ -27,8 +27,21 @@ PRICE={}
 for r in csv.DictReader(open(NP,encoding="utf-8-sig")):
     p=(r.get("price") or "").strip()
     if p: PRICE[nrm(r.get("product_url"))]=str(int(float(num(p))))
-_TYPE=re.compile(r"^.*?компрессор\s+", re.I)        # «Винтовой безмасляный компрессор » -> срез
+# срезаем ВСЕ типовые слова (вкл. «поршневой дожимной (бустер)», «высокого давления»,
+# «винтовой безмасляный»), оставляя бренд+код. Тип товара для заголовка — отдельно.
+TYPE_RE=re.compile(r"\(\s*бустер\s*\)|\b(винтов\w*|поршнев\w*|спиральн\w*|двухступенчат\w*|"
+                   r"дизельн\w*|передвижн\w*|роторн\w*|центробежн\w*|безмасл\w*|масл\w*|"
+                   r"компрессор\w*|дожимн\w*|бустер|высокого|низкого|давлени\w*)\b", re.I)
+def product_type(nm):
+    s=nm.lower()
+    return "бустер" if ("бустер" in s or "дожимн" in s) else "компрессор"
+def headline(typ, model):                           # Заголовок 1: модель ВСЕГДА в заголовке (лимит 56)
+    for h in (f"Купить {typ} {model} по спец цене", f"Купить {typ} {model}",
+              f"Купить {model} по спец цене", f"Купить {model}"):
+        if len(h)<=56: return h
+    return trimw(f"Купить {model}",56)              # крайний случай — очень длинная модель
 def clean_model(s):                                 # убираем электро-мусор -> короткий ключ (лимит 7 слов)
+    s=re.sub(r"ATLAS\s+COPCO","Atlas Copco",s,flags=re.I)   # бренд единообразно
     s=re.sub(r"(?<=\d),(?=\d)", ".", s)             # «7,5» -> «7.5» (иначе рвётся на 2 слова + дубль бара)
     s=re.sub(r"\d{3,4}\s*/\s*[13]\s*/\s*\d{2}(\s*/\s*[A-ZА-Я]{1,3})?"," ",s)  # 400/3/50(/YD)
     s=re.sub(r"\b\d{3,4}\s?[Вв]\b"," ",s)           # напряжение 400В / 6000 В
@@ -39,6 +52,7 @@ def clean_model(s):                                 # убираем элект�
     s=re.sub(r"\(\s*с\s*осушителем\s*\)"," ",s,flags=re.I)
     s=re.sub(r"[/,]"," ",s)
     s=re.sub(r"\b\d{3,4}\s+\d{1,2}(\s+YD)?\b"," ",s,flags=re.I)   # остаток «400 50», «400 3 50 YD»
+    s=re.sub(r"\b(380|400|660|690)\b"," ",s)        # остаточное напряжение
     s=re.sub(r"\bYD\b"," ",s,flags=re.I)
     return re.sub(r"\s+"," ",s).strip(" -")
 def trim(s,n): return s if len(s)<=n else s[:n].rstrip()
@@ -59,13 +73,15 @@ for r in csv.DictReader(open(SRC,encoding="utf-8-sig"),delimiter=";"):
     b=disp(bl)
     if num(r.get("Св-во: MOSHCHNOST_KVT") or "")!=15.0: continue
     bar=bar_value(r.get("Св-во: RABOCHEE_DAVLENIE_BAR"))
-    core=clean_model(re.sub(r"\s+"," ",_TYPE.sub("",nm)).strip())   # бренд+код, без типа и эл.мусора
+    typ=product_type(nm)
+    core=clean_model(re.sub(r"\s+"," ",TYPE_RE.sub(" ",nm)).strip())   # бренд+код, без типовых слов
+    if bl=="atlas": core=re.sub(r"(?<!\w)AC(?!\w)","Atlas Copco",core)   # AC -> полное имя бренда
     url=(r.get("URL") or "").strip(); bp=r.get("Цена: Сайт (RUB)") or ""
     price=PRICE.get(nrm(url)) or (str(int(float(num(bp)))) if num(bp) else "")
     ipm=re.search(r"IP\s?(\d{2})", nm)               # класс защиты из имени
     e=(r.get("Св-во: CHASTOTNYY_PREOBRAZOVATEL") or "").strip().lower()=="да" or \
       bool(re.search(r"(?<![a-zа-яё])VSD(?![a-zа-яё])", nm, re.I))   # частотник: проп или VSD в имени
-    prods.append(dict(brand=b, core=core, bar=bar, url=url, price=price,
+    prods.append(dict(brand=b, core=core, bar=bar, url=url, price=price, typ=typ,
                       ip=(ipm.group(1) if ipm else None), e=e))
 
 # база модели = core без давления/IP/частотника -> внутри собираем варианты (бар, IP, частотник)
@@ -97,7 +113,7 @@ for p in prods:
     broad=grp.replace(" бар","").strip()
     inner=re.sub(r"\s+"," ",re.sub(r"[-/]"," ",broad)).strip()
     exact="["+inner+"]"
-    h1=trimw(f"Купить компрессор {p['core']} по спец цене",56)
+    h1=headline(p["typ"], p["core"])
     h2="Компрессор Центр"
     txt=trimw(f"Надежный поставщик компрессоров {p['brand']} — нам доверяют лидеры рынка. Звоните!",81)
     disp_link=trimw(re.sub(r"\s+","-",broad),20)
