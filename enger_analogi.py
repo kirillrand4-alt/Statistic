@@ -31,6 +31,12 @@ def form_of(name):
         if pat in s: return key
     return None
 def near(a,b,tol): return a is not None and b is not None and abs(a-b)<=tol*max(a,b)
+_NOISE=re.compile(r"(?i)\b(винтов\w*|поршнев\w*|спиральн\w*|роторн\w*|центробежн\w*|безмасл\w*|"
+                  r"маслян\w*|электрическ\w*|electric|screw|piston|передвижн\w*|дизельн\w*|"
+                  r"высокого|низкого|давлени\w*|дожимн\w*|компрессор\w*|kompressor\w*|compressor)\b")
+def short_name(name):                                    # для ячейки: бренд+код без типовых слов
+    s=_NOISE.sub(" ", name or "")
+    return re.sub(r"\s+"," ",s).strip(" -·()")[:34] or (name or "")[:34]
 
 def analog_ok(o,c):
     """Строгий аналог. Возврат True/False. Тип ОБЯЗАН быть подтверждён (формой или масло+произв)."""
@@ -80,7 +86,7 @@ def build():
         for c in lst:
             if c.get("kw"): comp_by_kw[nominal(c["kw"])].append((b,c))
 
-    sheet1=[]; summary=[]
+    wide=[]; summary=[]; CT="compressortyt"
     for o in engmodels:
         hits=[(b,c) for (b,c) in comp_by_kw.get(nominal(o["kw"]),[]) if analog_ok(o,c)]
         # группируем предложения в МОДЕЛИ-аналоги: (бренд,серия,кВт,бар,частотник,ресивер)
@@ -95,23 +101,17 @@ def build():
             priced=[x for x in offers if x.get("price") and x.get("status")!="снято"]
             best=min(priced,key=lambda x:x["price"]) if priced else offers[0]
             name=max(offers,key=lambda x:len(x.get("name") or "")).get("name") or ""
-            allp=sorted({(x["site"],int(x["price"])) for x in offers if x.get("price")},
-                        key=lambda t:t[1])
-            analogs.append(dict(brand=b, name=name, why=why(o,best),
-                                price=best.get("price"), site=best["site"], url=best["url"],
-                                offers="; ".join(f"{s}: {p:,}".replace(","," ") for s,p in allp)))
+            has_ct=any(CT in (x["site"] or "") for x in offers)        # есть ли товар на compressortyt
+            analogs.append(dict(brand=b, name=name, why=why(o,best), price=best.get("price"),
+                                site=best["site"], url=best["url"], has_ct=has_ct))
         if not analogs: continue
-        analogs.sort(key=lambda a:(a["price"] is None, a["price"] or 0))
+        # compressortyt — первыми (главный конкурент), внутри и дальше — по возрастанию цены
+        analogs.sort(key=lambda a:(not a["has_ct"], a["price"] is None, a["price"] or 0))
         ofm=form_of(o["name"]); otype=FORM_DISP.get(ofm,"") or (("безмасляный " if o.get("oil")=="безмасло" else "")+ "ВД" if o["bar"]>=20 else (o.get("oil") or ""))
         eprice=o.get("price")
-        for a in analogs:                                        # лист 1: пара на строку
-            d=("" if (eprice is None or a["price"] is None) else round((a["price"]-eprice)/eprice*100))
-            sheet1.append([o["name"], otype, o.get("kw"), o.get("bar"), o.get("fl"), yn(o.get("vsd")),
-                           eprice, disp(a["brand"]), a["name"], a["why"], a["price"], a["site"],
-                           d, a["offers"], o.get("url"), a["url"]])
+        wide.append(dict(o=o, otype=otype, analogs=analogs))
         # лист 2: сводка по модели
-        pr=[a["price"] for a in analogs if a["price"]]
-        mn=min(pr) if pr else None
+        pr=[a["price"] for a in analogs if a["price"]]; mn=min(pr) if pr else None
         mnb=disp(next(a["brand"] for a in analogs if a["price"]==mn)) if mn else ""
         brands=sorted({disp(a["brand"]) for a in analogs})
         cheaper=("" if (mn is None or eprice is None) else
@@ -119,33 +119,53 @@ def build():
         summary.append([o["name"], otype, o.get("kw"), o.get("bar"), o.get("fl"), yn(o.get("vsd")),
                         eprice, len(analogs), len(brands), mn, mnb, cheaper, ", ".join(brands)])
 
-    _save(sheet1, summary)
-    nmod=len({r[0] for r in sheet1})
-    print(f"моделей Энгера обработано: {len(engmodels)} | с аналогами: {nmod} | строк-пар: {len(sheet1)}")
+    maxn=_save(wide, summary)
+    print(f"моделей Энгера: {len(engmodels)} | с аналогами: {len(wide)} | макс аналогов в строке: {maxn}")
     print(f"-> {OUT}")
 
-H1=["Модель Энгер","Тип","кВт","бар","л/мин","Частотник","Цена Энгер ₽","Бренд аналога",
-    "Модель аналога","Почему аналог (совпавшие спеки)","Мин. цена аналога ₽","Сайт (мин.)",
-    "Δ к Энгеру, %","Все предложения (сайт: цена)","Ссылка Энгер","Ссылка аналога"]
 H2=["Модель Энгер","Тип","кВт","бар","л/мин","Частотник","Цена Энгер ₽","Аналогов",
     "Брендов","Мин. цена конкур. ₽","Бренд (мин.)","Дешевле Энгера?","Бренды-аналоги"]
-def _save(sheet1, summary):
+def _save(wide, summary):
+    from openpyxl.utils import get_column_letter
     wb=openpyxl.Workbook()
     hfill=PatternFill("solid",fgColor="305496"); bold=Font(bold=True,color="FFFFFF")
     ctr=Alignment(horizontal="center",vertical="center",wrap_text=True)
-    def put(ws,HDR,data,pricecols):
-        ws.append(HDR)
-        for ci in range(1,len(HDR)+1):
-            c=ws.cell(1,ci); c.font=bold; c.fill=hfill; c.alignment=ctr
-        for r in data: ws.append(r)
-        for col in pricecols:
-            for rr in range(2,ws.max_row+1):
-                cell=ws.cell(rr,col)
-                if isinstance(cell.value,(int,float)): cell.number_format="# ##0"
-        ws.freeze_panes="A2"
-    ws1=wb.active; ws1.title="Все аналоги"; put(ws1,H1,sheet1,[7,11])
-    ws2=wb.create_sheet("Сводка по моделям"); put(ws2,H2,summary,[7,10])
+    blue=Font(color="0563C1",underline="single"); red=PatternFill("solid",fgColor="FFC7CE")
+    # ЛИСТ 1 «Все аналоги» — широкий: строка=модель Энгера, дальше аналоги по столбцам,
+    # цена в ячейке = активная ссылка на страницу аналога; красная заливка = дешевле Энгера.
+    ws=wb.active; ws.title="Все аналоги"
+    maxn=max((len(w["analogs"]) for w in wide), default=0)
+    HDR=["Модель Энгер","Тип","кВт","бар","л/мин","Частотник","Цена Энгер ₽"]+[f"Аналог {i}" for i in range(1,maxn+1)]
+    ws.append(HDR)
+    for ci in range(1,len(HDR)+1):
+        c=ws.cell(1,ci); c.font=bold; c.fill=hfill; c.alignment=ctr
+    for w in wide:
+        o=w["o"]; r=ws.max_row+1
+        for ci,val in enumerate([o["name"],w["otype"],o.get("kw"),o.get("bar"),o.get("fl"),
+                                 yn(o.get("vsd")),o.get("price")],1):
+            ws.cell(r,ci,val)
+        ws.cell(r,7).number_format="# ##0"
+        for j,a in enumerate(w["analogs"]):
+            cell=ws.cell(r,8+j)
+            pf=(f"{int(a['price']):,}".replace(","," ")+" ₽") if a["price"] else "—"
+            cell.value=f"{short_name(a['name'])} · {pf}"; cell.font=blue
+            if a["url"]: cell.hyperlink=a["url"]                       # активная ссылка с ценой
+            if a["price"] and o.get("price") and a["price"]<o["price"]: cell.fill=red
+    ws.freeze_panes="H2"                                              # модель+спеки закреплены
+    ws.column_dimensions["A"].width=44
+    for i in range(8,8+maxn): ws.column_dimensions[get_column_letter(i)].width=26
+    # ЛИСТ 2 «Сводка по моделям»
+    ws2=wb.create_sheet("Сводка по моделям"); ws2.append(H2)
+    for ci in range(1,len(H2)+1):
+        c=ws2.cell(1,ci); c.font=bold; c.fill=hfill; c.alignment=ctr
+    for row in summary: ws2.append(row)
+    for col in (7,10):
+        for rr in range(2,ws2.max_row+1):
+            cell=ws2.cell(rr,col)
+            if isinstance(cell.value,(int,float)): cell.number_format="# ##0"
+    ws2.freeze_panes="A2"
     wb.save(OUT)
+    return maxn
 
 if __name__=="__main__":
     build()
