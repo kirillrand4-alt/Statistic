@@ -12,9 +12,10 @@ SRC="/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/426094e6-prokomp
 TPL="/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/6dbcf451-prices_20260626_041449.csv"
 NP ="/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/8871701e-prices_20260626_041449.csv"
 OUT="/home/user/Statistic/Direct_15kvt_TEST.xlsx"
-SAMPLE_BRANDS={"Dali","Et","Atlas","Wis","Ekomak","Kraftmachine"}   # у них есть двойники по давлению
+SAMPLE_BRANDS={"dali","et","atlas","wis","ekomak","kraftmachine"}   # ключи брендов (lowercase)
 
-def disp(b): return "" if not b else ("IngersollRand" if b=="ir" else b.capitalize())
+_BRANDDISP={"atlas":"Atlas Copco","ir":"Ingersoll Rand"}   # полные имена брендов
+def disp(b): return "" if not b else _BRANDDISP.get(b, b.capitalize())
 def trimw(s,n):                       # обрезка по границе слова/дефиса под лимит
     if len(s)<=n: return s
     cut=s[:n]
@@ -53,8 +54,9 @@ prods=[]
 for r in csv.DictReader(open(SRC,encoding="utf-8-sig"),delimiter=";"):
     nm=(r.get("Название") or "").strip()
     if not is_compressor(nm): continue
-    b=disp(brand_from_text(nm) or find_brand(r.get("URL") or ""))
-    if b not in SAMPLE_BRANDS: continue
+    bl=brand_from_text(nm) or find_brand(r.get("URL") or "")
+    if bl not in SAMPLE_BRANDS: continue
+    b=disp(bl)
     if num(r.get("Св-во: MOSHCHNOST_KVT") or "")!=15.0: continue
     bar=bar_value(r.get("Св-во: RABOCHEE_DAVLENIE_BAR"))
     core=clean_model(re.sub(r"\s+"," ",_TYPE.sub("",nm)).strip())   # бренд+код, без типа и эл.мусора
