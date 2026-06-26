@@ -14,6 +14,7 @@ brand11_reports/
 match_new/
 nash_po_brendam/
 brand3_reports/
+kompr_po_moshchnosti/
 *.txt
 !requirements.txt
 GAP_почти_матч.csv
