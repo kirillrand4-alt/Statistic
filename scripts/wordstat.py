@@ -135,6 +135,27 @@ def cmd_discover(query: str) -> None:
 GRAPH_URL = "https://wordstat.yandex.ru/wordstat/api/getGraph"
 
 
+def _month_floor(ddmmyyyy: str):
+    """'dd.mm.YYYY' -> date of the 1st of that month (matches how rows are stored)."""
+    from datetime import datetime
+    return datetime.strptime(ddmmyyyy, "%d.%m.%Y").date().replace(day=1)
+
+
+def _done_hashes(db, region, dev, lo_month, hi_month) -> set:
+    """query_hash set already having ANY data for region/device within the window —
+    these phrases are fully collected (each phrase is saved atomically), so a resumed
+    run can skip them."""
+    from sqlalchemy import distinct, select
+
+    from app.db.models import WordstatHistory as W
+    rows = db.execute(
+        select(distinct(W.query_hash)).where(
+            W.region == region, W.device == dev,
+            W.date >= lo_month, W.date <= hi_month)
+    ).all()
+    return {h for (h,) in rows}
+
+
 def _default_range() -> tuple[str, str]:
     """24-month window ending at the previous full month (dd.mm.YYYY) — Wordstat max."""
     from datetime import date, timedelta
@@ -326,21 +347,40 @@ def _solve_captcha(page, mode: str = "manual") -> None:
         page.wait_for_timeout(60000)
 
 
-def cmd_collect(phrases, region, device, d_from, d_to, delay, limit, captcha="manual") -> None:
+def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
+                captcha="manual", skip_done=False) -> None:
+    import random
+
     from app.db.base import SessionLocal, init_db
+    from app.utils import query_hash
     from urllib.parse import quote
 
     if limit:
         phrases = phrases[:limit]
     if not phrases:
-        sys.exit("Нет фраз для сбора (укажи --phrases файл или --from-db).")
+        sys.exit("Нет фраз для сбора (укажи --phrases файл, --from-list или --from-db).")
     init_db()
     db = SessionLocal()
     d_from = d_from or _default_range()[0]
     d_to = d_to or _default_range()[1]
-    print(f"Сбор Wordstat: {len(phrases)} фраз, регион={region}, период {d_from}–{d_to}, "
-          f"пауза {delay}с/запрос.", flush=True)
+    dev = "all" if device == "desktop,phone,tablet" else device
+
+    if skip_done:  # resume: drop phrases already collected for this region/device/period
+        done = _done_hashes(db, region, dev, _month_floor(d_from), _month_floor(d_to))
+        before = len(phrases)
+        phrases = [ph for ph in phrases if query_hash(ph) not in done]
+        print(f"Возобновление: уже собрано {before - len(phrases)}, осталось {len(phrases)}.",
+              flush=True)
+        if not phrases:
+            print("Всё уже собрано за этот период — нечего догружать.\n")
+            db.close()
+            cmd_status()
+            return
+
+    print(f"Сбор Wordstat: {len(phrases)} фраз, регион={region}, устройство={dev}, "
+          f"период {d_from}–{d_to}, пауза ~{delay}с/запрос.", flush=True)
     ok = fail = 0
+    t0 = time.monotonic()
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=False, viewport=VIEWPORT)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
@@ -358,14 +398,18 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit, captcha="ma
                     _solve_captcha(page, captcha)
                     continue
                 break
+            elapsed = time.monotonic() - t0
+            eta = (elapsed / i) * (len(phrases) - i)
+            tail = f"ok={ok + (1 if kind == 'ok' else 0)} fail={fail + (0 if kind == 'ok' else 1)} ~{eta/60:.0f}м осталось"
             if kind == "ok":
                 n = _save(db, phrase, region, device, rows)
                 ok += 1
-                print(f"  [{i}/{len(phrases)}] «{phrase}» — {n} точек", flush=True)
+                print(f"  [{i}/{len(phrases)}] «{phrase}» — {n} точек · {tail}", flush=True)
             else:
                 fail += 1
-                print(f"  [{i}/{len(phrases)}] «{phrase}» — {kind}", flush=True)
-            page.wait_for_timeout(int(delay * 1000))
+                print(f"  [{i}/{len(phrases)}] «{phrase}» — {kind} · {tail}", flush=True)
+            # jitter the pause a bit so the request cadence isn't perfectly regular
+            page.wait_for_timeout(int(delay * random.uniform(0.6, 1.5) * 1000))
         ctx.close()
     db.close()
     print(f"Готово: собрано {ok}, ошибок {fail}.\n")
@@ -417,6 +461,9 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--captcha", choices=("manual", "auto", "auto-only"), default="manual",
                     help="как решать капчу: вручную (по умолч.) / авто-решатель / только авто")
+    ap.add_argument("--skip-done", dest="skip_done", action="store_true",
+                    help="пропустить фразы, уже собранные за этот регион/устройство/период "
+                         "(для возобновления большого прогона)")
     ap.add_argument("--set-captcha", metavar="KEY",
                     help="сохранить ключ облачного решателя капч (шифруется)")
     ap.add_argument("--captcha-provider", choices=("capmonster", "anticaptcha", "2captcha"),
@@ -445,7 +492,8 @@ def main() -> None:
             phrases = _db_phrases(a.site)
         else:
             phrases = []
-        cmd_collect(phrases, a.region, a.device, a.d_from, a.d_to, a.delay, a.limit, a.captcha)
+        cmd_collect(phrases, a.region, a.device, a.d_from, a.d_to, a.delay, a.limit,
+                    a.captcha, a.skip_done)
     else:
         ap.print_help()
 
