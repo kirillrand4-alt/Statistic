@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from datetime import date as date_type
 
-from sqlalchemy import distinct, func, select
+from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import AppSetting, WordstatHistory as W
@@ -55,6 +55,37 @@ def clear_keylist(db: Session) -> None:
     if row is not None:
         db.delete(row)
         db.commit()
+
+
+def delete_phrases(db: Session, phrases) -> int:
+    """Полностью удалить фразы: их собранную историю Wordstat (по всем регионам/
+    устройствам) и запись в загруженном списке. Сопоставление по нормализованной
+    фразе (регистр/ё/пробелы), а не по точному совпадению. Возвращает число фраз."""
+    phrases = [p for p in (phrases or []) if p and p.strip()]
+    if not phrases:
+        return 0
+    norms = {norm_key(p) for p in phrases}
+    pairs = db.execute(select(W.query, W.query_hash).distinct()).all()
+    hashes = {h for (qq, h) in pairs if norm_key(qq) in norms}
+    affected = {norm_key(qq) for (qq, _h) in pairs if norm_key(qq) in norms}
+    if hashes:
+        db.execute(delete(W).where(W.query_hash.in_(hashes)))
+        db.commit()
+    kl = get_keylist(db)
+    remaining = [k for k in kl if norm_key(k) not in norms]
+    if len(remaining) != len(kl):
+        affected |= {norm_key(k) for k in kl if norm_key(k) in norms}
+        set_keylist(db, "\n".join(remaining))
+    return len(affected)
+
+
+def clear_all(db: Session) -> int:
+    """Удалить всю собранную историю Wordstat (и список). Возвращает число строк."""
+    n = db.execute(select(func.count()).select_from(W)).scalar() or 0
+    db.execute(delete(W))
+    db.commit()
+    clear_keylist(db)
+    return n
 
 
 def sum_series(phrases) -> list[int]:

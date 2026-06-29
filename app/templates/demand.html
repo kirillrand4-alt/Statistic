@@ -116,6 +116,14 @@
     </div>
     <small>Отметьте фразы галочками (для «по отдельности» — до ~12) и нажмите «Построить график».
       Сумма строит одну кривую общего спроса по выбранному набору.</small>
+    <p>
+      <button type="submit" class="secondary outline"
+              formmethod="post" formaction="{{ base_path }}/ui/demand/delete"
+              onclick="return confirm('Удалить отмеченные фразы вместе с их собранными данными Wordstat? Отменить нельзя.');">
+        🗑 Удалить отмеченные (с данными)
+      </button>
+      <small>Удаляет отмеченные фразы из списка и стирает их историю по всем регионам/устройствам.</small>
+    </p>
     <figure><table class="sortable">
       <thead><tr>
         <th>На график</th><th>Фраза</th><th>Точек</th><th>Мин</th><th>Средн</th>
@@ -140,6 +148,11 @@
     </table></figure>
   </form>
   {% if phrases|length > 1000 %}<small>Показаны первые 1000 фраз из {{ phrases|length|numfmt }}.</small>{% endif %}
+  <form method="post" action="{{ base_path }}/ui/demand/clear-all" style="margin-top:1rem"
+        onsubmit="return confirm('Удалить ВСЮ собранную историю Wordstat и список ключей? Отменить нельзя.');">
+    <button type="submit" class="secondary outline">🗑 Удалить всё собранное</button>
+    <small>Полностью очищает базу Wordstat (все фразы, регионы, периоды) и список.</small>
+  </form>
   {% else %}
   <p><small>По заданным фильтрам фраз нет{% if use_list %} (список активен — возможно, по этим ключам ещё нет собранных данных){% endif %}.</small></p>
   {% endif %}

@@ -1808,6 +1808,36 @@ def ui_demand_list_clear(db: Session = Depends(get_db)):
                             status_code=303)
 
 
+def _demand_redirect(list, region, device, start, end, search, msg):
+    qs = (f"?list={quote(list or 'on')}&region={quote(region or '')}"
+          f"&device={quote(device or '')}&start={start or ''}&end={end or ''}"
+          f"&search={quote(search or '')}&msg={quote(msg)}")
+    return RedirectResponse(url=f"{BP}/demand{qs}", status_code=303)
+
+
+@router.post("/ui/demand/delete")
+def ui_demand_delete(q: list[str] = Form(default=[]), list: str = Form("on"),
+                     region: str = Form(""), device: str = Form(""), start: str = Form(""),
+                     end: str = Form(""), search: str = Form(""), db: Session = Depends(get_db)):
+    """Удалить отмеченные фразы целиком: собранные данные Wordstat + запись в списке."""
+    from app.services import demand
+
+    n = demand.delete_phrases(db, q)
+    msg = f"Удалено фраз: {n} (с собранными данными)." if n else "Не выбрано ни одной фразы."
+    return _demand_redirect(list, region, device, start, end, search, msg)
+
+
+@router.post("/ui/demand/clear-all")
+def ui_demand_clear_all(db: Session = Depends(get_db)):
+    """Удалить ВСЮ собранную историю Wordstat и список ключей."""
+    from app.services import demand
+
+    n = demand.clear_all(db)
+    return RedirectResponse(
+        url=f"{BP}/demand?msg={quote(f'Удалено всё: {n} строк истории и список ключей.')}",
+        status_code=303)
+
+
 @router.get("/demand/export")
 def demand_export(region: str | None = None, device: str | None = None, start: str | None = None,
                   end: str | None = None, search: str | None = None, list: str = "on",

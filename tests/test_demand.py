@@ -118,3 +118,35 @@ def test_keylist_storage_and_filter():
         assert demand.get_keylist(db) == []
     finally:
         db.close()
+
+
+def test_delete_phrases_removes_data_and_list_entry():
+    db = _setup()
+    try:
+        demand.set_keylist(db, "компрессор купить\nресивер 500л")
+        # delete one phrase -> its data gone (all regions) and removed from the list
+        n = demand.delete_phrases(db, ["Компрессор Купить"])  # case/space-insensitive
+        assert n == 1
+        _, phrases = demand.load(db, "all", "all", None, None)
+        assert "компрессор купить" not in {p["query"] for p in phrases}
+        assert "ресивер 500л" in {p["query"] for p in phrases}
+        # also gone from the msk region (delete spans all regions/devices)
+        _, msk = demand.load(db, "msk", "all", None, None)
+        assert msk == []
+        assert demand.get_keylist(db) == ["ресивер 500л"]
+        # empty input is a no-op
+        assert demand.delete_phrases(db, []) == 0
+    finally:
+        db.close()
+
+
+def test_clear_all():
+    db = _setup()
+    try:
+        demand.set_keylist(db, "компрессор купить")
+        n = demand.clear_all(db)
+        assert n >= 1
+        assert not demand.has_data(db)
+        assert demand.get_keylist(db) == []
+    finally:
+        db.close()
