@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Спрос · SEO Статистика{% endblock %}
+{% block content %}
+<h2>Спрос <small>— история частотности Wordstat</small></h2>
+
+{% if not has_data %}
+<article>
+  <p><strong>Данных Wordstat ещё нет.</strong></p>
+  <p><small>История спроса собирается скриптом на сервере:</small></p>
+  <pre><code>.venv\Scripts\python scripts\wordstat.py --login        # один раз войти в Яндекс
+.venv\Scripts\python scripts\wordstat.py --collect --from-db   # собрать по нашим запросам
+.venv\Scripts\python scripts\wordstat.py --status      # что уже собрано</code></pre>
+  <p><small>После сбора помесячная частотность за ~2 года появится здесь.</small></p>
+</article>
+{% else %}
+
+<form method="get" action="{{ base_path }}/demand" class="grid">
+  <label>Регион
+    <select name="region" onchange="this.form.submit()">
+      {% for r in regions %}<option value="{{ r }}" {% if r==cur_region %}selected{% endif %}>{{ r }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Устройство
+    <select name="device" onchange="this.form.submit()">
+      {% for d in devices %}<option value="{{ d }}" {% if d==cur_device %}selected{% endif %}>{{ d }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>С <input type="month" name="start" value="{{ m_start }}"></label>
+  <label>По <input type="month" name="end" value="{{ m_end }}"></label>
+  <label>Поиск по фразе <input type="search" name="search" value="{{ search }}" placeholder="часть фразы…"></label>
+  <label>&nbsp;<button type="submit">Показать</button></label>
+</form>
+
+{% if plot and months %}
+<article>
+  <header>Динамика частотности{% if search %} · фильтр «{{ search }}»{% endif %}
+    <small>(показаны {{ plot|length }} фраз; отметьте нужные в таблице ниже)</small></header>
+  <canvas id="demand" height="110"></canvas>
+</article>
+{% endif %}
+
+<article>
+  <header>
+    Фразы: {{ phrases|length }}
+    <a href="{{ base_path }}/demand/export?region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&search={{ search|urlencode }}"
+       role="button" class="secondary outline" style="float:right">⬇ Экспорт CSV</a>
+  </header>
+  {% if phrases %}
+  <form method="get" action="{{ base_path }}/demand">
+    <input type="hidden" name="region" value="{{ cur_region }}">
+    <input type="hidden" name="device" value="{{ cur_device }}">
+    <input type="hidden" name="start" value="{{ m_start }}">
+    <input type="hidden" name="end" value="{{ m_end }}">
+    <input type="hidden" name="search" value="{{ search }}">
+    <button type="submit">📈 Показать выбранные на графике</button>
+    <small>Отметьте до ~12 фраз и нажмите кнопку.</small>
+    <figure><table class="sortable">
+      <thead><tr>
+        <th>На график</th><th>Фраза</th><th>Точек</th><th>Мин</th><th>Средн</th>
+        <th>Макс</th><th>Последнее</th><th>Рост</th>
+      </tr></thead>
+      <tbody>
+        {% for p in phrases[:1000] %}
+        <tr>
+          <td><input type="checkbox" name="q" value="{{ p.query }}" {% if p.query in chosen %}checked{% endif %}></td>
+          <td>{{ p.query }}</td>
+          <td>{{ p.points }}</td>
+          <td>{{ p.min|numfmt }}</td>
+          <td>{{ p.avg|numfmt }}</td>
+          <td>{{ p.max|numfmt }}</td>
+          <td>{{ p.last|numfmt }}</td>
+          <td>{% if p.change is none %}—{% elif p.change >= 0 %}<ins>+{{ p.change }}%</ins>{% else %}<del>{{ p.change }}%</del>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table></figure>
+  </form>
+  {% if phrases|length > 1000 %}<small>Показаны первые 1000 фраз из {{ phrases|length|numfmt }}.</small>{% endif %}
+  {% else %}
+  <p><small>По заданным фильтрам фраз нет.</small></p>
+  {% endif %}
+</article>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if plot and months %}
+<script>
+  const months = {{ months|tojson }};
+  const plot = {{ plot|tojson }};
+  const palette = ['#b8902f', '#1095c1', '#3f7d3a', '#b1561f', '#7b54b3', '#c0392b',
+                   '#2c7873', '#8a6d1f', '#566573', '#c2389a', '#1f7a4d', '#8e44ad'];
+  const labels = months.map(m => { const [y, mm] = m.split('-'); return mm + '.' + y; });
+  new Chart(document.getElementById('demand'), {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: plot.map((p, i) => ({
+        label: p.query,
+        data: p.series,
+        borderColor: palette[i % palette.length],
+        backgroundColor: palette[i % palette.length],
+        tension: 0.25, pointRadius: 2, spanGaps: true, borderWidth: 2
+      }))
+    },
+    options: {
+      interaction: {mode: 'index', intersect: false},
+      plugins: {legend: {position: 'bottom'}},
+      scales: {y: {beginAtZero: true}}
+    }
+  });
+</script>
+{% endif %}
+{% endblock %}

@@ -1711,6 +1711,73 @@ def leads_export(domain: str | None = None, start: str | None = None, end: str |
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
+def _month_to_date(s: str | None) -> date | None:
+    """Accept 'YYYY-MM' (month input) or 'YYYY-MM-DD' → date (first of month for 'YYYY-MM')."""
+    if not s:
+        return None
+    s = s.strip()
+    try:
+        return date.fromisoformat(s if len(s) == 10 else s + "-01")
+    except ValueError:
+        return None
+
+
+@router.get("/demand")
+def demand_page(request: Request, region: str | None = None, device: str | None = None,
+                start: str | None = None, end: str | None = None, search: str | None = None,
+                q: list[str] = Query(default=[]), db: Session = Depends(get_db)):
+    """Спрос: помесячная частотность Wordstat по собранным фразам — график выбранных
+    фраз + таблица сводки. Фильтры: регион, устройство, период (месяцы), поиск по фразе."""
+    from app.services import demand
+
+    regs = demand.regions(db)
+    devs = demand.devices(db)
+    cur_region = region if region in regs else (regs[0] if regs else None)
+    cur_device = device if device in devs else (devs[0] if devs else None)
+    lo, hi = demand.bounds(db, cur_region, cur_device)
+    d_start = _month_to_date(start) or lo
+    d_end = _month_to_date(end) or hi
+    months, phrases = demand.load(db, cur_region, cur_device, d_start, d_end, (search or "").strip() or None)
+    chosen = set(q)
+    plot = [p for p in phrases if p["query"] in chosen] or phrases[:8]
+    return templates.TemplateResponse(request, "demand.html", {
+        "request": request, "has_data": demand.has_data(db),
+        "regions": regs, "devices": devs, "cur_region": cur_region, "cur_device": cur_device,
+        "m_start": d_start.strftime("%Y-%m") if d_start else "",
+        "m_end": d_end.strftime("%Y-%m") if d_end else "",
+        "search": search or "", "months": months, "phrases": phrases,
+        "plot": plot, "chosen": chosen,
+    })
+
+
+@router.get("/demand/export")
+def demand_export(region: str | None = None, device: str | None = None, start: str | None = None,
+                  end: str | None = None, search: str | None = None, db: Session = Depends(get_db)):
+    import csv
+    import io
+
+    from app.services import demand
+
+    regs = demand.regions(db)
+    devs = demand.devices(db)
+    cur_region = region if region in regs else (regs[0] if regs else None)
+    cur_device = device if device in devs else (devs[0] if devs else None)
+    lo, hi = demand.bounds(db, cur_region, cur_device)
+    d_start = _month_to_date(start) or lo
+    d_end = _month_to_date(end) or hi
+    months, phrases = demand.load(db, cur_region, cur_device, d_start, d_end, (search or "").strip() or None)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["фраза", *months, "мин", "средн", "макс", "рост,%"])
+    for p in phrases:
+        w.writerow([p["query"], *[("" if v is None else v) for v in p["series"]],
+                    p["min"], p["avg"], p["max"], "" if p["change"] is None else p["change"]])
+    fname = f"demand_{cur_region or 'all'}_{cur_device or 'all'}.csv"
+    # BOM, иначе Excel на русской Windows читает UTF-8 как cp1251 («кракозябры»)
+    return Response(content="\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 @router.get("/metrika")
 def metrika_page(request: Request, site_id: int | None = None, start: str | None = None,
                  end: str | None = None, msg: str | None = None, db: Session = Depends(get_db)):
