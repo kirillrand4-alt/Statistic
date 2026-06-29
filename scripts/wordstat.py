@@ -181,23 +181,39 @@ def _payload(phrase, region, device, d_from, d_to) -> dict:
 
 
 def _parse_graph(resp):
-    """-> ('ok', [(date, value), …]) | ('captcha', None) | ('error', msg)."""
+    """-> ('ok', rows) | ('captcha', None) | ('empty', []) | ('error', msg).
+
+    ``empty`` — Wordstat ответил нормально, но истории по фразе нет (низкочастотный
+    хвост) — это не сбой. ``error`` — ответ есть, но структура неожиданная (msg —
+    причина). ``captcha`` — редирект на проверку/блок по частоте запросов.
+    """
     try:
         txt = resp.text()
     except Exception as e:  # noqa: BLE001
-        return "error", str(e)[:120]
+        return "error", f"нет ответа: {str(e)[:80]}"
     low = txt.lower()
-    if resp.status != 200 or "captcha" in low or "showcaptcha" in low:
+    if "showcaptcha" in low or "smartcaptcha" in low or "checkcaptcha" in low:
+        return "captcha", None
+    if resp.status != 200:
+        return ("captcha", None) if resp.status in (403, 429) else ("error", f"HTTP {resp.status}")
+    if "captcha" in low and '"graph"' not in txt:
         return "captcha", None
     try:
+        data = json.loads(txt)
+    except Exception:  # noqa: BLE001
+        return "error", "ответ не JSON"
+    try:
         from datetime import date
-        series = (json.loads(txt)["graph"]["images"]["timeSeries"]
-                  ["preparedValues"]["absolute"])
+        ts = data["graph"]["images"]["timeSeries"]
+        pv = ts.get("preparedValues") or {}
+        series = pv.get("absolute")
+        if not series:  # ключа нет или пусто -> нет истории по фразе
+            return "empty", []
         rows = [(date(int(p["year"]), int(p["month"]) + 1, 1), int(p["y"]))
                 for p in series if 0 <= int(p["month"]) <= 11]
-        return "ok", rows
+        return ("ok", rows) if rows else ("empty", [])
     except Exception as e:  # noqa: BLE001
-        return ("captcha", None) if '"graph"' not in txt else ("error", str(e)[:120])
+        return "error", f"структура ответа: {str(e)[:80]}"
 
 
 def _save(db, phrase, region, device, rows) -> int:
@@ -379,7 +395,11 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
 
     print(f"Сбор Wordstat: {len(phrases)} фраз, регион={region}, устройство={dev}, "
           f"период {d_from}–{d_to}, пауза ~{delay}с/запрос.", flush=True)
-    ok = fail = 0
+    ok = empty = fail = 0
+    failed: list[str] = []
+    err_dumps = 0
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+    failed_path = os.path.join(DATA_DIR, "failed.txt")
     t0 = time.monotonic()
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=False, viewport=VIEWPORT)
@@ -388,31 +408,55 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
         for i, phrase in enumerate(phrases, 1):
             ref = (f"https://wordstat.yandex.ru/?region={region}&view=graph"
                    f"&words={quote(phrase)}")
-            kind, rows = "error", None
-            for _ in range(3):  # retry around a captcha solve
+            kind, data, last_txt = "error", None, ""
+            for attempt in range(3):  # retries: captcha solve + transient errors
                 resp = ctx.request.post(
                     GRAPH_URL, data=json.dumps(_payload(phrase, region, device, d_from, d_to)),
                     headers={"content-type": "application/json", "referer": ref}, timeout=45000)
-                kind, rows = _parse_graph(resp)
+                try:
+                    last_txt = resp.text()
+                except Exception:  # noqa: BLE001
+                    last_txt = ""
+                kind, data = _parse_graph(resp)
                 if kind == "captcha":
                     _solve_captcha(page, captcha)
+                    continue
+                if kind == "error" and attempt < 2:
+                    page.wait_for_timeout(1500)  # transient — short pause, retry
                     continue
                 break
             elapsed = time.monotonic() - t0
             eta = (elapsed / i) * (len(phrases) - i)
-            tail = f"ok={ok + (1 if kind == 'ok' else 0)} fail={fail + (0 if kind == 'ok' else 1)} ~{eta/60:.0f}м осталось"
             if kind == "ok":
-                n = _save(db, phrase, region, device, rows)
                 ok += 1
-                print(f"  [{i}/{len(phrases)}] «{phrase}» — {n} точек · {tail}", flush=True)
-            else:
+                n = _save(db, phrase, region, device, data)
+                note = f"{n} точек"
+            elif kind == "empty":
+                empty += 1
+                note = "нет данных (низкочастотный)"
+            else:  # error
                 fail += 1
-                print(f"  [{i}/{len(phrases)}] «{phrase}» — {kind} · {tail}", flush=True)
+                failed.append(phrase)
+                note = f"error: {data}"
+                if err_dumps < 10 and last_txt:  # save raw response to diagnose the parser
+                    with open(os.path.join(DEBUG_DIR, f"err_{err_dumps}.json"), "w",
+                              encoding="utf-8") as f:
+                        f.write(f"// phrase: {phrase}\n// status: {resp.status}\n" + last_txt[:20000])
+                    err_dumps += 1
+            tail = f"ok={ok} empty={empty} fail={fail} ~{eta/60:.0f}м осталось"
+            print(f"  [{i}/{len(phrases)}] «{phrase}» — {note} · {tail}", flush=True)
             # jitter the pause a bit so the request cadence isn't perfectly regular
             page.wait_for_timeout(int(delay * random.uniform(0.6, 1.5) * 1000))
         ctx.close()
     db.close()
-    print(f"Готово: собрано {ok}, ошибок {fail}.\n")
+    if failed:  # write the failed phrases so you can re-run just them
+        with open(failed_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(failed) + "\n")
+        print(f"\nОшибочные фразы ({len(failed)}) сохранены в {failed_path} — "
+              f"повтор: --collect --phrases \"{failed_path}\"")
+        if err_dumps:
+            print(f"Сырые ответы по первым {err_dumps} ошибкам — в {DEBUG_DIR}\\err_*.json")
+    print(f"\nГотово: собрано {ok}, без данных {empty}, ошибок {fail}.\n")
     cmd_status()  # show what's now in the DB so you can verify the run
 
 
