@@ -272,12 +272,40 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit) -> None:
             page.wait_for_timeout(int(delay * 1000))
         ctx.close()
     db.close()
-    print(f"Готово: собрано {ok}, ошибок {fail}.")
+    print(f"Готово: собрано {ok}, ошибок {fail}.\n")
+    cmd_status()  # show what's now in the DB so you can verify the run
+
+
+def cmd_status() -> None:
+    """Show what's already in wordstat_history (so you can verify a run)."""
+    from app.db.base import SessionLocal, init_db
+    from app.db.models import WordstatHistory
+    from sqlalchemy import distinct, func, select
+    init_db()
+    db = SessionLocal()
+    try:
+        total = db.execute(select(func.count()).select_from(WordstatHistory)).scalar() or 0
+        nq = db.execute(select(func.count(distinct(WordstatHistory.query_hash)))).scalar() or 0
+        lo, hi = db.execute(select(func.min(WordstatHistory.date),
+                                   func.max(WordstatHistory.date))).one()
+        print(f"Wordstat в базе: фраз {nq}, строк {total}, период {lo}…{hi}")
+        rows = db.execute(
+            select(WordstatHistory.query, func.count(), func.max(WordstatHistory.value))
+            .group_by(WordstatHistory.query)
+            .order_by(func.max(WordstatHistory.value).desc()).limit(25)
+        ).all()
+        if rows:
+            print("Топ фраз (по макс. частотности):")
+            for q, c, mx in rows:
+                print(f"  {mx:>11}  {c:>3} точек  {q}")
+    finally:
+        db.close()
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--login", action="store_true", help="войти в Яндекс (headed)")
+    ap.add_argument("--status", action="store_true", help="показать, что собрано в базе")
     ap.add_argument("--discover", metavar="QUERY", help="поймать эндпоинт «Истории» для фразы")
     ap.add_argument("--collect", action="store_true", help="собрать историю по списку фраз")
     ap.add_argument("--phrases", help="файл со списком фраз (по одной в строке)")
@@ -292,6 +320,8 @@ def main() -> None:
     a = ap.parse_args()
     if a.login:
         cmd_login()
+    elif a.status:
+        cmd_status()
     elif a.discover:
         cmd_discover(a.discover)
     elif a.collect:
