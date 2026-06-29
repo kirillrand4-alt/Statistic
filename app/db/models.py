@@ -435,6 +435,26 @@ class DonorSite(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class WordstatHistory(Base):
+    """Monthly Wordstat demand (frequency) per query/region — the «История запросов»
+    series, collected for our keywords and accumulated over time."""
+
+    __tablename__ = "wordstat_history"
+    __table_args__ = (
+        UniqueConstraint("query_hash", "region", "device", "date", name="uq_wordstat"),
+        Index("ix_wordstat_query", "query_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    query: Mapped[str] = mapped_column(Text)
+    query_hash: Mapped[str] = mapped_column(String(40), index=True)
+    region: Mapped[str] = mapped_column(String(48), default="all")
+    device: Mapped[str] = mapped_column(String(48), default="all")
+    date: Mapped[date_type] = mapped_column(Date)   # first day of the month
+    value: Mapped[int] = mapped_column(Integer, default=0)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class AppSetting(Base):
     """Runtime-editable key/value config (optionally encrypted)."""
 

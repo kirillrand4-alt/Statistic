@@ -122,15 +122,179 @@ def cmd_discover(query: str) -> None:
     print("\nПришли сюда вывод и/или файлы data/wordstat/debug/ws_*.json — добью загрузчик.")
 
 
+GRAPH_URL = "https://wordstat.yandex.ru/wordstat/api/getGraph"
+
+
+def _default_range() -> tuple[str, str]:
+    """24-month window ending at the previous full month (dd.mm.YYYY) — Wordstat max."""
+    from datetime import date, timedelta
+    today = date.today()
+    end = today.replace(day=1) - timedelta(days=1)  # last day of previous month
+    sy, sm = end.year, end.month - 23
+    while sm <= 0:
+        sm += 12
+        sy -= 1
+    start = date(sy, sm, 1)
+    return start.strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y")
+
+
+def _payload(phrase, region, device, d_from, d_to) -> dict:
+    return {
+        "currentDevice": device, "currentGraphType": "month", "dbname": "rus",
+        "filters": {"region": region, "tableType": "popular"},
+        "searchValue": phrase, "startDate": d_from, "endDate": d_to,
+        "text": {"graph": {"title": "", "disclaimer": ""},
+                 "map": {"title": "", "disclaimer": ""},
+                 "table": {"title": "", "disclaimer": ""}},
+    }
+
+
+def _parse_graph(resp):
+    """-> ('ok', [(date, value), …]) | ('captcha', None) | ('error', msg)."""
+    try:
+        txt = resp.text()
+    except Exception as e:  # noqa: BLE001
+        return "error", str(e)[:120]
+    low = txt.lower()
+    if resp.status != 200 or "captcha" in low or "showcaptcha" in low:
+        return "captcha", None
+    try:
+        from datetime import date
+        series = (json.loads(txt)["graph"]["images"]["timeSeries"]
+                  ["preparedValues"]["absolute"])
+        rows = [(date(int(p["year"]), int(p["month"]) + 1, 1), int(p["y"]))
+                for p in series if 0 <= int(p["month"]) <= 11]
+        return "ok", rows
+    except Exception as e:  # noqa: BLE001
+        return ("captcha", None) if '"graph"' not in txt else ("error", str(e)[:120])
+
+
+def _save(db, phrase, region, device, rows) -> int:
+    from app.db.models import WordstatHistory
+    from app.utils import query_hash
+    dialect = db.get_bind().dialect.name
+    if dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+    elif dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:  # pragma: no cover
+        raise RuntimeError(f"Unsupported dialect {dialect!r}")
+    dev = "all" if device == "desktop,phone,tablet" else device
+    qh = query_hash(phrase)
+    vals = [{"query": phrase, "query_hash": qh, "region": region, "device": dev,
+             "date": d, "value": v} for d, v in rows]
+    if not vals:
+        return 0
+    stmt = insert(WordstatHistory).values(vals)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["query_hash", "region", "device", "date"],
+        set_={"value": stmt.excluded.value, "query": stmt.excluded.query})
+    db.execute(stmt)
+    db.commit()
+    return len(vals)
+
+
+def _read_phrases(path) -> list[str]:
+    with open(path, encoding="utf-8") as f:
+        return [ln.strip() for ln in f if ln.strip()]
+
+
+def _db_phrases(site_id=None) -> list[str]:
+    from app.db.base import SessionLocal
+    from app.db.models import Query
+    from sqlalchemy import select
+    db = SessionLocal()
+    try:
+        stmt = select(Query.text).distinct()
+        if site_id:
+            stmt = stmt.where(Query.site_id == site_id)
+        return [t for (t,) in db.execute(stmt).all() if t]
+    finally:
+        db.close()
+
+
+def _solve_captcha(page) -> None:
+    """v1: show Wordstat in the window so the user clears Yandex SmartCaptcha by
+    hand, then resume. (Auto-solver via CapMonster/2captcha is the next step.)"""
+    try:
+        page.bring_to_front()
+        page.goto(WORDSTAT_URL, wait_until="domcontentloaded", timeout=60000)
+    except Exception:  # noqa: BLE001
+        pass
+    print("  ⚠ Капча Яндекса. Реши её в окне браузера, затем нажми Enter…", flush=True)
+    try:
+        input()
+    except EOFError:
+        page.wait_for_timeout(60000)
+
+
+def cmd_collect(phrases, region, device, d_from, d_to, delay, limit) -> None:
+    from app.db.base import SessionLocal, init_db
+    from urllib.parse import quote
+
+    if limit:
+        phrases = phrases[:limit]
+    if not phrases:
+        sys.exit("Нет фраз для сбора (укажи --phrases файл или --from-db).")
+    init_db()
+    db = SessionLocal()
+    d_from = d_from or _default_range()[0]
+    d_to = d_to or _default_range()[1]
+    print(f"Сбор Wordstat: {len(phrases)} фраз, регион={region}, период {d_from}–{d_to}, "
+          f"пауза {delay}с/запрос.", flush=True)
+    ok = fail = 0
+    with _pw()() as p:
+        ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=False, viewport=VIEWPORT)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.goto(WORDSTAT_URL, wait_until="domcontentloaded", timeout=60000)
+        for i, phrase in enumerate(phrases, 1):
+            ref = (f"https://wordstat.yandex.ru/?region={region}&view=graph"
+                   f"&words={quote(phrase)}")
+            kind, rows = "error", None
+            for _ in range(3):  # retry around a captcha solve
+                resp = ctx.request.post(
+                    GRAPH_URL, data=json.dumps(_payload(phrase, region, device, d_from, d_to)),
+                    headers={"content-type": "application/json", "referer": ref}, timeout=45000)
+                kind, rows = _parse_graph(resp)
+                if kind == "captcha":
+                    _solve_captcha(page)
+                    continue
+                break
+            if kind == "ok":
+                n = _save(db, phrase, region, device, rows)
+                ok += 1
+                print(f"  [{i}/{len(phrases)}] «{phrase}» — {n} точек", flush=True)
+            else:
+                fail += 1
+                print(f"  [{i}/{len(phrases)}] «{phrase}» — {kind}", flush=True)
+            page.wait_for_timeout(int(delay * 1000))
+        ctx.close()
+    db.close()
+    print(f"Готово: собрано {ok}, ошибок {fail}.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--login", action="store_true", help="войти в Яндекс (headed)")
     ap.add_argument("--discover", metavar="QUERY", help="поймать эндпоинт «Истории» для фразы")
+    ap.add_argument("--collect", action="store_true", help="собрать историю по списку фраз")
+    ap.add_argument("--phrases", help="файл со списком фраз (по одной в строке)")
+    ap.add_argument("--from-db", dest="from_db", action="store_true", help="фразы из таблицы Query")
+    ap.add_argument("--site", type=int, help="с --from-db: только запросы этого site_id")
+    ap.add_argument("--region", default="all", help="регион Wordstat (по умолч. all)")
+    ap.add_argument("--device", default="desktop,phone,tablet", help="устройства")
+    ap.add_argument("--from", dest="d_from", help="начало периода дд.мм.гггг")
+    ap.add_argument("--to", dest="d_to", help="конец периода дд.мм.гггг")
+    ap.add_argument("--delay", type=float, default=2.0, help="пауза между запросами, сек")
+    ap.add_argument("--limit", type=int, default=0)
     a = ap.parse_args()
     if a.login:
         cmd_login()
     elif a.discover:
         cmd_discover(a.discover)
+    elif a.collect:
+        phrases = _read_phrases(a.phrases) if a.phrases else (_db_phrases(a.site) if a.from_db else [])
+        cmd_collect(phrases, a.region, a.device, a.d_from, a.d_to, a.delay, a.limit)
     else:
         ap.print_help()
 
