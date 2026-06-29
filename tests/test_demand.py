@@ -76,6 +76,23 @@ def test_region_and_search_filters():
         db.close()
 
 
+def test_sum_series_and_aggregate():
+    db = _setup()
+    try:
+        months, phrases = demand.load(db, "all", "all", None, None)
+        # элементная сумма по месяцам; None (пропуск у ресивера в феврале) = 0
+        # компрессор [100,150,200] + ресивер [40,None,30] -> [140,150,230]
+        assert demand.sum_series(phrases) == [140, 150, 230]
+        agg = demand.aggregate("Всего", phrases)
+        assert agg["query"] == "Всего" and agg["count"] == 2
+        assert agg["series"] == [140, 150, 230]
+        assert agg["max"] == 230 and agg["last"] == 230
+        assert demand.aggregate("x", []) is None
+        assert demand.sum_series([]) == []
+    finally:
+        db.close()
+
+
 def test_keylist_storage_and_filter():
     db = _setup()
     try:

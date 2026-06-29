@@ -60,6 +60,7 @@
 
 <form method="get" action="{{ base_path }}/demand" class="grid">
   <input type="hidden" name="list" value="{{ list_state }}">
+  <input type="hidden" name="mode" value="{{ mode }}">
   <label>Регион
     <select name="region" onchange="this.form.submit()">
       {% for r in regions %}<option value="{{ r }}" {% if r==cur_region %}selected{% endif %}>{{ r }}</option>{% endfor %}
@@ -78,8 +79,12 @@
 
 {% if plot and months %}
 <article>
-  <header>Динамика частотности{% if use_list %} · по списку{% endif %}{% if search %} · фильтр «{{ search }}»{% endif %}
-    <small>(показаны {{ plot|length }} фраз; отметьте нужные в таблице ниже)</small></header>
+  <header>
+    {% if is_sum %}Суммарная динамика спроса — {{ plot[0].query }}
+      <small>(последнее {{ plot[0].last|numfmt }} · макс {{ plot[0].max|numfmt }})</small>
+    {% else %}Динамика частотности{% if use_list %} · по списку{% endif %}{% if search %} · фильтр «{{ search }}»{% endif %}
+      <small>(показаны {{ plot|length }} фраз; отметьте нужные в таблице ниже)</small>{% endif %}
+  </header>
   <canvas id="demand" height="110"></canvas>
 </article>
 {% endif %}
@@ -98,12 +103,23 @@
     <input type="hidden" name="start" value="{{ m_start }}">
     <input type="hidden" name="end" value="{{ m_end }}">
     <input type="hidden" name="search" value="{{ search }}">
-    <button type="submit">📈 Показать выбранные на графике</button>
-    <small>Отметьте до ~12 фраз и нажмите кнопку.</small>
+    <div class="grid">
+      <label>Что показать на графике
+        <select name="mode" onchange="this.form.submit()">
+          <option value="sep" {% if mode=='sep' %}selected{% endif %}>Отмеченные — по отдельности</option>
+          <option value="sum_checked" {% if mode=='sum_checked' %}selected{% endif %}>Сумма отмеченных</option>
+          {% if keylist %}<option value="sum_list" {% if mode=='sum_list' %}selected{% endif %}>Сумма по загруженному списку</option>{% endif %}
+          <option value="sum_db" {% if mode=='sum_db' %}selected{% endif %}>Сумма по всем фразам в базе</option>
+        </select>
+      </label>
+      <label>&nbsp;<button type="submit">📈 Построить график</button></label>
+    </div>
+    <small>Отметьте фразы галочками (для «по отдельности» — до ~12) и нажмите «Построить график».
+      Сумма строит одну кривую общего спроса по выбранному набору.</small>
     <figure><table class="sortable">
       <thead><tr>
         <th>На график</th><th>Фраза</th><th>Точек</th><th>Мин</th><th>Средн</th>
-        <th>Макс</th><th>Последнее</th><th>Рост</th>
+        <th>Макс</th><th>Последнее</th><th>Рост</th><th></th>
       </tr></thead>
       <tbody>
         {% for p in phrases[:1000] %}
@@ -116,6 +132,8 @@
           <td>{{ p.max|numfmt }}</td>
           <td>{{ p.last|numfmt }}</td>
           <td>{% if p.change is none %}—{% elif p.change >= 0 %}<ins>+{{ p.change }}%</ins>{% else %}<del>{{ p.change }}%</del>{% endif %}</td>
+          <td><a href="{{ base_path }}/demand?mode=sep&list={{ list_state }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&q={{ p.query|urlencode }}"
+                 title="Показать график только по этой фразе">📈</a></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -134,6 +152,7 @@
 <script>
   const months = {{ months|tojson }};
   const plot = {{ plot|tojson }};
+  const isSum = {{ 'true' if is_sum else 'false' }};
   const palette = ['#b8902f', '#1095c1', '#3f7d3a', '#b1561f', '#7b54b3', '#c0392b',
                    '#2c7873', '#8a6d1f', '#566573', '#c2389a', '#1f7a4d', '#8e44ad'];
   const labels = months.map(m => { const [y, mm] = m.split('-'); return mm + '.' + y; });
@@ -145,8 +164,8 @@
         label: p.query,
         data: p.series,
         borderColor: palette[i % palette.length],
-        backgroundColor: palette[i % palette.length],
-        tension: 0.25, pointRadius: 2, spanGaps: true, borderWidth: 2
+        backgroundColor: isSum ? 'rgba(184,144,47,.15)' : palette[i % palette.length],
+        fill: isSum, tension: 0.25, pointRadius: 2, spanGaps: true, borderWidth: 2
       }))
     },
     options: {

@@ -57,6 +57,39 @@ def clear_keylist(db: Session) -> None:
         db.commit()
 
 
+def sum_series(phrases) -> list[int]:
+    """Element-wise sum of the per-month ``series`` across phrases (None → 0).
+
+    All phrases from one :func:`load` call share the same month axis, so the
+    result aligns to that call's ``months``. Used for the «по всем фразам» line.
+    """
+    if not phrases:
+        return []
+    n = len(phrases[0]["series"])
+    out = [0] * n
+    for p in phrases:
+        for i, v in enumerate(p["series"]):
+            if v is not None:
+                out[i] += v
+    return out
+
+
+def aggregate(label: str, phrases) -> dict | None:
+    """One summary-shaped dataset = sum of ``phrases`` (for the chart). None if empty."""
+    if not phrases:
+        return None
+    series = sum_series(phrases)
+    present = [v for v in series if v]
+    return {
+        "query": label,
+        "series": series,
+        "count": len(phrases),
+        "max": max(series) if series else 0,
+        "last": next((v for v in reversed(series) if v is not None), 0),
+        "avg": round(sum(present) / len(present)) if present else 0,
+    }
+
+
 def regions(db: Session) -> list[str]:
     return [r for (r,) in db.execute(select(distinct(W.region)).order_by(W.region)).all() if r]
 

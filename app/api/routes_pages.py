@@ -1725,11 +1725,13 @@ def _month_to_date(s: str | None) -> date | None:
 @router.get("/demand")
 def demand_page(request: Request, region: str | None = None, device: str | None = None,
                 start: str | None = None, end: str | None = None, search: str | None = None,
-                list: str = "on", q: list[str] = Query(default=[]),
+                list: str = "on", mode: str = "sep", q: list[str] = Query(default=[]),
                 msg: str | None = None, db: Session = Depends(get_db)):
-    """Спрос: помесячная частотность Wordstat по собранным фразам — график выбранных
-    фраз + таблица сводки. Фильтры: регион, устройство, период (месяцы), поиск, а также
-    загруженный список ключей (``list=on`` — показывать только его, ``off`` — все ключи)."""
+    """Спрос: помесячная частотность Wordstat по собранным фразам — график + таблица.
+    Фильтры: регион, устройство, период, поиск, загруженный список (``list=on/off``).
+    Режим графика ``mode``: ``sep`` — отмеченные по отдельности; ``sum_checked`` —
+    сумма отмеченных; ``sum_list`` — сумма по загруженному списку; ``sum_db`` — сумма
+    по всем фразам в базе (с учётом региона/устройства/периода)."""
     from app.services import demand
 
     regs = demand.regions(db)
@@ -1739,22 +1741,43 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
     lo, hi = demand.bounds(db, cur_region, cur_device)
     d_start = _month_to_date(start) or lo
     d_end = _month_to_date(end) or hi
+    s = (search or "").strip() or None
     keylist = demand.get_keylist(db)
     use_list = list != "off" and bool(keylist)
-    keyset = {demand.norm_key(k) for k in keylist} if use_list else None
-    months, phrases = demand.load(db, cur_region, cur_device, d_start, d_end,
-                                  (search or "").strip() or None, keyset=keyset)
+    list_keyset = {demand.norm_key(k) for k in keylist} if keylist else None
+    keyset = list_keyset if use_list else None
+    # table scope: what the user browses (filtered by list + search)
+    months, phrases = demand.load(db, cur_region, cur_device, d_start, d_end, s, keyset=keyset)
     found = {demand.norm_key(p["query"]) for p in phrases}
     missing = [k for k in keylist if demand.norm_key(k) not in found] if use_list else []
     chosen = set(q)
-    plot = [p for p in phrases if p["query"] in chosen] or phrases[:8]
+
+    # chart scope depends on the selected mode
+    is_sum, chart_months, plot = False, months, []
+    if mode == "sum_db":  # сумма по всем фразам в базе (без фильтра списка/поиска)
+        chart_months, allp = demand.load(db, cur_region, cur_device, d_start, d_end, None)
+        agg = demand.aggregate(f"Сумма по всем в базе ({len(allp)} фраз)", allp)
+        plot, is_sum = ([agg] if agg else []), True
+    elif mode == "sum_list" and keylist:  # сумма по загруженному списку
+        chart_months, lp = demand.load(db, cur_region, cur_device, d_start, d_end, None,
+                                       keyset=list_keyset)
+        agg = demand.aggregate(f"Сумма по списку ({len(lp)} фраз)", lp)
+        plot, is_sum = ([agg] if agg else []), True
+    elif mode == "sum_checked":  # сумма отмеченных (или всех показанных, если ничего не отмечено)
+        scope = [p for p in phrases if p["query"] in chosen] or phrases
+        agg = demand.aggregate(f"Сумма отмеченных ({len(scope)} фраз)", scope)
+        plot, is_sum = ([agg] if agg else []), True
+    else:  # sep — отмеченные по отдельности (или топ-8 показанных)
+        mode = "sep"
+        plot = [p for p in phrases if p["query"] in chosen] or phrases[:8]
+
     return templates.TemplateResponse(request, "demand.html", {
         "request": request, "has_data": demand.has_data(db), "msg": msg,
         "regions": regs, "devices": devs, "cur_region": cur_region, "cur_device": cur_device,
         "m_start": d_start.strftime("%Y-%m") if d_start else "",
         "m_end": d_end.strftime("%Y-%m") if d_end else "",
-        "search": search or "", "months": months, "phrases": phrases,
-        "plot": plot, "chosen": chosen,
+        "search": search or "", "months": chart_months, "phrases": phrases,
+        "plot": plot, "chosen": chosen, "mode": mode, "is_sum": is_sum,
         "keylist": keylist, "use_list": use_list, "list_state": list,
         "missing": missing,
     })
