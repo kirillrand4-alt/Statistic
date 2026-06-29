@@ -8,6 +8,15 @@ fetcher (per-phrase history) + captcha hook + storage on top.
 
   python scripts/wordstat.py --login                 # log into Yandex (headed)
   python scripts/wordstat.py --discover "компрессор"  # capture the history XHR
+  python scripts/wordstat.py --collect --from-db      # collect history for our queries
+  python scripts/wordstat.py --status                 # show what's already collected
+
+Captcha: by default you solve any Yandex SmartCaptcha by hand in the window.
+For unattended runs configure a cloud solver once, then pass --captcha auto:
+  python scripts/wordstat.py --set-captcha YOUR_KEY --captcha-provider capmonster
+  python scripts/wordstat.py --collect --from-db --captcha auto
+(Yandex SmartCaptcha is confirmed on 2captcha; CapMonster support is not
+guaranteed — switch --captcha-provider 2captcha if it refuses.)
 
 NOTE: scraping Wordstat is against Yandex ToS and may hit Yandex SmartCaptcha —
 keep request rates low; this tool is for your own keyword research.
@@ -215,9 +224,84 @@ def _db_phrases(site_id=None) -> list[str]:
         db.close()
 
 
-def _solve_captcha(page) -> None:
-    """v1: show Wordstat in the window so the user clears Yandex SmartCaptcha by
-    hand, then resume. (Auto-solver via CapMonster/2captcha is the next step.)"""
+def _find_sitekey(page) -> str | None:
+    """Best-effort: read the Yandex SmartCaptcha sitekey from the page DOM."""
+    try:
+        return page.evaluate(
+            """() => {
+              const el = document.querySelector('[data-sitekey]');
+              if (el) return el.getAttribute('data-sitekey');
+              const m = document.documentElement.innerHTML.match(
+                /sitekey["']?\\s*[:=]\\s*["']([A-Za-z0-9_\\-]+)["']/);
+              return m ? m[1] : null;
+            }""")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _inject_token(page, token: str) -> bool:
+    """Put the solved token into the SmartCaptcha field and submit its form."""
+    try:
+        return bool(page.evaluate(
+            """(token) => {
+              let done = false;
+              document.querySelectorAll('input[name="smart-token"]').forEach(i => {
+                i.value = token;
+                i.dispatchEvent(new Event('input', {bubbles: true}));
+                i.dispatchEvent(new Event('change', {bubbles: true}));
+                done = true;
+                if (i.form) { try { i.form.submit(); } catch (e) {} }
+              });
+              return done;
+            }""", token))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _auto_solve(page) -> bool:
+    """Try to clear the captcha via the configured cloud solver. Returns True on
+    apparent success (token injected). Never raises — caller falls back to manual."""
+    from app.services import captcha as C
+    provider, key = C.config()
+    if not key:
+        print("  ⚠ авто-решатель не настроен (нет ключа) — решаю вручную.", flush=True)
+        return False
+    try:
+        page.bring_to_front()
+        page.goto(WORDSTAT_URL, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(1500)
+    except Exception:  # noqa: BLE001
+        pass
+    sitekey = _find_sitekey(page)
+    if not sitekey:
+        print("  ⚠ не нашёл sitekey капчи на странице — решаю вручную.", flush=True)
+        return False
+    print(f"  🤖 решаю капчу через {provider} (sitekey {sitekey[:12]}…)…", flush=True)
+    try:
+        token = C.solve_smartcaptcha(sitekey, page.url, provider=provider, api_key=key)
+    except Exception as e:  # noqa: BLE001
+        print(f"  ⚠ решатель не справился: {e}", flush=True)
+        return False
+    if _inject_token(page, token):
+        page.wait_for_timeout(2500)
+        print("  ✅ токен капчи внедрён.", flush=True)
+        return True
+    print("  ⚠ не удалось внедрить токен в страницу — решаю вручную.", flush=True)
+    return False
+
+
+def _solve_captcha(page, mode: str = "manual") -> None:
+    """Clear a Yandex SmartCaptcha. ``mode``:
+      manual  — show the window so you solve it by hand (default);
+      auto    — try the cloud solver first, fall back to manual prompt;
+      auto-only — cloud solver only (for unattended runs; no prompt)."""
+    if mode in ("auto", "auto-only"):
+        if _auto_solve(page):
+            return
+        if mode == "auto-only":
+            print("  ⚠ авто-решение не удалось; жду 30с и пробую дальше.", flush=True)
+            page.wait_for_timeout(30000)
+            return
     try:
         page.bring_to_front()
         page.goto(WORDSTAT_URL, wait_until="domcontentloaded", timeout=60000)
@@ -230,7 +314,7 @@ def _solve_captcha(page) -> None:
         page.wait_for_timeout(60000)
 
 
-def cmd_collect(phrases, region, device, d_from, d_to, delay, limit) -> None:
+def cmd_collect(phrases, region, device, d_from, d_to, delay, limit, captcha="manual") -> None:
     from app.db.base import SessionLocal, init_db
     from urllib.parse import quote
 
@@ -259,7 +343,7 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit) -> None:
                     headers={"content-type": "application/json", "referer": ref}, timeout=45000)
                 kind, rows = _parse_graph(resp)
                 if kind == "captcha":
-                    _solve_captcha(page)
+                    _solve_captcha(page, captcha)
                     continue
                 break
             if kind == "ok":
@@ -317,7 +401,21 @@ def main() -> None:
     ap.add_argument("--to", dest="d_to", help="конец периода дд.мм.гггг")
     ap.add_argument("--delay", type=float, default=2.0, help="пауза между запросами, сек")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--captcha", choices=("manual", "auto", "auto-only"), default="manual",
+                    help="как решать капчу: вручную (по умолч.) / авто-решатель / только авто")
+    ap.add_argument("--set-captcha", metavar="KEY",
+                    help="сохранить ключ облачного решателя капч (шифруется)")
+    ap.add_argument("--captcha-provider", choices=("capmonster", "anticaptcha", "2captcha"),
+                    help="провайдер решателя капч (с --set-captcha; по умолч. capmonster)")
     a = ap.parse_args()
+    if a.set_captcha or a.captcha_provider:
+        from app.db.base import init_db
+        from app.services import captcha as C
+        init_db()
+        C.save_config(provider=a.captcha_provider, api_key=a.set_captcha)
+        prov, key = C.config()
+        print(f"Решатель капч: провайдер={prov}, ключ {'задан' if key else 'НЕ задан'}.")
+        return
     if a.login:
         cmd_login()
     elif a.status:
@@ -326,7 +424,7 @@ def main() -> None:
         cmd_discover(a.discover)
     elif a.collect:
         phrases = _read_phrases(a.phrases) if a.phrases else (_db_phrases(a.site) if a.from_db else [])
-        cmd_collect(phrases, a.region, a.device, a.d_from, a.d_to, a.delay, a.limit)
+        cmd_collect(phrases, a.region, a.device, a.d_from, a.d_to, a.delay, a.limit, a.captcha)
     else:
         ap.print_help()
 
