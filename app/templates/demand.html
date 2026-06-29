@@ -2,6 +2,7 @@
 {% block title %}Спрос · SEO Статистика{% endblock %}
 {% block content %}
 <h2>Спрос <small>— история частотности Wordstat</small></h2>
+{% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
 
 {% if not has_data %}
 <article>
@@ -14,7 +15,51 @@
 </article>
 {% else %}
 
+{# ---------- Загруженный список ключей ---------- #}
+<article>
+  <header>Список ключей
+    {% if keylist %}<small>— загружено {{ keylist|length }} ключей{% if use_list %},
+      найдено в данных {{ keylist|length - missing|length }}{% if missing %},
+      не собрано {{ missing|length }}{% endif %}{% endif %}</small>{% endif %}
+  </header>
+  <form method="post" action="{{ base_path }}/ui/demand/list" enctype="multipart/form-data">
+    <div class="grid">
+      <label>Вставьте ключи (по одному в строке)
+        <textarea name="urls_text" rows="5" placeholder="компрессор купить&#10;винтовой компрессор&#10;ресивер 500 л">{{ keylist|join('\n') }}</textarea>
+      </label>
+      <label>…или файл (.txt / .csv)
+        <input type="file" name="file" accept=".txt,.csv,.tsv">
+      </label>
+    </div>
+    <button type="submit">💾 Сохранить список</button>
+  </form>
+  {% if keylist %}
+  <div class="grid">
+    {% if use_list %}
+    <a href="{{ base_path }}/demand?list=off&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}"
+       role="button" class="secondary outline">Показать все ключи</a>
+    {% else %}
+    <a href="{{ base_path }}/demand?list=on&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}"
+       role="button" class="secondary outline">Показать только список</a>
+    {% endif %}
+    <form method="post" action="{{ base_path }}/ui/demand/list/clear"
+          onsubmit="return confirm('Очистить сохранённый список ключей?');">
+      <button type="submit" class="secondary outline">Очистить список</button>
+    </form>
+  </div>
+  {% if use_list and missing %}
+  <details>
+    <summary><small>Не собрано в Wordstat: {{ missing|length }} ключей (запустите сбор по списку)</small></summary>
+    <p><small>Эти ключи есть в списке, но истории по ним ещё нет. Соберите их на сервере:
+      <code>.venv\Scripts\python scripts\wordstat.py --collect --from-list --captcha auto</code></small></p>
+    <pre><code>{{ missing|join('\n') }}</code></pre>
+  </details>
+  {% endif %}
+  {% endif %}
+</article>
+
 <form method="get" action="{{ base_path }}/demand" class="grid">
+  <input type="hidden" name="list" value="{{ list_state }}">
   <label>Регион
     <select name="region" onchange="this.form.submit()">
       {% for r in regions %}<option value="{{ r }}" {% if r==cur_region %}selected{% endif %}>{{ r }}</option>{% endfor %}
@@ -33,7 +78,7 @@
 
 {% if plot and months %}
 <article>
-  <header>Динамика частотности{% if search %} · фильтр «{{ search }}»{% endif %}
+  <header>Динамика частотности{% if use_list %} · по списку{% endif %}{% if search %} · фильтр «{{ search }}»{% endif %}
     <small>(показаны {{ plot|length }} фраз; отметьте нужные в таблице ниже)</small></header>
   <canvas id="demand" height="110"></canvas>
 </article>
@@ -42,11 +87,12 @@
 <article>
   <header>
     Фразы: {{ phrases|length }}
-    <a href="{{ base_path }}/demand/export?region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&search={{ search|urlencode }}"
+    <a href="{{ base_path }}/demand/export?list={{ list_state }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&search={{ search|urlencode }}"
        role="button" class="secondary outline" style="float:right">⬇ Экспорт CSV</a>
   </header>
   {% if phrases %}
   <form method="get" action="{{ base_path }}/demand">
+    <input type="hidden" name="list" value="{{ list_state }}">
     <input type="hidden" name="region" value="{{ cur_region }}">
     <input type="hidden" name="device" value="{{ cur_device }}">
     <input type="hidden" name="start" value="{{ m_start }}">
@@ -77,7 +123,7 @@
   </form>
   {% if phrases|length > 1000 %}<small>Показаны первые 1000 фраз из {{ phrases|length|numfmt }}.</small>{% endif %}
   {% else %}
-  <p><small>По заданным фильтрам фраз нет.</small></p>
+  <p><small>По заданным фильтрам фраз нет{% if use_list %} (список активен — возможно, по этим ключам ещё нет собранных данных){% endif %}.</small></p>
   {% endif %}
 </article>
 {% endif %}

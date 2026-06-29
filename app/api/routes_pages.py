@@ -1725,9 +1725,11 @@ def _month_to_date(s: str | None) -> date | None:
 @router.get("/demand")
 def demand_page(request: Request, region: str | None = None, device: str | None = None,
                 start: str | None = None, end: str | None = None, search: str | None = None,
-                q: list[str] = Query(default=[]), db: Session = Depends(get_db)):
+                list: str = "on", q: list[str] = Query(default=[]),
+                msg: str | None = None, db: Session = Depends(get_db)):
     """Спрос: помесячная частотность Wordstat по собранным фразам — график выбранных
-    фраз + таблица сводки. Фильтры: регион, устройство, период (месяцы), поиск по фразе."""
+    фраз + таблица сводки. Фильтры: регион, устройство, период (месяцы), поиск, а также
+    загруженный список ключей (``list=on`` — показывать только его, ``off`` — все ключи)."""
     from app.services import demand
 
     regs = demand.regions(db)
@@ -1737,22 +1739,56 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
     lo, hi = demand.bounds(db, cur_region, cur_device)
     d_start = _month_to_date(start) or lo
     d_end = _month_to_date(end) or hi
-    months, phrases = demand.load(db, cur_region, cur_device, d_start, d_end, (search or "").strip() or None)
+    keylist = demand.get_keylist(db)
+    use_list = list != "off" and bool(keylist)
+    keyset = {demand.norm_key(k) for k in keylist} if use_list else None
+    months, phrases = demand.load(db, cur_region, cur_device, d_start, d_end,
+                                  (search or "").strip() or None, keyset=keyset)
+    found = {demand.norm_key(p["query"]) for p in phrases}
+    missing = [k for k in keylist if demand.norm_key(k) not in found] if use_list else []
     chosen = set(q)
     plot = [p for p in phrases if p["query"] in chosen] or phrases[:8]
     return templates.TemplateResponse(request, "demand.html", {
-        "request": request, "has_data": demand.has_data(db),
+        "request": request, "has_data": demand.has_data(db), "msg": msg,
         "regions": regs, "devices": devs, "cur_region": cur_region, "cur_device": cur_device,
         "m_start": d_start.strftime("%Y-%m") if d_start else "",
         "m_end": d_end.strftime("%Y-%m") if d_end else "",
         "search": search or "", "months": months, "phrases": phrases,
         "plot": plot, "chosen": chosen,
+        "keylist": keylist, "use_list": use_list, "list_state": list,
+        "missing": missing,
     })
+
+
+@router.post("/ui/demand/list")
+async def ui_demand_list(urls_text: str | None = Form(None),
+                         file: UploadFile | None = File(None), db: Session = Depends(get_db)):
+    """Сохранить загруженный список ключей (textarea + файл) — потом он фильтрует «Спрос»."""
+    from app.services import demand
+
+    raw = ""
+    if file is not None and file.filename:
+        raw += (await file.read()).decode("utf-8", errors="ignore") + "\n"
+    if urls_text:
+        raw += urls_text
+    phrases = demand.set_keylist(db, raw)
+    msg = f"Список сохранён: {len(phrases)} ключей." if phrases else "Список очищен."
+    return RedirectResponse(url=f"{BP}/demand?list=on&msg={quote(msg)}", status_code=303)
+
+
+@router.post("/ui/demand/list/clear")
+def ui_demand_list_clear(db: Session = Depends(get_db)):
+    from app.services import demand
+
+    demand.clear_keylist(db)
+    return RedirectResponse(url=f"{BP}/demand?msg={quote('Список ключей очищен.')}",
+                            status_code=303)
 
 
 @router.get("/demand/export")
 def demand_export(region: str | None = None, device: str | None = None, start: str | None = None,
-                  end: str | None = None, search: str | None = None, db: Session = Depends(get_db)):
+                  end: str | None = None, search: str | None = None, list: str = "on",
+                  db: Session = Depends(get_db)):
     import csv
     import io
 
@@ -1765,7 +1801,10 @@ def demand_export(region: str | None = None, device: str | None = None, start: s
     lo, hi = demand.bounds(db, cur_region, cur_device)
     d_start = _month_to_date(start) or lo
     d_end = _month_to_date(end) or hi
-    months, phrases = demand.load(db, cur_region, cur_device, d_start, d_end, (search or "").strip() or None)
+    keylist = demand.get_keylist(db)
+    keyset = ({demand.norm_key(k) for k in keylist} if (list != "off" and keylist) else None)
+    months, phrases = demand.load(db, cur_region, cur_device, d_start, d_end,
+                                  (search or "").strip() or None, keyset=keyset)
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["фраза", *months, "мин", "средн", "макс", "рост,%"])

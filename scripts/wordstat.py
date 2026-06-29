@@ -224,6 +224,18 @@ def _db_phrases(site_id=None) -> list[str]:
         db.close()
 
 
+def _list_phrases() -> list[str]:
+    """Phrases from the list uploaded on the «Спрос» page (AppSetting keylist)."""
+    from app.db.base import SessionLocal, init_db
+    from app.services import demand
+    init_db()
+    db = SessionLocal()
+    try:
+        return demand.get_keylist(db)
+    finally:
+        db.close()
+
+
 def _find_sitekey(page) -> str | None:
     """Best-effort: read the Yandex SmartCaptcha sitekey from the page DOM."""
     try:
@@ -394,6 +406,8 @@ def main() -> None:
     ap.add_argument("--collect", action="store_true", help="собрать историю по списку фраз")
     ap.add_argument("--phrases", help="файл со списком фраз (по одной в строке)")
     ap.add_argument("--from-db", dest="from_db", action="store_true", help="фразы из таблицы Query")
+    ap.add_argument("--from-list", dest="from_list", action="store_true",
+                    help="фразы из списка, загруженного на вкладке «Спрос»")
     ap.add_argument("--site", type=int, help="с --from-db: только запросы этого site_id")
     ap.add_argument("--region", default="all", help="регион Wordstat (по умолч. all)")
     ap.add_argument("--device", default="desktop,phone,tablet", help="устройства")
@@ -423,7 +437,14 @@ def main() -> None:
     elif a.discover:
         cmd_discover(a.discover)
     elif a.collect:
-        phrases = _read_phrases(a.phrases) if a.phrases else (_db_phrases(a.site) if a.from_db else [])
+        if a.phrases:
+            phrases = _read_phrases(a.phrases)
+        elif a.from_list:
+            phrases = _list_phrases()
+        elif a.from_db:
+            phrases = _db_phrases(a.site)
+        else:
+            phrases = []
         cmd_collect(phrases, a.region, a.device, a.d_from, a.d_to, a.delay, a.limit, a.captcha)
     else:
         ap.print_help()

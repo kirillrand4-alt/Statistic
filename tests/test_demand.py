@@ -74,3 +74,30 @@ def test_region_and_search_filters():
         assert [p["query"] for p in only] == ["ресивер 500л"]
     finally:
         db.close()
+
+
+def test_keylist_storage_and_filter():
+    db = _setup()
+    try:
+        # parsing: one per line, dedup (case/ё/whitespace-insensitive), keep order
+        phrases = demand.set_keylist(
+            db, "Компрессор  Купить\nресивер 500л\nкомпрессор купить\n\n  ")
+        assert phrases == ["Компрессор  Купить", "ресивер 500л"]
+        assert demand.get_keylist(db) == phrases
+
+        # filter to the saved list (normalized match, incl. odd spacing/case)
+        keyset = {demand.norm_key(k) for k in demand.get_keylist(db)}
+        _, only = demand.load(db, "all", "all", None, None, keyset=keyset)
+        names = {p["query"] for p in only}
+        assert names == {"компрессор купить", "ресивер 500л"}
+
+        # a list with an uncollected key -> it just doesn't appear
+        demand.set_keylist(db, "компрессор купить\nнесобранный ключ")
+        keyset = {demand.norm_key(k) for k in demand.get_keylist(db)}
+        _, only = demand.load(db, "all", "all", None, None, keyset=keyset)
+        assert {p["query"] for p in only} == {"компрессор купить"}
+
+        demand.clear_keylist(db)
+        assert demand.get_keylist(db) == []
+    finally:
+        db.close()
