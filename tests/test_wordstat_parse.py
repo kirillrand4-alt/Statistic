@@ -43,6 +43,14 @@ def test_captcha_detected_by_marker_and_by_status():
     assert ws._parse_graph(_Resp("{}", status=403))[0] == "captcha"
 
 
+def test_sanitize_phrase():
+    # slash / colon / semicolon / backslash → space; word order & operators kept
+    assert ws._sanitize_phrase("компрессор 1000 л/мин") == "компрессор 1000 л мин"
+    assert ws._sanitize_phrase("тз: быстро; дёшево") == "тз быстро дёшево"
+    assert ws._sanitize_phrase("компрессор винтовой") == "компрессор винтовой"  # unchanged
+    assert ws._sanitize_phrase("a  /  b") == "a b"  # collapse extra spaces
+
+
 def test_error_non_json_and_bad_status_and_structure():
     assert ws._parse_graph(_Resp("<html>not json</html>"))[0] == "error"
     k, msg = ws._parse_graph(_Resp("{}", status=500))

@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 
@@ -214,6 +215,13 @@ def _parse_graph(resp):
         return ("ok", rows) if rows else ("empty", [])
     except Exception as e:  # noqa: BLE001
         return "error", f"структура ответа: {str(e)[:80]}"
+
+
+def _sanitize_phrase(s: str) -> str:
+    """Wordstat getGraph давится на части пунктуации в фразе (/, :, ;, \\ и т.п.) —
+    для повторной попытки заменяем их пробелами: «1000 л/мин» → «1000 л мин»
+    (Wordstat считает их одной фразой, поэтому данные те же)."""
+    return re.sub(r"\s+", " ", re.sub(r"[/:;\\]+", " ", s or "")).strip()
 
 
 def _save(db, phrase, region, device, rows) -> int:
@@ -405,32 +413,45 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
         ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=False, viewport=VIEWPORT)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(WORDSTAT_URL, wait_until="domcontentloaded", timeout=60000)
-        for i, phrase in enumerate(phrases, 1):
-            ref = (f"https://wordstat.yandex.ru/?region={region}&view=graph"
-                   f"&words={quote(phrase)}")
-            kind, data, last_txt = "error", None, ""
-            for attempt in range(3):  # retries: captcha solve + transient errors
+
+        def _fetch(ph):
+            """One phrase → (kind, data, last_txt, status). Retries captcha + transient errors."""
+            ref = f"https://wordstat.yandex.ru/?region={region}&view=graph&words={quote(ph)}"
+            k, d, txt, status = "error", None, "", 0
+            for attempt in range(3):
                 resp = ctx.request.post(
-                    GRAPH_URL, data=json.dumps(_payload(phrase, region, device, d_from, d_to)),
+                    GRAPH_URL, data=json.dumps(_payload(ph, region, device, d_from, d_to)),
                     headers={"content-type": "application/json", "referer": ref}, timeout=45000)
+                status = resp.status
                 try:
-                    last_txt = resp.text()
+                    txt = resp.text()
                 except Exception:  # noqa: BLE001
-                    last_txt = ""
-                kind, data = _parse_graph(resp)
-                if kind == "captcha":
+                    txt = ""
+                k, d = _parse_graph(resp)
+                if k == "captcha":
                     _solve_captcha(page, captcha)
                     continue
-                if kind == "error" and attempt < 2:
+                if k == "error" and attempt < 2:
                     page.wait_for_timeout(1500)  # transient — short pause, retry
                     continue
                 break
+            return k, d, txt, status
+
+        for i, phrase in enumerate(phrases, 1):
+            kind, data, last_txt, status = _fetch(phrase)
+            used = phrase
+            if kind == "error":  # fallback: Wordstat давится на пунктуации (/, : …)
+                clean = _sanitize_phrase(phrase)
+                if clean and clean != phrase:
+                    k2, d2, t2, s2 = _fetch(clean)
+                    if k2 in ("ok", "empty"):
+                        kind, data, last_txt, status, used = k2, d2, t2, s2, clean
             elapsed = time.monotonic() - t0
             eta = (elapsed / i) * (len(phrases) - i)
             if kind == "ok":
                 ok += 1
-                n = _save(db, phrase, region, device, data)
-                note = f"{n} точек"
+                n = _save(db, phrase, region, device, data)  # под ИСХОДНОЙ фразой
+                note = f"{n} точек" + (" (очищено)" if used != phrase else "")
             elif kind == "empty":
                 empty += 1
                 note = "нет данных (низкочастотный)"
@@ -441,7 +462,7 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
                 if err_dumps < 10 and last_txt:  # save raw response to diagnose the parser
                     with open(os.path.join(DEBUG_DIR, f"err_{err_dumps}.json"), "w",
                               encoding="utf-8") as f:
-                        f.write(f"// phrase: {phrase}\n// status: {resp.status}\n" + last_txt[:20000])
+                        f.write(f"// phrase: {phrase}\n// status: {status}\n" + last_txt[:20000])
                     err_dumps += 1
             tail = f"ok={ok} empty={empty} fail={fail} ~{eta/60:.0f}м осталось"
             print(f"  [{i}/{len(phrases)}] «{phrase}» — {note} · {tail}", flush=True)
