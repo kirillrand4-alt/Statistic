@@ -6,26 +6,25 @@
 
 {% if not has_data %}
 <article>
-  <p><strong>Данных Wordstat ещё нет.</strong></p>
-  <p><small>История спроса собирается скриптом на сервере:</small></p>
+  <p><strong>Данных Wordstat ещё нет.</strong> Список ключей можно подготовить уже сейчас (ниже), затем собрать историю на сервере:</p>
   <pre><code>.venv\Scripts\python scripts\wordstat.py --login        # один раз войти в Яндекс
-.venv\Scripts\python scripts\wordstat.py --collect --from-db   # собрать по нашим запросам
+.venv\Scripts\python scripts\wordstat.py --collect --from-list   # собрать по списку ниже
 .venv\Scripts\python scripts\wordstat.py --status      # что уже собрано</code></pre>
   <p><small>После сбора помесячная частотность за ~2 года появится здесь.</small></p>
 </article>
-{% else %}
+{% endif %}
 
-{# ---------- Загруженный список ключей ---------- #}
+{# ---------- Список ключей (доступен всегда: добавить / удалить / очистить) ---------- #}
 <article>
   <header>Список ключей
-    {% if keylist %}<small>— загружено {{ keylist|length }} ключей{% if use_list %},
+    {% if keylist %}<small>— {{ keylist|length }} ключей{% if has_data and use_list %},
       найдено в данных {{ keylist|length - missing|length }}{% if missing %},
       не собрано {{ missing|length }}{% endif %}{% endif %}</small>{% endif %}
   </header>
   <form method="post" action="{{ base_path }}/ui/demand/list" enctype="multipart/form-data">
     <div class="grid">
-      <label>Вставьте ключи (по одному в строке)
-        <textarea name="urls_text" rows="5" placeholder="компрессор купить&#10;винтовой компрессор&#10;ресивер 500 л">{{ keylist|join('\n') }}</textarea>
+      <label>Ключи — по одному в строке <small>(чтобы <strong>удалить</strong> фразы — сотрите строки и нажмите «Сохранить»)</small>
+        <textarea name="urls_text" rows="6" placeholder="компрессор купить&#10;винтовой компрессор&#10;ресивер 500 л">{{ keylist|join('\n') }}</textarea>
       </label>
       <label>…или файл (.txt / .csv)
         <input type="file" name="file" accept=".txt,.csv,.tsv">
@@ -35,6 +34,7 @@
   </form>
   {% if keylist %}
   <div class="grid">
+    {% if has_data %}
     {% if use_list %}
     <a href="{{ base_path }}/demand?list=off&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}"
        role="button" class="secondary outline">Показать все ключи</a>
@@ -42,22 +42,24 @@
     <a href="{{ base_path }}/demand?list=on&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}"
        role="button" class="secondary outline">Показать только список</a>
     {% endif %}
+    {% endif %}
     <form method="post" action="{{ base_path }}/ui/demand/list/clear"
           onsubmit="return confirm('Очистить сохранённый список ключей?');">
       <button type="submit" class="secondary outline">Очистить список</button>
     </form>
   </div>
-  {% if use_list and missing %}
+  {% if missing %}
   <details>
     <summary><small>Не собрано в Wordstat: {{ missing|length }} ключей (запустите сбор по списку)</small></summary>
     <p><small>Эти ключи есть в списке, но истории по ним ещё нет. Соберите их на сервере:
-      <code>.venv\Scripts\python scripts\wordstat.py --collect --from-list --captcha auto</code></small></p>
+      <code>.venv\Scripts\python scripts\wordstat.py --collect --from-list --captcha auto --skip-done</code></small></p>
     <pre><code>{{ missing|join('\n') }}</code></pre>
   </details>
   {% endif %}
   {% endif %}
 </article>
 
+{% if has_data %}
 <form method="get" action="{{ base_path }}/demand" class="grid">
   <input type="hidden" name="list" value="{{ list_state }}">
   <input type="hidden" name="mode" value="{{ mode }}">
