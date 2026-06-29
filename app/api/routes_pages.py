@@ -1725,10 +1725,12 @@ def _month_to_date(s: str | None) -> date | None:
 @router.get("/demand")
 def demand_page(request: Request, region: str | None = None, device: str | None = None,
                 start: str | None = None, end: str | None = None, search: str | None = None,
-                list: str = "on", mode: str = "sep", q: list[str] = Query(default=[]),
+                list: str = "on", mode: str = "sep", dedup: int = 0,
+                q: list[str] = Query(default=[]),
                 msg: str | None = None, db: Session = Depends(get_db)):
     """Спрос: помесячная частотность Wordstat по собранным фразам — график + таблица.
     Фильтры: регион, устройство, период, поиск, загруженный список (``list=on/off``).
+    ``dedup=1`` — не считать смысловые дубли (фразы с одинаковым рядом — раз).
     Режим графика ``mode``: ``sep`` — отмеченные по отдельности; ``sum_checked`` —
     сумма отмеченных; ``sum_list`` — сумма по загруженному списку; ``sum_db`` — сумма
     по всем фразам в базе (с учётом региона/устройства/периода)."""
@@ -1746,8 +1748,15 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
     use_list = list != "off" and bool(keylist)
     list_keyset = {demand.norm_key(k) for k in keylist} if keylist else None
     keyset = list_keyset if use_list else None
+    dd = bool(dedup)
+
+    def scope(keyset_=None, srch=None):
+        _m, ph = demand.load(db, cur_region, cur_device, d_start, d_end, srch, keyset=keyset_)
+        return (_m, demand.dedup_groups(ph) if dd else ph)
+
     # table scope: what the user browses (filtered by list + search)
-    months, phrases = demand.load(db, cur_region, cur_device, d_start, d_end, s, keyset=keyset)
+    months, phrases = scope(keyset, s)
+    raw_count = len(demand.load(db, cur_region, cur_device, d_start, d_end, s, keyset=keyset)[1])
     found = {demand.norm_key(p["query"]) for p in phrases}
     missing = [k for k in keylist if demand.norm_key(k) not in found] if use_list else []
     chosen = set(q)
@@ -1755,17 +1764,16 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
     # chart scope depends on the selected mode
     is_sum, chart_months, plot = False, months, []
     if mode == "sum_db":  # сумма по всем фразам в базе (без фильтра списка/поиска)
-        chart_months, allp = demand.load(db, cur_region, cur_device, d_start, d_end, None)
+        chart_months, allp = scope()
         agg = demand.aggregate(f"Сумма по всем в базе ({len(allp)} фраз)", allp)
         plot, is_sum = ([agg] if agg else []), True
     elif mode == "sum_list" and keylist:  # сумма по загруженному списку
-        chart_months, lp = demand.load(db, cur_region, cur_device, d_start, d_end, None,
-                                       keyset=list_keyset)
+        chart_months, lp = scope(list_keyset)
         agg = demand.aggregate(f"Сумма по списку ({len(lp)} фраз)", lp)
         plot, is_sum = ([agg] if agg else []), True
     elif mode == "sum_checked":  # сумма отмеченных (или всех показанных, если ничего не отмечено)
-        scope = [p for p in phrases if p["query"] in chosen] or phrases
-        agg = demand.aggregate(f"Сумма отмеченных ({len(scope)} фраз)", scope)
+        chosen_p = [p for p in phrases if p["query"] in chosen] or phrases
+        agg = demand.aggregate(f"Сумма отмеченных ({len(chosen_p)} фраз)", chosen_p)
         plot, is_sum = ([agg] if agg else []), True
     else:  # sep — отмеченные по отдельности (или топ-8 показанных)
         mode = "sep"
@@ -1779,7 +1787,7 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
         "search": search or "", "months": chart_months, "phrases": phrases,
         "plot": plot, "chosen": chosen, "mode": mode, "is_sum": is_sum,
         "keylist": keylist, "use_list": use_list, "list_state": list,
-        "missing": missing,
+        "missing": missing, "dedup": dd, "raw_count": raw_count,
     })
 
 
@@ -1841,7 +1849,7 @@ def ui_demand_clear_all(db: Session = Depends(get_db)):
 @router.get("/demand/export")
 def demand_export(region: str | None = None, device: str | None = None, start: str | None = None,
                   end: str | None = None, search: str | None = None, list: str = "on",
-                  db: Session = Depends(get_db)):
+                  dedup: int = 0, db: Session = Depends(get_db)):
     import csv
     import io
 
@@ -1858,12 +1866,15 @@ def demand_export(region: str | None = None, device: str | None = None, start: s
     keyset = ({demand.norm_key(k) for k in keylist} if (list != "off" and keylist) else None)
     months, phrases = demand.load(db, cur_region, cur_device, d_start, d_end,
                                   (search or "").strip() or None, keyset=keyset)
+    if dedup:
+        phrases = demand.dedup_groups(phrases)
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["фраза", *months, "мин", "средн", "макс", "рост,%"])
+    w.writerow(["фраза", *months, "мин", "средн", "макс", "рост,%", "дубли"])
     for p in phrases:
         w.writerow([p["query"], *[("" if v is None else v) for v in p["series"]],
-                    p["min"], p["avg"], p["max"], "" if p["change"] is None else p["change"]])
+                    p["min"], p["avg"], p["max"], "" if p["change"] is None else p["change"],
+                    "; ".join(p.get("dupes", []))])
     fname = f"demand_{cur_region or 'all'}_{cur_device or 'all'}.csv"
     # BOM, иначе Excel на русской Windows читает UTF-8 как cp1251 («кракозябры»)
     return Response(content="\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",

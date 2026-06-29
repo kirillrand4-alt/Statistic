@@ -93,6 +93,34 @@ def test_sum_series_and_aggregate():
         db.close()
 
 
+def test_dedup_groups_collapses_identical_series():
+    db = SessionLocal()
+    try:
+        # two phrases with the SAME monthly series (word-order duplicates) + a distinct one
+        for q in ("винтовой компрессор", "компрессор винтовой"):
+            for m, v in ((1, 37048), (2, 53426), (3, 65870)):
+                db.add(_row(q, "all", "all", 2025, m, v))
+        for m, v in ((1, 35283), (2, 51756), (3, 60391)):
+            db.add(_row("поршневой компрессор", "all", "all", 2025, m, v))
+        db.commit()
+        _, phrases = demand.load(db, "all", "all", None, None)
+        assert len(phrases) == 3
+        reps = demand.dedup_groups(phrases)
+        assert len(reps) == 2  # the identical pair collapses to one
+        wintovoy = next(r for r in reps if r["max"] == 65870)
+        # representative is the shorter of the two equal-max phrases; the other is a dupe
+        assert wintovoy["query"] in ("винтовой компрессор", "компрессор винтовой")
+        assert len(wintovoy["dupes"]) == 1
+        assert set([wintovoy["query"], *wintovoy["dupes"]]) == {"винтовой компрессор", "компрессор винтовой"}
+        # the distinct phrase has no dupes
+        porsh = next(r for r in reps if r["max"] == 60391)
+        assert porsh["dupes"] == []
+        # summing deduped reps counts the pair once (not twice)
+        assert demand.sum_series(reps) == [37048 + 35283, 53426 + 51756, 65870 + 60391]
+    finally:
+        db.close()
+
+
 def test_keylist_storage_and_filter():
     db = _setup()
     try:

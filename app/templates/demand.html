@@ -63,6 +63,7 @@
 <form method="get" action="{{ base_path }}/demand" class="grid">
   <input type="hidden" name="list" value="{{ list_state }}">
   <input type="hidden" name="mode" value="{{ mode }}">
+  <input type="hidden" name="dedup" value="{{ 1 if dedup else 0 }}">
   <label>Регион
     <select name="region" onchange="this.form.submit()">
       {% for r in regions %}<option value="{{ r }}" {% if r==cur_region %}selected{% endif %}>{{ r }}</option>{% endfor %}
@@ -77,6 +78,20 @@
   <label>По <input type="month" name="end" value="{{ m_end }}"></label>
   <label>Поиск по фразе <input type="search" name="search" value="{{ search }}" placeholder="часть фразы…"></label>
   <label>&nbsp;<button type="submit">Показать</button></label>
+</form>
+<form method="get" action="{{ base_path }}/demand">
+  <input type="hidden" name="list" value="{{ list_state }}">
+  <input type="hidden" name="mode" value="{{ mode }}">
+  <input type="hidden" name="region" value="{{ cur_region }}">
+  <input type="hidden" name="device" value="{{ cur_device }}">
+  <input type="hidden" name="start" value="{{ m_start }}">
+  <input type="hidden" name="end" value="{{ m_end }}">
+  <input type="hidden" name="search" value="{{ search }}">
+  <label title="Сворачивает фразы с полностью совпадающим помесячным рядом (перестановки слов) — в таблице и в суммах считаются один раз">
+    <input type="checkbox" name="dedup" value="1" {% if dedup %}checked{% endif %} onchange="this.form.submit()">
+    Не считать одну и ту же фразу несколько раз (смысловые дубли){% if dedup and raw_count > phrases|length %}
+    <small>— свёрнуто дублей: {{ raw_count - phrases|length }}</small>{% endif %}
+  </label>
 </form>
 
 {% if plot and months %}
@@ -93,13 +108,14 @@
 
 <article>
   <header>
-    Фразы: {{ phrases|length }}
-    <a href="{{ base_path }}/demand/export?list={{ list_state }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&search={{ search|urlencode }}"
+    Фразы: {{ phrases|length }}{% if dedup and raw_count > phrases|length %} <small>(свёрнуто дублей: {{ raw_count - phrases|length }})</small>{% endif %}
+    <a href="{{ base_path }}/demand/export?list={{ list_state }}&dedup={{ 1 if dedup else 0 }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&search={{ search|urlencode }}"
        role="button" class="secondary outline" style="float:right">⬇ Экспорт CSV</a>
   </header>
   {% if phrases %}
   <form method="get" action="{{ base_path }}/demand">
     <input type="hidden" name="list" value="{{ list_state }}">
+    <input type="hidden" name="dedup" value="{{ 1 if dedup else 0 }}">
     <input type="hidden" name="region" value="{{ cur_region }}">
     <input type="hidden" name="device" value="{{ cur_device }}">
     <input type="hidden" name="start" value="{{ m_start }}">
@@ -135,14 +151,15 @@
         {% for p in phrases[:1000] %}
         <tr>
           <td><input type="checkbox" name="q" value="{{ p.query }}" {% if p.query in chosen %}checked{% endif %}></td>
-          <td>{{ p.query }}</td>
+          <td>{{ p.query }}{% if p.dupes %}
+            <small title="Свёрнуты как смысловые дубли (тот же ряд): {{ p.dupes|join(', ') }}">+{{ p.dupes|length }} дубл.</small>{% endif %}</td>
           <td>{{ p.points }}</td>
           <td>{{ p.min|numfmt }}</td>
           <td>{{ p.avg|numfmt }}</td>
           <td>{{ p.max|numfmt }}</td>
           <td>{{ p.last|numfmt }}</td>
           <td>{% if p.change is none %}—{% elif p.change >= 0 %}<ins>+{{ p.change }}%</ins>{% else %}<del>{{ p.change }}%</del>{% endif %}</td>
-          <td><a href="{{ base_path }}/demand?mode=sep&list={{ list_state }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&q={{ p.query|urlencode }}"
+          <td><a href="{{ base_path }}/demand?mode=sep&list={{ list_state }}&dedup={{ 1 if dedup else 0 }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&q={{ p.query|urlencode }}"
                  title="Показать график только по этой фразе">📈</a></td>
         </tr>
         {% endfor %}

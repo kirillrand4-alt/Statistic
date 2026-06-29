@@ -88,6 +88,27 @@ def clear_all(db: Session) -> int:
     return n
 
 
+def dedup_groups(phrases):
+    """Свернуть смысловые дубли — фразы с ПОЛНОСТЬЮ совпадающим помесячным рядом
+    (Wordstat отдаёт одинаковую историю для перестановок слов: «винтовой компрессор»
+    = «компрессор винтовой»). Возвращает по одному представителю на группу (с самой
+    высокой частотой, затем покороче), у каждого — список ``dupes`` свёрнутых фраз.
+    Все фразы из одного :func:`load` имеют общую ось месяцев, поэтому ряды сравнимы.
+    """
+    groups: dict[tuple, list] = {}
+    for p in phrases:
+        key = tuple(p["series"])  # exact monthly series → semantic duplicate
+        groups.setdefault(key, []).append(p)
+    reps = []
+    for members in groups.values():
+        members.sort(key=lambda x: (-x["max"], len(x["query"]), x["query"]))
+        rep = dict(members[0])
+        rep["dupes"] = [m["query"] for m in members[1:]]
+        reps.append(rep)
+    reps.sort(key=lambda p: p["max"], reverse=True)
+    return reps
+
+
 def sum_series(phrases) -> list[int]:
     """Element-wise sum of the per-month ``series`` across phrases (None → 0).
 
