@@ -201,9 +201,10 @@ def _read_phrases(path) -> list[str]:
 
 
 def _db_phrases(site_id=None) -> list[str]:
-    from app.db.base import SessionLocal
+    from app.db.base import SessionLocal, init_db
     from app.db.models import Query
     from sqlalchemy import select
+    init_db()
     db = SessionLocal()
     try:
         stmt = select(Query.text).distinct()
