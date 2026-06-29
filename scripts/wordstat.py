@@ -21,6 +21,7 @@ import sys
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO)  # so `import app.*` works when run as a script
 DATA_DIR = os.environ.get("WORDSTAT_DATA", os.path.join(REPO, "data", "wordstat"))
 # Reuse the Webvisor Yandex login by default (same account/cookies).
 PROFILE_DIR = os.environ.get(
