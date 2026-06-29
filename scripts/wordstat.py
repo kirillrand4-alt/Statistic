@@ -66,17 +66,26 @@ def cmd_discover(query: str) -> None:
 
     def on_resp(resp):
         try:
-            ct = (resp.headers.get("content-type", "") or "").lower()
-            if "json" not in ct:
-                return
             url = resp.url
             seen.append(url)
+            ct = (resp.headers.get("content-type", "") or "").lower()
+            is_api = "/wordstat/api/" in url
+            if "json" not in ct and not is_api:
+                return
             body = resp.text()
         except Exception:
             return
+        # request payload + key headers — needed to replay the endpoint later
+        try:
+            req = resp.request
+            method, post = req.method, (req.post_data or "")
+            hdrs = {k: v for k, v in (req.headers or {}).items()
+                    if k.lower() in ("content-type", "x-csrf-token", "x-requested-with", "referer")}
+        except Exception:
+            method, post, hdrs = "?", "", {}
         score = sum(n in body for n in NEEDLES) + (2 if (query and query in body) else 0)
-        if score:
-            grabbed.append((score, url, body))
+        if is_api or score:
+            grabbed.append((100 if is_api else score, url, method, post, hdrs, body))
 
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=False, viewport=VIEWPORT)
@@ -95,13 +104,17 @@ def cmd_discover(query: str) -> None:
         ctx.close()
 
     grabbed.sort(key=lambda x: x[0], reverse=True)
-    print(f"\nJSON-ответов просмотрено: {len(seen)}; похожих на данные: {len(grabbed)}")
-    for i, (score, url, body) in enumerate(grabbed[:8]):
+    print(f"\nJSON-ответов просмотрено: {len(seen)}; пойманных: {len(grabbed)}")
+    for i, (score, url, method, post, hdrs, body) in enumerate(grabbed[:8]):
         path = os.path.join(DEBUG_DIR, f"ws_{i}.json")
         with open(path, "w", encoding="utf-8") as f:
             f.write(body)
-        print(f"\n[{i}] score={score}\n   {url[:160]}\n   ({path}, {len(body)} байт)")
-        print(f"   начало: {body[:200]}")
+        with open(path + ".req.txt", "w", encoding="utf-8") as f:
+            f.write(f"{method} {url}\n\nheaders: {json.dumps(hdrs, ensure_ascii=False)}\n\nbody:\n{post}")
+        print(f"\n[{i}] score={score} {method} {url[:150]}")
+        print(f"   запрос(body): {post[:300]}")
+        print(f"   ответ: {body[:300]}")
+        print(f"   сохранил: {path} (+ .req.txt)")
     if not grabbed:
         print("Не поймал данные истории. Все JSON-URL (последние 25):")
         for u in seen[-25:]:
