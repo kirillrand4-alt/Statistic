@@ -219,21 +219,28 @@ def _parse_graph(resp):
         series = pv.get("absolute")
         if not series:  # ключа нет или пусто -> нет истории по фразе
             return "empty", []
-        # month points have year+month (day defaults to 1); day/week points also carry a day.
-        # Be robust: skip points with null value or null/missing year|month (gaps/edges).
+        # Two shapes: month points = {year, month(0-based), y}; day/week points =
+        # {day: "YYYY-MM-DD", y} (month/year null). Skip points with null value.
         rows = []
         for p in series:
             v = p.get("y", p.get("value"))
             if v is None:
                 continue
-            try:
-                yr, mo = int(p["year"]), int(p["month"])
-            except (TypeError, ValueError, KeyError):
-                continue
-            if not (0 <= mo <= 11):
-                continue
-            day = int(p.get("day") or 1)
-            rows.append((date(yr, mo + 1, day), int(v)))
+            day = p.get("day")
+            if isinstance(day, str) and "-" in day:       # day / week: ISO date string
+                try:
+                    d = date.fromisoformat(day[:10])
+                except ValueError:
+                    continue
+            else:                                          # month: year + 0-based month
+                try:
+                    yr, mo = int(p["year"]), int(p["month"])
+                except (TypeError, ValueError, KeyError):
+                    continue
+                if not (0 <= mo <= 11):
+                    continue
+                d = date(yr, mo + 1, int(day) if day else 1)
+            rows.append((d, int(v)))
         return ("ok", rows) if rows else ("empty", [])
     except Exception as e:  # noqa: BLE001
         return "error", f"структура ответа: {str(e)[:80]}"

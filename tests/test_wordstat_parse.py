@@ -43,29 +43,30 @@ def test_captcha_detected_by_marker_and_by_status():
     assert ws._parse_graph(_Resp("{}", status=403))[0] == "captcha"
 
 
-def test_daily_points_parsed_with_real_days():
+def test_daily_points_parsed_with_iso_day_string():
+    # real Wordstat day format: day is an ISO date string, month/year are null
     body = {"graph": {"images": {"timeSeries": {"preparedValues": {"absolute": [
-        {"year": 2026, "month": 5, "day": 1, "y": 1993},   # month 5 (0-based) = June
-        {"year": 2026, "month": 5, "day": 2, "y": 2018},
-        {"year": 2026, "month": 5, "day": 3, "y": 2315},
+        {"month": None, "day": "2026-05-02", "y": 60},
+        {"month": None, "day": "2026-06-01", "y": 153},
+        {"month": None, "day": "2026-06-29", "y": 189},
     ]}}}}}
     kind, rows = ws._parse_graph(_Resp(body))
     assert kind == "ok"
-    assert rows == [(dt.date(2026, 6, 1), 1993), (dt.date(2026, 6, 2), 2018),
-                    (dt.date(2026, 6, 3), 2315)]
+    assert rows == [(dt.date(2026, 5, 2), 60), (dt.date(2026, 6, 1), 153),
+                    (dt.date(2026, 6, 29), 189)]
 
 
 def test_daily_skips_null_value_points():
-    # real Wordstat day series often has null y for edge/no-data days — must not crash
+    # day series may carry null y for no-data days — must not crash, just skip
     body = {"graph": {"images": {"timeSeries": {"preparedValues": {"absolute": [
-        {"year": 2026, "month": 4, "day": 30, "y": None},   # gap -> skipped
-        {"year": 2026, "month": 5, "day": 1, "y": 1993},
-        {"year": 2026, "month": 5, "day": 2, "value": 2018},  # alt key 'value'
-        {"year": None, "month": None, "day": None, "y": 5},   # broken -> skipped
+        {"month": None, "day": "2026-05-30", "y": None},        # gap -> skipped
+        {"month": None, "day": "2026-06-01", "y": 153},
+        {"month": None, "day": "2026-06-02", "value": 148},     # alt key 'value'
+        {"month": None, "day": "not-a-date", "y": 5},           # bad date -> skipped
     ]}}}}}
     kind, rows = ws._parse_graph(_Resp(body))
     assert kind == "ok"
-    assert rows == [(dt.date(2026, 6, 1), 1993), (dt.date(2026, 6, 2), 2018)]
+    assert rows == [(dt.date(2026, 6, 1), 153), (dt.date(2026, 6, 2), 148)]
 
 
 def test_monthly_points_still_day_1():
