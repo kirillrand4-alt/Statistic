@@ -760,8 +760,8 @@ def main() -> None:
                     help="сохранить ключ облачного решателя капч (шифруется)")
     ap.add_argument("--captcha-provider", choices=("capmonster", "anticaptcha", "2captcha"),
                     help="провайдер решателя капч (с --set-captcha; по умолч. capmonster)")
-    ap.add_argument("--graph", choices=("month", "week", "day"), default="month",
-                    help="гранулярность: month (по умолч.) / week / day (по дням)")
+    ap.add_argument("--graph", choices=("month", "week", "day", "all"), default="month",
+                    help="гранулярность: month (по умолч.) / week / day / all (все три)")
     ap.add_argument("--match", choices=("broad", "phrase", "exact", "order", "all"),
                     default="broad",
                     help="тип частотности: broad — как есть; phrase — «\"фраза\"»; "
@@ -800,12 +800,15 @@ def main() -> None:
             phrases = _db_phrases(a.site)
         else:
             phrases = []
+        grans = ("month", "week", "day") if a.graph == "all" else (a.graph,)
         matches = ("broad", "phrase", "exact", "order") if a.match == "all" else (a.match,)
-        for mt in matches:
-            if len(matches) > 1:
-                print(f"\n===== Частотность: {mt} =====", flush=True)
-            cmd_collect(phrases, a.region, a.device, a.d_from, a.d_to, a.delay, a.limit,
-                        a.captcha, a.skip_done, a.graph, a.dedup, mt)
+        # month first (its broad/… эталон помогает дедупу недели/дня)
+        for g in grans:
+            for mt in matches:
+                if len(grans) * len(matches) > 1:
+                    print(f"\n===== {g} / {mt} =====", flush=True)
+                cmd_collect(phrases, a.region, a.device, a.d_from, a.d_to, a.delay, a.limit,
+                            a.captcha, a.skip_done, g, a.dedup, mt)
     else:
         ap.print_help()
 
