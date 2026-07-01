@@ -13,6 +13,22 @@ def as_id_list(site_ids) -> list:
     return [site_ids]
 
 
+# Ad/tracking query params: such URLs are advertising landing pages that leaked
+# into the organic index (utm_/roistat/click-ids) — noise in search page stats.
+_TRACK_PARAMS = ("utm_", "roistat", "openstat", "yclid", "gclid", "ymclid",
+                 "fbclid", "gbraid", "wbraid", "_ym_", "gclsrc", "erid")
+
+
+def is_tracking_url(url: str) -> bool:
+    """True for ad/tracking-tagged URLs (UTM/roistat/click-ids in the query) or
+    URLs with unfilled ad-template macros (``{gbid}``, ``{PHRASE}``, …)."""
+    u = (url or "").lower()
+    if "{" in u:  # unfilled Yandex Direct / Google Ads macros
+        return True
+    q = u.split("?", 1)[1] if "?" in u else ""
+    return bool(q) and any(t in q for t in _TRACK_PARAMS)
+
+
 def normalize_url(url: str) -> str:
     """Normalize a URL for matching/dedup (NOT for display or API calls).
 

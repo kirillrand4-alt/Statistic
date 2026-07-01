@@ -22,7 +22,7 @@ from app.services import totals as totals_svc
 from app.services.ctr import ctr_for_project
 from app.services.loaders import project_page_ids
 from app.services.top_keyword import top_keywords_for_project
-from app.utils import domain_of, normalize_url
+from app.utils import domain_of, is_tracking_url, normalize_url
 from app.web import templates
 
 router = APIRouter(tags=["pages"], include_in_schema=False)
@@ -193,7 +193,7 @@ def dashboard(request: Request, domain: str | None = None,
               engines: list[str] | None = Query(None), start: str | None = None,
               end: str | None = None, msg: str | None = None, clean: int = 0,
               ratio: float = 10.0, min_impr: int = 100, devices: int = 0,
-              gran: str = "day", db: Session = Depends(get_db)):
+              show_tagged: int = 0, gran: str = "day", db: Session = Depends(get_db)):
     domains = _domains(db)
     cur = domain if domain and any(d["domain"] == domain for d in domains) \
         else (domains[0]["domain"] if domains else None)
@@ -206,6 +206,7 @@ def dashboard(request: Request, domain: str | None = None,
         "projects": db.execute(select(Project).order_by(Project.id)).scalars().all(),
         "clean": bool(clean), "ratio": ratio, "min_impr": min_impr, "devices": bool(devices),
         "totals": None, "daily": [], "top_pages": [], "export_sites": [], "site_ids": [],
+        "hidden_tagged": 0, "show_tagged": bool(show_tagged),
         "runs": db.execute(
             select(CollectionRun).order_by(CollectionRun.started_at.desc()).limit(10)
         ).scalars().all(),
@@ -221,11 +222,17 @@ def dashboard(request: Request, domain: str | None = None,
         daily = totals_svc.combine_daily([totals_svc.site_daily(db, ids, dr) for ids in parts])
         ctx["daily"] = totals_svc.bucket_series(daily, gran)
         if devices:
-            ctx["top_pages"] = totals_svc.combine_pages_devices(
-                [totals_svc.per_page_with_devices(db, ids, dr) for ids in parts])
+            merged = totals_svc.combine_pages_devices(
+                [totals_svc.per_page_with_devices(db, ids, dr) for ids in parts], limit=10**9)
         else:
-            ctx["top_pages"] = totals_svc.combine_pages(
-                [totals_svc.per_page_totals(db, ids, dr) for ids in parts])
+            merged = totals_svc.combine_pages(
+                [totals_svc.per_page_totals(db, ids, dr) for ids in parts], limit=10**9)
+        # drop advertising/tracking-tagged URLs (utm_/roistat/{macros}) that leaked
+        # into the organic index — they're noise in per-page search stats
+        ctx["hidden_tagged"] = sum(1 for p in merged if is_tracking_url(p["url"]))
+        if not show_tagged:
+            merged = [p for p in merged if not is_tracking_url(p["url"])]
+        ctx["top_pages"] = merged[:20]
         if clean:
             ctx["totals"] = _clean_combined(db, engine_ids, dr, ratio, min_impr)
         else:
