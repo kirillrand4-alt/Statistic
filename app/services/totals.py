@@ -87,6 +87,28 @@ def site_daily(db, site_id, dr: DateRange) -> list[dict]:
     return out
 
 
+def tagged_daily(db, site_id, dr: DateRange) -> list[dict]:
+    """Daily clicks/impressions from ad/tracking-tagged URLs (utm_/roistat/{macros})
+    that leaked into the organic index — for a "how much is tagged" line on the chart."""
+    from app.utils import is_tracking_url
+    df = load_page_metrics_df(db, site_id, dr)
+    if df.empty:
+        return []
+    df = df[df["url"].map(is_tracking_url)]
+    if df.empty:
+        return []
+    g = df.groupby("date", as_index=False).agg(
+        clicks=("clicks", "sum"), impressions=("impressions", "sum"))
+    out = []
+    for _, r in g.iterrows():
+        imp = int(r["impressions"])
+        d = r["date"]
+        out.append({"date": d.isoformat() if hasattr(d, "isoformat") else str(d),
+                    "clicks": int(r["clicks"]), "impressions": imp,
+                    "ctr": (int(r["clicks"]) / imp) if imp else 0.0, "position": 0.0})
+    return out
+
+
 def per_page_totals(db, site_id, dr: DateRange, page_ids=None) -> list[dict]:
     df = load_page_metrics_df(db, site_id, dr, page_ids=page_ids)
     agg = agg_metrics(df, ["url"])

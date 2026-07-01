@@ -35,7 +35,11 @@
 
 <article>
   <header>Динамика (весь домен){% if gran == 'week' %} — по неделям{% elif gran == 'month' %} — по месяцам{% else %} — по дням{% endif %}</header>
-  {% if daily %}<canvas id="trend" height="90"></canvas>{% else %}
+  {% if daily %}<canvas id="trend" height="90"></canvas>
+  {% if tagged_clicks_total %}<small>Пунктиром — клики по рекламным/меченым URL (utm_/roistat/макросы),
+    попавшим в органику: всего {{ tagged_clicks_total|numfmt }} кликов за период (постранично).
+    Общий тотал источника их всё равно включает — это лишь оценка «мусорной» доли.</small>{% endif %}
+  {% else %}
   <p><small>Нет данных за период. Запустите сбор статистики ниже.</small></p>{% endif %}
 </article>
 
@@ -108,13 +112,16 @@
 {% if daily %}
 <script>
   const daily = {{ daily|tojson }};
+  const tagged = {{ tagged_series|tojson }};
   new Chart(document.getElementById('trend'), {
     type: 'line',
     data: {
       labels: daily.map(d => d.date),
       datasets: [
         {label: 'Клики', data: daily.map(d => d.clicks), borderColor: '#1095c1', yAxisID: 'y', tension: 0},
-        {label: 'Показы', data: daily.map(d => d.impressions), borderColor: '#d93526', yAxisID: 'y1', tension: 0}
+        {label: 'Показы', data: daily.map(d => d.impressions), borderColor: '#d93526', yAxisID: 'y1', tension: 0},
+        {label: 'Клики с метками (реклама)', data: tagged, borderColor: '#b8902f',
+         backgroundColor: 'rgba(184,144,47,.18)', yAxisID: 'y', tension: 0, fill: true, borderDash: [5, 3]}
       ]
     },
     options: {
