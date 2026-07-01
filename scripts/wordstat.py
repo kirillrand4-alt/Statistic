@@ -505,8 +505,11 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
         if graph != "month":  # pre-seed already-collected day/week data (resume + copy)
             for q, rows in _series_rows(db, region, dev, graph).items():
                 eq_rows.setdefault(eqkey(q), rows)
-        print(f"Дедуп по значениям: групп с известными данными — {len(eq_rows)}, "
-              f"фраз с месячным эталоном — {len(value_key)}.", flush=True)
+        uniq = len({eqkey(ph) for ph in phrases})
+        with_ref = sum(1 for ph in phrases if ph in value_key)
+        print(f"Дедуп по значениям: фраз {len(phrases)} → уникальных запросов ~{uniq} "
+              f"(дублей ~{len(phrases) - uniq} скопируем без запроса). "
+              f"С месячным эталоном — {with_ref}, уже готовых групп — {len(eq_rows)}.", flush=True)
 
     print(f"Сбор Wordstat ({graph}): {len(phrases)} фраз, регион={region}, устройство={dev}, "
           f"период {d_from}–{d_to}, пауза ~{delay}с/запрос.", flush=True)
