@@ -41,7 +41,8 @@
     {% if chart_total_clicks %}из {{ chart_total_clicks|numfmt }} на графике
     (<strong>≈{{ (tagged_clicks_total / chart_total_clicks * 100)|round(1) }}%</strong>){% endif %}
     и {{ tagged_impr_total|numfmt }} показов за период (постранично).
-    Основная линия «Клики» — тотал источника — их всё равно включает.</small></p>{% endif %}
+    Синяя «Клики (тотал)» их включает; <strong>зелёная «Клики без меток»</strong> — тотал минус эти клики,
+    то есть чистая органика без искажений от неравномерных всплесков рекламных URL.</small></p>{% endif %}
   {% else %}
   <p><small>Нет данных за период. Запустите сбор статистики ниже.</small></p>{% endif %}
 </article>
@@ -116,16 +117,23 @@
 <script>
   const daily = {{ daily|tojson }};
   const tagged = {{ tagged_series|tojson }};
+  const clean = {{ clean_series|tojson }};
+  const hasTagged = {{ 'true' if tagged_clicks_total else 'false' }};
+  const ds = [
+    {label: 'Клики (тотал)', data: daily.map(d => d.clicks), borderColor: '#1095c1', yAxisID: 'y', tension: 0},
+    {label: 'Показы', data: daily.map(d => d.impressions), borderColor: '#d93526', yAxisID: 'y1', tension: 0}
+  ];
+  if (hasTagged) {
+    ds.push({label: 'Клики без меток (чистая органика)', data: clean, borderColor: '#3f7d3a',
+             yAxisID: 'y', tension: 0, borderWidth: 2});
+    ds.push({label: 'Клики с метками (реклама)', data: tagged, borderColor: '#b8902f',
+             backgroundColor: 'rgba(184,144,47,.18)', yAxisID: 'y', tension: 0, fill: true, borderDash: [5, 3]});
+  }
   new Chart(document.getElementById('trend'), {
     type: 'line',
     data: {
       labels: daily.map(d => d.date),
-      datasets: [
-        {label: 'Клики', data: daily.map(d => d.clicks), borderColor: '#1095c1', yAxisID: 'y', tension: 0},
-        {label: 'Показы', data: daily.map(d => d.impressions), borderColor: '#d93526', yAxisID: 'y1', tension: 0},
-        {label: 'Клики с метками (реклама)', data: tagged, borderColor: '#b8902f',
-         backgroundColor: 'rgba(184,144,47,.18)', yAxisID: 'y', tension: 0, fill: true, borderDash: [5, 3]}
-      ]
+      datasets: ds
     },
     options: {
       interaction: {mode: 'index', intersect: false},

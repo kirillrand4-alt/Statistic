@@ -207,8 +207,8 @@ def dashboard(request: Request, domain: str | None = None,
         "clean": bool(clean), "ratio": ratio, "min_impr": min_impr, "devices": bool(devices),
         "totals": None, "daily": [], "top_pages": [], "export_sites": [], "site_ids": [],
         "hidden_tagged": 0, "show_tagged": bool(show_tagged),
-        "tagged_series": [], "tagged_clicks_total": 0, "chart_total_clicks": 0,
-        "tagged_impr_total": 0,
+        "tagged_series": [], "clean_series": [], "tagged_clicks_total": 0,
+        "chart_total_clicks": 0, "tagged_impr_total": 0,
         "runs": db.execute(
             select(CollectionRun).order_by(CollectionRun.started_at.desc()).limit(10)
         ).scalars().all(),
@@ -229,6 +229,9 @@ def dashboard(request: Request, domain: str | None = None,
             totals_svc.combine_daily([totals_svc.tagged_daily(db, ids, dr) for ids in parts]), gran)
         tmap = {t["date"]: t["clicks"] for t in tagged}
         ctx["tagged_series"] = [tmap.get(p["date"], 0) for p in ctx["daily"]]
+        # clean line = source total minus tagged clicks per bucket (undistorted organic trend)
+        ctx["clean_series"] = [max(0, p["clicks"] - t)
+                               for p, t in zip(ctx["daily"], ctx["tagged_series"])]
         ctx["tagged_clicks_total"] = sum(t["clicks"] for t in tagged)
         ctx["chart_total_clicks"] = sum(p["clicks"] for p in ctx["daily"])  # тотал источника на графике
         ctx["tagged_impr_total"] = sum(t["impressions"] for t in tagged)
