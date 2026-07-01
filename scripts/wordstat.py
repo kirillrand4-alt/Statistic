@@ -74,6 +74,14 @@ def cmd_discover(query: str) -> None:
     os.makedirs(DEBUG_DIR, exist_ok=True)
     grabbed: list[tuple] = []
     seen: list[str] = []
+    graph_reqs: list[str] = []  # bodies of getGraph POSTs (most reliable — request side)
+
+    def on_req(req):
+        try:
+            if "/wordstat/api/getGraph" in req.url and req.method == "POST":
+                graph_reqs.append(req.post_data or "")
+        except Exception:  # noqa: BLE001
+            pass
 
     def on_resp(resp):
         try:
@@ -101,9 +109,10 @@ def cmd_discover(query: str) -> None:
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=False, viewport=VIEWPORT)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.on("request", on_req)
         page.on("response", on_resp)
         page.goto(WORDSTAT_URL, wait_until="domcontentloaded", timeout=60000)
-        print(f"Открыт Wordstat. Введи в окне фразу «{query}», переключись на «История».")
+        print(f"Открыт Wordstat. Введи «{query}», «Динамика», переключай «По месяцам/неделям/дням».")
         print("Жду 90 сек (или нажми Enter раньше)…")
         try:
             page.wait_for_timeout(2000)
@@ -113,6 +122,14 @@ def cmd_discover(query: str) -> None:
         if "passport" in page.url or "auth" in page.url:
             print("  ⚠ не залогинен — сначала: --login")
         ctx.close()
+
+    # getGraph request bodies — the exact payload the UI sends per granularity
+    for i, body in enumerate(graph_reqs):
+        with open(os.path.join(DEBUG_DIR, f"getgraph_req_{i}.txt"), "w", encoding="utf-8") as f:
+            f.write(body)
+    print(f"\ngetGraph-запросов поймано: {len(graph_reqs)} (сохранены в getgraph_req_*.txt)")
+    for i, body in enumerate(graph_reqs):
+        print(f"\n[getGraph {i}] {body[:500]}")
 
     grabbed.sort(key=lambda x: x[0], reverse=True)
     print(f"\nJSON-ответов просмотрено: {len(seen)}; пойманных: {len(grabbed)}")
