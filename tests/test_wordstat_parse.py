@@ -55,6 +55,19 @@ def test_daily_points_parsed_with_real_days():
                     (dt.date(2026, 6, 3), 2315)]
 
 
+def test_daily_skips_null_value_points():
+    # real Wordstat day series often has null y for edge/no-data days — must not crash
+    body = {"graph": {"images": {"timeSeries": {"preparedValues": {"absolute": [
+        {"year": 2026, "month": 4, "day": 30, "y": None},   # gap -> skipped
+        {"year": 2026, "month": 5, "day": 1, "y": 1993},
+        {"year": 2026, "month": 5, "day": 2, "value": 2018},  # alt key 'value'
+        {"year": None, "month": None, "day": None, "y": 5},   # broken -> skipped
+    ]}}}}}
+    kind, rows = ws._parse_graph(_Resp(body))
+    assert kind == "ok"
+    assert rows == [(dt.date(2026, 6, 1), 1993), (dt.date(2026, 6, 2), 2018)]
+
+
 def test_monthly_points_still_day_1():
     body = _graph([{"year": 2025, "month": 0, "y": 100}])  # no 'day' -> defaults to 1
     _, rows = ws._parse_graph(_Resp(body))
