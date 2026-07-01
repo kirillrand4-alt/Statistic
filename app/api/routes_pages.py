@@ -1881,6 +1881,26 @@ def demand_export(region: str | None = None, device: str | None = None, start: s
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
+@router.get("/audience")
+def audience_page(request: Request, sites: list[int] = Query(default=[]),
+                  start: str | None = None, end: str | None = None,
+                  source: str = "ad_kw_search", kw: str | None = None,
+                  mode: str = "ip_ua", db: Session = Depends(get_db)):
+    """Аудитория / охват: оценка уникальной аудитории методом повторного отлова
+    (capture-recapture по IP+UA между сайтами за день)."""
+    from app.services import audience as A
+
+    all_sites = A.sites_with_visits(db)
+    ids = [i for i in sites if i in {s["id"] for s in all_sites}] or [s["id"] for s in all_sites]
+    dr = parse_date_range(start, end)
+    keywords = [k.strip() for k in re.split(r"[\n,]", kw or "") if k.strip()]
+    result = A.estimate(db, ids, dr, source=source, keywords=keywords, mode=mode) if all_sites else None
+    return templates.TemplateResponse(request, "audience.html", {
+        "request": request, "all_sites": all_sites, "chosen": set(ids),
+        "range": dr, "source": source, "kw": kw or "", "mode": mode, "result": result,
+    })
+
+
 @router.get("/metrika")
 def metrika_page(request: Request, site_id: int | None = None, start: str | None = None,
                  end: str | None = None, msg: str | None = None, db: Session = Depends(get_db)):

@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Аудитория · SEO Статистика{% endblock %}
+{% block content %}
+<h2>Аудитория / охват <small>— оценка уникальных людей по пересечению сайтов</small></h2>
+
+<details>
+  <summary><small>Как это считается и насколько можно верить</small></summary>
+  <p><small>Метод <strong>повторного отлова</strong> (capture-recapture, Линкольн–Петерсен/Чапмен):
+  визиты из рекламы/поиска на разных ваших сайтах за <strong>один день</strong> — это независимые
+  «отловы» одной аудитории. По доле пересечения одних и тех же <strong>IP+User-Agent</strong> оценивается,
+  сколько всего уникальных людей, включая тех, кого в этот день не поймали. Формула пары:
+  <code>N ≈ (nₐ+1)(n_b+1)/(m+1) − 1</code>, где <code>m</code> — пересечение.</small></p>
+  <p><small><strong>Оговорки:</strong> IP≠человек — общие/NAT-IP завышают пересечение и <em>занижают</em>
+  оценку; мобильные/динамические IP — наоборот <em>завышают</em>; сравнивающие покупатели заходят на
+  несколько сайтов (занижение). Это оценка порядка величины и динамики, не точное число. Прямые заходы
+  исключены (там боты). Сырые IP не показываются.</small></p>
+</details>
+
+{% if not all_sites %}
+<article><p>Нет данных Яндекс.Метрики. Загрузите визиты на вкладке «Метрика» — нужны поля
+  <code>ym:s:ipAddress</code>, <code>ym:s:clientID</code>, устройство/ОС/браузер.</p></article>
+{% else %}
+
+<form method="get" action="{{ base_path }}/audience">
+  <fieldset>
+    <legend><strong>Сайты</strong> (аудитория между ними пересекается; нужно ≥2)</legend>
+    <div class="grid">
+      {% for s in all_sites %}
+      <label><input type="checkbox" name="sites" value="{{ s.id }}"
+                    {% if s.id in chosen %}checked{% endif %}> {{ s.domain }}
+        <small>({{ s.visits|numfmt }})</small></label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <div class="grid">
+    <label>Источник трафика
+      <select name="source">
+        <option value="ad_kw_search" {% if source=='ad_kw_search' %}selected{% endif %}>Реклама с ключами + весь поиск (реком.)</option>
+        <option value="ad_kw" {% if source=='ad_kw' %}selected{% endif %}>Только реклама с ключами</option>
+        <option value="search" {% if source=='search' %}selected{% endif %}>Только поиск</option>
+        <option value="ad_search" {% if source=='ad_search' %}selected{% endif %}>Реклама + поиск (любая)</option>
+        <option value="all" {% if source=='all' %}selected{% endif %}>Весь трафик (вкл. прямые — боты)</option>
+      </select>
+    </label>
+    <label>Ключевые слова <small>(через запятую; пусто = все)</small>
+      <input type="text" name="kw" value="{{ kw }}" placeholder="компрессор, ресивер…">
+    </label>
+    <label>Ключ сопоставления
+      <select name="mode">
+        <option value="ip_ua" {% if mode=='ip_ua' %}selected{% endif %}>IP + User-Agent (точнее)</option>
+        <option value="ip" {% if mode=='ip' %}selected{% endif %}>Только IP</option>
+      </select>
+    </label>
+    <label>С <input type="date" name="start" value="{{ range.start }}"></label>
+    <label>По <input type="date" name="end" value="{{ range.end }}"></label>
+    <label>&nbsp;<button type="submit">Посчитать</button></label>
+  </div>
+</form>
+
+{% if result %}
+{% set r = result %}
+<p><small>Отобрано визитов: <strong>{{ r.matched_visits|numfmt }}</strong> из {{ r.total_visits|numfmt }};
+  с IP: {{ r.with_ip|numfmt }} ({{ (r.ip_coverage*100)|round|int }}%).
+  {% if r.with_ip == 0 %}<strong style="color:var(--pico-del-color,#c00)">В данных нет IP — перекачайте визиты
+  с полем ym:s:ipAddress.</strong>{% elif r.ip_coverage < 0.5 %}<strong>IP заполнен меньше чем у половины визитов —
+  оценка грубее.</strong>{% endif %}</small></p>
+
+<div class="grid">
+  <article>
+    <header>Наблюдалось уникальных</header>
+    <h3>{{ r.period_observed|numfmt }}</h3>
+    <small>уникальных IP+UA за период (нижняя граница — точно не меньше)</small>
+  </article>
+  <article>
+    <header>Оценка всей аудитории</header>
+    {% if r.period_estimate %}<h3>≈ {{ r.period_estimate|numfmt }}</h3>
+    <small>{% if r.period_band %}разброс по парам сайтов {{ r.period_band[0]|numfmt }}–{{ r.period_band[1]|numfmt }}{% endif %}</small>
+    {% else %}<h3>—</h3><small>мало пересечений между сайтами для оценки</small>{% endif %}
+  </article>
+  <article>
+    <header>Типичный день</header>
+    {% if r.daily_median %}<h3>≈ {{ r.daily_median|numfmt }}</h3><small>медиана дневной оценки охвата</small>
+    {% else %}<h3>—</h3><small>нет дней с пересечением ≥2 сайтов</small>{% endif %}
+  </article>
+</div>
+
+{% if r.days %}
+<article>
+  <header>Динамика охвата по дням <small>(наблюдалось vs оценка)</small></header>
+  <canvas id="aud" height="100"></canvas>
+</article>
+{% endif %}
+
+<article>
+  <header>Пересечение аудиторий по парам сайтов</header>
+  {% if r.pairs %}
+  <figure><table class="sortable">
+    <thead><tr>
+      <th>Сайт A</th><th>Сайт B</th><th>Уник. A</th><th>Уник. B</th>
+      <th>Пересечение</th><th>Оценка (Чапмен)</th>
+    </tr></thead>
+    <tbody>
+      {% for p in r.pairs %}
+      <tr>
+        <td>{{ p.a }}</td><td>{{ p.b }}</td>
+        <td>{{ p.na|numfmt }}</td><td>{{ p.nb|numfmt }}</td>
+        <td>{{ p.overlap|numfmt }}</td>
+        <td>{% if p.chapman %}≈ {{ p.chapman.n|numfmt }} <small>({{ p.chapman.lo|numfmt }}–{{ p.chapman.hi|numfmt }})</small>
+            {% else %}<small>нет пересечения</small>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table></figure>
+  <small>«Пересечение» — сколько одних и тех же IP+UA встретились на обоих сайтах за период.
+    Оценка Чапмена — сколько всего уникальных людей у этой пары.</small>
+  {% else %}<p><small>Выберите ≥2 сайта с пересекающейся аудиторией.</small></p>{% endif %}
+</article>
+
+{% if r.sites %}
+<article>
+  <header>Уникальных ({{ r.mode }}) по каждому сайту за период</header>
+  <table class="sortable">
+    <thead><tr><th>Сайт</th><th>Уникальных IP+UA</th></tr></thead>
+    <tbody>{% for s in r.sites %}<tr><td>{{ s.name }}</td><td>{{ s.keys|numfmt }}</td></tr>{% endfor %}</tbody>
+  </table>
+</article>
+{% endif %}
+{% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if result and result.days %}
+<script>
+  const days = {{ result.days|tojson }};
+  new Chart(document.getElementById('aud'), {
+    type: 'line',
+    data: {
+      labels: days.map(d => d.date),
+      datasets: [
+        {label: 'Оценка охвата', data: days.map(d => d.estimate),
+         borderColor: '#b8902f', backgroundColor: 'rgba(184,144,47,.15)', fill: true,
+         tension: 0.25, pointRadius: 2, spanGaps: true, borderWidth: 2},
+        {label: 'Наблюдалось (уник.)', data: days.map(d => d.observed),
+         borderColor: '#1095c1', tension: 0.25, pointRadius: 2, borderWidth: 2}
+      ]
+    },
+    options: {interaction: {mode: 'index', intersect: false},
+              plugins: {legend: {position: 'bottom'}}, scales: {y: {beginAtZero: true}}}
+  });
+</script>
+{% endif %}
+{% endblock %}
