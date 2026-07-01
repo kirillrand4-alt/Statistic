@@ -380,7 +380,8 @@ def _save(db, phrase, region, device, rows, graph="month", match="broad") -> int
 
 
 def _read_phrases(path) -> list[str]:
-    with open(path, encoding="utf-8") as f:
+    # utf-8-sig strips a BOM (PowerShell `Set-Content -Encoding UTF8` adds one)
+    with open(path, encoding="utf-8-sig") as f:
         return [ln.strip() for ln in f if ln.strip()]
 
 
