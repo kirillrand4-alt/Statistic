@@ -12,9 +12,17 @@ from datetime import date as date_type
 from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import AppSetting, WordstatHistory as W
+from app.db.models import AppSetting, WordstatHistory as W, WordstatSeries as WS
 
 KEYLIST_SETTING = "wordstat_keylist"  # newline-joined uploaded phrases (original case)
+
+
+def _src(granularity="month"):
+    """Return (Model, base_conditions) for a granularity: month → wordstat_history,
+    day/week → wordstat_series filtered by granularity."""
+    if granularity in ("day", "week"):
+        return WS, [WS.granularity == granularity]
+    return W, []
 
 
 def norm_key(s: str) -> str:
@@ -68,8 +76,14 @@ def delete_phrases(db: Session, phrases) -> int:
     pairs = db.execute(select(W.query, W.query_hash).distinct()).all()
     hashes = {h for (qq, h) in pairs if norm_key(qq) in norms}
     affected = {norm_key(qq) for (qq, _h) in pairs if norm_key(qq) in norms}
+    # also match fine-grained (day/week) rows by normalized query
+    for (qq, h) in db.execute(select(WS.query, WS.query_hash).distinct()).all():
+        if norm_key(qq) in norms:
+            hashes.add(h)
+            affected.add(norm_key(qq))
     if hashes:
         db.execute(delete(W).where(W.query_hash.in_(hashes)))
+        db.execute(delete(WS).where(WS.query_hash.in_(hashes)))
         db.commit()
     kl = get_keylist(db)
     remaining = [k for k in kl if norm_key(k) not in norms]
@@ -80,9 +94,12 @@ def delete_phrases(db: Session, phrases) -> int:
 
 
 def clear_all(db: Session) -> int:
-    """Удалить всю собранную историю Wordstat (и список). Возвращает число строк."""
-    n = db.execute(select(func.count()).select_from(W)).scalar() or 0
+    """Удалить всю собранную историю Wordstat — месячную и дневную/недельную (и
+    список ключей). Возвращает число удалённых строк."""
+    n = (db.execute(select(func.count()).select_from(W)).scalar() or 0)
+    n += (db.execute(select(func.count()).select_from(WS)).scalar() or 0)
     db.execute(delete(W))
+    db.execute(delete(WS))
     db.commit()
     clear_keylist(db)
     return n
@@ -142,48 +159,68 @@ def aggregate(label: str, phrases) -> dict | None:
     }
 
 
-def regions(db: Session) -> list[str]:
-    return [r for (r,) in db.execute(select(distinct(W.region)).order_by(W.region)).all() if r]
+def regions(db: Session, granularity="month") -> list[str]:
+    M, base = _src(granularity)
+    stmt = select(distinct(M.region)).order_by(M.region)
+    for c in base:
+        stmt = stmt.where(c)
+    return [r for (r,) in db.execute(stmt).all() if r]
 
 
-def devices(db: Session) -> list[str]:
-    return [r for (r,) in db.execute(select(distinct(W.device)).order_by(W.device)).all() if r]
+def devices(db: Session, granularity="month") -> list[str]:
+    M, base = _src(granularity)
+    stmt = select(distinct(M.device)).order_by(M.device)
+    for c in base:
+        stmt = stmt.where(c)
+    return [r for (r,) in db.execute(stmt).all() if r]
 
 
-def _scope(stmt, region, device, start=None, end=None):
+def _scope(stmt, M, base, region, device, start=None, end=None):
+    for c in base:
+        stmt = stmt.where(c)
     if region:
-        stmt = stmt.where(W.region == region)
+        stmt = stmt.where(M.region == region)
     if device:
-        stmt = stmt.where(W.device == device)
+        stmt = stmt.where(M.device == device)
     if start:
-        stmt = stmt.where(W.date >= start)
+        stmt = stmt.where(M.date >= start)
     if end:
-        stmt = stmt.where(W.date <= end)
+        stmt = stmt.where(M.date <= end)
     return stmt
 
 
-def bounds(db: Session, region=None, device=None) -> tuple[date_type | None, date_type | None]:
-    """Earliest/latest month present for the given region/device (None if empty)."""
-    lo, hi = db.execute(_scope(select(func.min(W.date), func.max(W.date)), region, device)).one()
+def bounds(db: Session, region=None, device=None,
+           granularity="month") -> tuple[date_type | None, date_type | None]:
+    """Earliest/latest point present for the given region/device/granularity."""
+    M, base = _src(granularity)
+    lo, hi = db.execute(_scope(select(func.min(M.date), func.max(M.date)), M, base,
+                               region, device)).one()
     return lo, hi
 
 
-def has_data(db: Session) -> bool:
-    return bool(db.execute(select(W.id).limit(1)).first())
+def has_data(db: Session, granularity="month") -> bool:
+    M, base = _src(granularity)
+    stmt = select(M.id).limit(1)
+    for c in base:
+        stmt = stmt.where(c)
+    return bool(db.execute(stmt).first())
 
 
-def load(db: Session, region=None, device=None, start=None, end=None, search=None, keyset=None):
-    """Return ``(months, phrases)``.
+def load(db: Session, region=None, device=None, start=None, end=None, search=None,
+         keyset=None, granularity="month"):
+    """Return ``(points, phrases)``.
 
-    ``months`` — отсортированные ISO-метки месяцев (ось X графика).
+    ``points`` — отсортированные ISO-метки периода (ось X: месяцы/недели/дни).
     ``phrases`` — список словарей со сводкой по фразе и рядом ``series`` (значение
-    на каждый месяц из ``months``; ``None`` — пропуск). Отсортированы по макс. частоте.
+    на каждую точку из ``points``; ``None`` — пропуск). Отсортированы по макс. частоте.
     ``keyset`` — если задан (множество нормализованных фраз), оставляем только их.
+    ``granularity`` — month | week | day (источник — соотв. таблица).
     """
-    stmt = _scope(select(W.query, W.date, W.value), region, device, start, end)
+    M, base = _src(granularity)
+    stmt = _scope(select(M.query, M.date, M.value), M, base, region, device, start, end)
     if search:
-        stmt = stmt.where(W.query.ilike(f"%{search}%"))
-    stmt = stmt.order_by(W.query, W.date)
+        stmt = stmt.where(M.query.ilike(f"%{search}%"))
+    stmt = stmt.order_by(M.query, M.date)
     by: dict[str, list] = {}
     for q, d, v in db.execute(stmt).all():
         if keyset is not None and norm_key(q) not in keyset:

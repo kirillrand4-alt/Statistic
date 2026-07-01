@@ -1747,21 +1747,20 @@ def _month_to_date(s: str | None) -> date | None:
 def demand_page(request: Request, region: str | None = None, device: str | None = None,
                 start: str | None = None, end: str | None = None, search: str | None = None,
                 list: str = "on", mode: str = "sep", dedup: int = 0, aud: int = 0,
-                q: list[str] = Query(default=[]),
+                gran: str = "month", q: list[str] = Query(default=[]),
                 msg: str | None = None, db: Session = Depends(get_db)):
-    """Спрос: помесячная частотность Wordstat по собранным фразам — график + таблица.
-    Фильтры: регион, устройство, период, поиск, загруженный список (``list=on/off``).
-    ``dedup=1`` — не считать смысловые дубли (фразы с одинаковым рядом — раз).
-    Режим графика ``mode``: ``sep`` — отмеченные по отдельности; ``sum_checked`` —
-    сумма отмеченных; ``sum_list`` — сумма по загруженному списку; ``sum_db`` — сумма
-    по всем фразам в базе (с учётом региона/устройства/периода)."""
+    """Спрос: частотность Wordstat по собранным фразам — график + таблица.
+    ``gran`` — month | week | day (месяц/неделя/день). Фильтры: регион, устройство,
+    период, поиск, загруженный список (``list=on/off``). ``dedup=1`` — не считать
+    смысловые дубли. Режим графика ``mode``: sep / sum_checked / sum_list / sum_db."""
     from app.services import demand
 
-    regs = demand.regions(db)
-    devs = demand.devices(db)
+    gran = gran if gran in ("month", "week", "day") else "month"
+    regs = demand.regions(db, gran)
+    devs = demand.devices(db, gran)
     cur_region = region if region in regs else (regs[0] if regs else None)
     cur_device = device if device in devs else (devs[0] if devs else None)
-    lo, hi = demand.bounds(db, cur_region, cur_device)
+    lo, hi = demand.bounds(db, cur_region, cur_device, gran)
     d_start = _month_to_date(start) or lo
     d_end = _month_to_date(end) or hi
     s = (search or "").strip() or None
@@ -1772,12 +1771,14 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
     dd = bool(dedup)
 
     def scope(keyset_=None, srch=None):
-        _m, ph = demand.load(db, cur_region, cur_device, d_start, d_end, srch, keyset=keyset_)
+        _m, ph = demand.load(db, cur_region, cur_device, d_start, d_end, srch,
+                             keyset=keyset_, granularity=gran)
         return (_m, demand.dedup_groups(ph) if dd else ph)
 
     # table scope: what the user browses (filtered by list + search)
     months, phrases = scope(keyset, s)
-    raw_count = len(demand.load(db, cur_region, cur_device, d_start, d_end, s, keyset=keyset)[1])
+    raw_count = len(demand.load(db, cur_region, cur_device, d_start, d_end, s,
+                                keyset=keyset, granularity=gran)[1])
     found = {demand.norm_key(p["query"]) for p in phrases}
     missing = [k for k in keylist if demand.norm_key(k) not in found] if use_list else []
     chosen = set(q)
@@ -1820,7 +1821,8 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
             aud_range = (a_start.strftime("%Y-%m"), a_end.strftime("%Y-%m"))
 
     return templates.TemplateResponse(request, "demand.html", {
-        "request": request, "has_data": demand.has_data(db), "msg": msg,
+        "request": request, "has_data": demand.has_data(db, gran),
+        "has_month": demand.has_data(db, "month"), "gran": gran, "msg": msg,
         "regions": regs, "devices": devs, "cur_region": cur_region, "cur_device": cur_device,
         "m_start": d_start.strftime("%Y-%m") if d_start else "",
         "m_end": d_end.strftime("%Y-%m") if d_end else "",
@@ -1891,23 +1893,24 @@ def ui_demand_clear_all(db: Session = Depends(get_db)):
 @router.get("/demand/export")
 def demand_export(region: str | None = None, device: str | None = None, start: str | None = None,
                   end: str | None = None, search: str | None = None, list: str = "on",
-                  dedup: int = 0, db: Session = Depends(get_db)):
+                  dedup: int = 0, gran: str = "month", db: Session = Depends(get_db)):
     import csv
     import io
 
     from app.services import demand
 
-    regs = demand.regions(db)
-    devs = demand.devices(db)
+    gran = gran if gran in ("month", "week", "day") else "month"
+    regs = demand.regions(db, gran)
+    devs = demand.devices(db, gran)
     cur_region = region if region in regs else (regs[0] if regs else None)
     cur_device = device if device in devs else (devs[0] if devs else None)
-    lo, hi = demand.bounds(db, cur_region, cur_device)
+    lo, hi = demand.bounds(db, cur_region, cur_device, gran)
     d_start = _month_to_date(start) or lo
     d_end = _month_to_date(end) or hi
     keylist = demand.get_keylist(db)
     keyset = ({demand.norm_key(k) for k in keylist} if (list != "off" and keylist) else None)
     months, phrases = demand.load(db, cur_region, cur_device, d_start, d_end,
-                                  (search or "").strip() or None, keyset=keyset)
+                                  (search or "").strip() or None, keyset=keyset, granularity=gran)
     if dedup:
         phrases = demand.dedup_groups(phrases)
     buf = io.StringIO()

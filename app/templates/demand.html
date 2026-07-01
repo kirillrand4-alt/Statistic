@@ -1,16 +1,37 @@
 {% extends "base.html" %}
 {% block title %}Спрос · SEO Статистика{% endblock %}
 {% block content %}
-<h2>Спрос <small>— история частотности Wordstat</small></h2>
+{% set gran_label = {'month': 'по месяцам', 'week': 'по неделям', 'day': 'по дням'} %}
+<h2>Спрос <small>— частотность Wordstat, {{ gran_label[gran] }}</small></h2>
 {% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
+
+<form method="get" action="{{ base_path }}/demand" style="margin-bottom:.6rem">
+  <input type="hidden" name="list" value="{{ list_state }}">
+  <input type="hidden" name="dedup" value="{{ 1 if dedup else 0 }}">
+  <input type="hidden" name="region" value="{{ cur_region }}">
+  <input type="hidden" name="device" value="{{ cur_device }}">
+  <label>Детализация графика
+    <select name="gran" onchange="this.form.submit()">
+      <option value="month" {% if gran=='month' %}selected{% endif %}>по месяцам</option>
+      <option value="week" {% if gran=='week' %}selected{% endif %}>по неделям</option>
+      <option value="day" {% if gran=='day' %}selected{% endif %}>по дням</option>
+    </select>
+  </label>
+</form>
 
 {% if not has_data %}
 <article>
+  {% if has_month and gran != 'month' %}
+  <p><strong>Данных {{ gran_label[gran] }} ещё нет.</strong> Помесячные есть — соберите нужную гранулярность на сервере:</p>
+  <pre><code>.venv\Scripts\python scripts\wordstat.py --collect --from-list --graph {{ gran }} --dedup --captcha auto --skip-done</code></pre>
+  <p><small>После сбора переключатель «{{ gran_label[gran] }}» покажет график этой детализации.</small></p>
+  {% else %}
   <p><strong>Данных Wordstat ещё нет.</strong> Список ключей можно подготовить уже сейчас (ниже), затем собрать историю на сервере:</p>
   <pre><code>.venv\Scripts\python scripts\wordstat.py --login        # один раз войти в Яндекс
-.venv\Scripts\python scripts\wordstat.py --collect --from-list   # собрать по списку ниже
+.venv\Scripts\python scripts\wordstat.py --collect --from-list --dedup   # собрать по списку ниже
 .venv\Scripts\python scripts\wordstat.py --status      # что уже собрано</code></pre>
-  <p><small>После сбора помесячная частотность за ~2 года появится здесь.</small></p>
+  <p><small>Гранулярность: <code>--graph month|week|day</code>. После сбора появится здесь.</small></p>
+  {% endif %}
 </article>
 {% endif %}
 
@@ -65,6 +86,7 @@
   <input type="hidden" name="mode" value="{{ mode }}">
   <input type="hidden" name="dedup" value="{{ 1 if dedup else 0 }}">
   <input type="hidden" name="aud" value="{{ 1 if aud else 0 }}">
+  <input type="hidden" name="gran" value="{{ gran }}">
   <label>Регион
     <select name="region" onchange="this.form.submit()">
       {% for r in regions %}<option value="{{ r }}" {% if r==cur_region %}selected{% endif %}>{{ r }}</option>{% endfor %}
@@ -83,6 +105,7 @@
 <form method="get" action="{{ base_path }}/demand">
   <input type="hidden" name="list" value="{{ list_state }}">
   <input type="hidden" name="mode" value="{{ mode }}">
+  <input type="hidden" name="gran" value="{{ gran }}">
   <input type="hidden" name="region" value="{{ cur_region }}">
   <input type="hidden" name="device" value="{{ cur_device }}">
   <input type="hidden" name="start" value="{{ m_start }}">
@@ -114,7 +137,7 @@
 <article>
   <header>
     Фразы: {{ phrases|length }}{% if dedup and raw_count > phrases|length %} <small>(свёрнуто дублей: {{ raw_count - phrases|length }})</small>{% endif %}
-    <a href="{{ base_path }}/demand/export?list={{ list_state }}&dedup={{ 1 if dedup else 0 }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&search={{ search|urlencode }}"
+    <a href="{{ base_path }}/demand/export?list={{ list_state }}&dedup={{ 1 if dedup else 0 }}&gran={{ gran }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&search={{ search|urlencode }}"
        role="button" class="secondary outline" style="float:right">⬇ Экспорт CSV</a>
   </header>
   {% if phrases %}
@@ -122,6 +145,7 @@
     <input type="hidden" name="list" value="{{ list_state }}">
     <input type="hidden" name="dedup" value="{{ 1 if dedup else 0 }}">
     <input type="hidden" name="aud" value="{{ 1 if aud else 0 }}">
+    <input type="hidden" name="gran" value="{{ gran }}">
     <input type="hidden" name="region" value="{{ cur_region }}">
     <input type="hidden" name="device" value="{{ cur_device }}">
     <input type="hidden" name="start" value="{{ m_start }}">
@@ -165,7 +189,7 @@
           <td>{{ p.max|numfmt }}</td>
           <td>{{ p.last|numfmt }}</td>
           <td>{% if p.change is none %}—{% elif p.change >= 0 %}<ins>+{{ p.change }}%</ins>{% else %}<del>{{ p.change }}%</del>{% endif %}</td>
-          <td><a href="{{ base_path }}/demand?mode=sep&list={{ list_state }}&dedup={{ 1 if dedup else 0 }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&q={{ p.query|urlencode }}"
+          <td><a href="{{ base_path }}/demand?mode=sep&list={{ list_state }}&dedup={{ 1 if dedup else 0 }}&gran={{ gran }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&q={{ p.query|urlencode }}"
                  title="Показать график только по этой фразе">📈</a></td>
         </tr>
         {% endfor %}
@@ -208,9 +232,11 @@
   const months = {{ months|tojson }};
   const plot = {{ plot|tojson }};
   const isSum = {{ 'true' if is_sum else 'false' }};
+  const gran = "{{ gran }}";
   const palette = ['#b8902f', '#1095c1', '#3f7d3a', '#b1561f', '#7b54b3', '#c0392b',
                    '#2c7873', '#8a6d1f', '#566573', '#c2389a', '#1f7a4d', '#8e44ad'];
-  const labels = months.map(m => { const [y, mm] = m.split('-'); return mm + '.' + y; });
+  const labels = months.map(m => { const [y, mm, dd] = m.split('-');
+    return gran === 'month' ? (mm + '.' + y) : (dd + '.' + mm + '.' + y.slice(2)); });
   new Chart(document.getElementById('demand'), {
     type: 'line',
     data: {
