@@ -606,29 +606,32 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
     cmd_status()  # show what's now in the DB so you can verify the run
 
 
-def cmd_probe_day(phrase, region, device) -> None:
-    """Find the max daily window Wordstat accepts — try increasing windows on one
-    phrase until it returns HTTP 400. Prints the largest window that worked."""
+def cmd_probe(phrase, region, device, graph) -> None:
+    """Find the max window Wordstat accepts for a granularity — try increasing windows
+    on one phrase until HTTP 400. Prints the largest window that worked (in days)."""
     from datetime import date, timedelta
     from urllib.parse import quote
 
-    print(f"Проба макс. дневного окна на «{phrase}» (регион={region})…", flush=True)
+    cands = ((30, 45, 60, 62, 65, 70, 75, 80, 85, 90, 120, 180) if graph == "day"
+             else (90, 180, 270, 365, 540, 730, 900, 1095, 1460))  # week/month — дни
+    print(f"Проба макс. окна ({graph}) на «{phrase}» (регион={region})…", flush=True)
     best = 0
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=False, viewport=VIEWPORT)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(WORDSTAT_URL, wait_until="domcontentloaded", timeout=60000)
         ref = f"https://wordstat.yandex.ru/?region={region}&view=graph&words={quote(phrase)}"
-        for n in (30, 45, 60, 62, 65, 70, 75, 80, 85, 90, 120, 180):
+        for n in cands:
             end = date.today() - timedelta(days=1)
             start = end - timedelta(days=n - 1)
             resp = ctx.request.post(
                 GRAPH_URL, data=json.dumps(_payload(phrase, region, device,
-                    start.strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y"), "day")),
+                    start.strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y"), graph)),
                 headers={"content-type": "application/json", "referer": ref}, timeout=45000)
             kind, data = _parse_graph(resp)
             npts = len(data) if isinstance(data, list) else 0
-            print(f"  окно {n:>3} дн → {kind} (HTTP {resp.status}, точек {npts})", flush=True)
+            print(f"  окно {n:>4} дн (~{n // 30} мес) → {kind} (HTTP {resp.status}, точек {npts})",
+                  flush=True)
             if kind in ("ok", "empty"):
                 best = n
             elif resp.status == 400:
@@ -638,7 +641,7 @@ def cmd_probe_day(phrase, region, device) -> None:
                 continue
             page.wait_for_timeout(1500)
         ctx.close()
-    print(f"\nМаксимальное дневное окно Wordstat: ~{best} дней (дальше — HTTP 400).")
+    print(f"\nМаксимальное окно ({graph}): ~{best} дней (~{best // 30} мес; дальше — HTTP 400).")
 
 
 def cmd_status() -> None:
@@ -709,8 +712,9 @@ def main() -> None:
     ap.add_argument("--dedup", action="store_true",
                     help="не запрашивать дубли: фразы с одинаковым месячным рядом — один "
                          "запрос Wordstat, остальным копируем данные (экономит запросы/капчу)")
-    ap.add_argument("--probe-day", dest="probe_day", action="store_true",
-                    help="найти макс. дневное окно Wordstat (перебор окон на одной фразе)")
+    ap.add_argument("--probe", action="store_true",
+                    help="найти макс. окно Wordstat для гранулярности из --graph "
+                         "(перебор окон на одной фразе)")
     a = ap.parse_args()
     if a.set_captcha or a.captcha_provider:
         from app.db.base import init_db
@@ -722,10 +726,10 @@ def main() -> None:
         return
     if a.login:
         cmd_login()
-    elif a.probe_day:
+    elif a.probe:
         src = (_read_phrases(a.phrases) if a.phrases else
                (_list_phrases() if a.from_list else _db_phrases(a.site) if a.from_db else []))
-        cmd_probe_day(src[0] if src else "компрессор", a.region, a.device)
+        cmd_probe(src[0] if src else "компрессор", a.region, a.device, a.graph)
     elif a.status:
         cmd_status()
     elif a.discover:
