@@ -36,9 +36,12 @@
 <article>
   <header>Динамика (весь домен){% if gran == 'week' %} — по неделям{% elif gran == 'month' %} — по месяцам{% else %} — по дням{% endif %}</header>
   {% if daily %}<canvas id="trend" height="90"></canvas>
-  {% if tagged_clicks_total %}<small>Пунктиром — клики по рекламным/меченым URL (utm_/roistat/макросы),
-    попавшим в органику: всего {{ tagged_clicks_total|numfmt }} кликов за период (постранично).
-    Общий тотал источника их всё равно включает — это лишь оценка «мусорной» доли.</small>{% endif %}
+  {% if tagged_clicks_total %}<p><small>Пунктир — клики по рекламным/меченым URL (utm_/roistat/макросы), попавшим в органику:
+    <strong>{{ tagged_clicks_total|numfmt }}</strong> кликов
+    {% if chart_total_clicks %}из {{ chart_total_clicks|numfmt }} на графике
+    (<strong>≈{{ (tagged_clicks_total / chart_total_clicks * 100)|round(1) }}%</strong>){% endif %}
+    и {{ tagged_impr_total|numfmt }} показов за период (постранично).
+    Основная линия «Клики» — тотал источника — их всё равно включает.</small></p>{% endif %}
   {% else %}
   <p><small>Нет данных за период. Запустите сбор статистики ниже.</small></p>{% endif %}
 </article>
