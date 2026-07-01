@@ -93,9 +93,9 @@
     Не считать одну и ту же фразу несколько раз (смысловые дубли){% if dedup and raw_count > phrases|length %}
     <small>— свёрнуто дублей: {{ raw_count - phrases|length }}</small>{% endif %}
   </label>
-  <label title="Оценка уникальной аудитории по Чапмену (IP+UA, capture-recapture) по дням — по всем сайтам, реклама с ключами + весь поиск, за последние 60 дней">
+  <label title="Оценка уникальной аудитории по Чапмену (IP+UA, capture-recapture) помесячно — по всем сайтам, реклама с ключами + весь поиск; для сравнения с помесячным спросом Wordstat">
     <input type="checkbox" name="aud" value="1" {% if aud %}checked{% endif %} onchange="this.form.submit()">
-    Аудитория по дням (Чапмен, IP+UA) — отдельным графиком ниже
+    Аудитория по месяцам (Чапмен, IP+UA) — отдельным графиком ниже, для сравнения
   </label>
 </form>
 
@@ -185,15 +185,17 @@
 
 {% if aud %}
 <article>
-  <header>Аудитория по дням <small>— Чапмен (IP+UA), все сайты, реклама с ключами + весь поиск{% if aud_range %}, {{ aud_range[0] }}…{{ aud_range[1] }}{% endif %}</small></header>
+  <header>Аудитория по месяцам <small>— Чапмен (IP+UA), все сайты, реклама с ключами + весь поиск{% if aud_range %}, {{ aud_range[0] }}…{{ aud_range[1] }}{% endif %}</small></header>
   {% if aud_days %}
   <canvas id="auddemand" height="100"></canvas>
-  <small>Оценка всей аудитории за окно ≈ {{ aud_est|numfmt if aud_est else '—' }}; типичный день ≈
-    {{ aud_median|numfmt if aud_median else '—' }}. Метод повторного отлова по пересечению сайтов за день —
-    подробности и оговорки на вкладке «Аудитория». Это оценка уникальных людей, а не число визитов/запросов.</small>
+  <small>Оценка всей аудитории за окно ≈ {{ aud_est|numfmt if aud_est else '—' }}; типичный месяц ≈
+    {{ aud_median|numfmt if aud_median else '—' }}. Это оценка уникальных <strong>людей</strong> (не визитов/запросов),
+    для сравнения с помесячным спросом Wordstat выше. Метод повторного отлова по пересечению сайтов —
+    подробности и оговорки на вкладке «Аудитория»; за месяц популяция не «закрыта», поэтому месячная оценка
+    завышена — годится для тренда/сравнения, не как точное число.</small>
   {% else %}
-  <p><small>Недостаточно данных для дневной оценки: нужно ≥2 сайта с пересекающейся аудиторией и визиты с IP
-    (поле <code>ym:s:ipAddress</code>) за последние 60 дней.</small></p>
+  <p><small>Недостаточно данных для оценки: нужно ≥2 сайта с пересекающейся аудиторией и визиты с IP
+    (поле <code>ym:s:ipAddress</code>) за период.</small></p>
   {% endif %}
 </article>
 {% endif %}
@@ -235,7 +237,7 @@
   new Chart(document.getElementById('auddemand'), {
     type: 'line',
     data: {
-      labels: adays.map(d => d.date),
+      labels: adays.map(d => { const [y, m] = d.date.split('-'); return m + '.' + y; }),
       datasets: [
         {label: 'Оценка аудитории (Чапмен)', data: adays.map(d => d.estimate),
          borderColor: '#b8902f', backgroundColor: 'rgba(184,144,47,.15)', fill: true,

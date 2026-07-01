@@ -110,8 +110,14 @@ def schnabel(sets: list[set]):
 
 
 def estimate(db: Session, site_ids, dr: DateRange, source="ad_kw_search", keywords=None,
-             mode="ip_ua") -> dict:
-    """Собрать per-day и period-level оценки уникальной аудитории по выбранным сайтам."""
+             mode="ip_ua", bucket="day") -> dict:
+    """Собрать per-bucket (день/месяц) и period-level оценки уникальной аудитории.
+
+    ``bucket`` = "day" (по умолч.) или "month" — гранулярность ряда ``days`` (для
+    сравнения помесячно с Wordstat). Оговорка: за месяц популяция не «закрыта»
+    (люди приходят/уходят), поэтому месячная оценка завышена относительно дневной —
+    годится для тренда/сравнения, не как точное число.
+    """
     site_ids = [int(s) for s in site_ids]
     needles = [k.strip().lower() for k in (keywords or []) if k and k.strip()]
     use_ua = mode != "ip"
@@ -121,8 +127,8 @@ def estimate(db: Session, site_ids, dr: DateRange, source="ad_kw_search", keywor
                Visit.start_url, Visit.referer, Visit.extra).where(
         Visit.site_id.in_(site_ids), Visit.date >= dr.start, Visit.date <= dr.end)
 
-    per_day: dict = defaultdict(lambda: defaultdict(set))   # date -> site_id -> {keys}
-    per_site: dict = defaultdict(set)                        # site_id -> {keys over period}
+    per_bucket: dict = defaultdict(lambda: defaultdict(set))  # bucket(date) -> site_id -> {keys}
+    per_site: dict = defaultdict(set)                          # site_id -> {keys over period}
     total = matched = with_ip = 0
     for (sid, d, ip, dev, os_, br, traffic, adv, search, su, ref, extra) in db.execute(q):
         total += 1
@@ -137,15 +143,15 @@ def estimate(db: Session, site_ids, dr: DateRange, source="ad_kw_search", keywor
         with_ip += 1
         key = f"{ip}#{dev or ''}|{os_ or ''}|{br or ''}" if use_ua else ip
         if d is not None:
-            per_day[d][sid].add(key)
+            per_bucket[d.replace(day=1) if bucket == "month" else d][sid].add(key)
         per_site[sid].add(key)
 
-    # --- per-day: наблюдённое объединение + оценка Шнабеля по сайтам этого дня ---
+    # --- по дням/месяцам: наблюдённое объединение + оценка Шнабеля по сайтам бакета ---
     days = []
     daily_ests = []
     all_keys: set = set()
-    for d in sorted(per_day):
-        sitesets = [per_day[d][sid] for sid in site_ids if per_day[d][sid]]
+    for d in sorted(per_bucket):
+        sitesets = [per_bucket[d][sid] for sid in site_ids if per_bucket[d][sid]]
         union: set = set().union(*sitesets) if sitesets else set()
         all_keys |= union
         est = schnabel(sitesets) if len(sitesets) >= 2 else None

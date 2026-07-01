@@ -85,6 +85,31 @@ def test_estimate_two_sites_overlap():
         db.close()
 
 
+def test_monthly_bucket_groups_by_month():
+    db = SessionLocal()
+    try:
+        a = _mksite(db, "https://a.ru/")
+        b = _mksite(db, "https://b.ru/")
+        # same visitors on two different days of June -> one MONTH bucket
+        for day in (5, 20):
+            for n in range(1, 7):
+                db.add(_visit(a, f"a{day}{n}", f"10.0.0.{n}", "ad", day=day))
+            for n in range(4, 10):
+                db.add(_visit(b, f"b{day}{n}", f"10.0.0.{n}", "ad", day=day))
+        db.commit()
+        dr = DateRange(start=dt.date(2026, 6, 1), end=dt.date(2026, 6, 30))
+        by_day = A.estimate(db, [a, b], dr, bucket="day")
+        by_month = A.estimate(db, [a, b], dr, bucket="month")
+        assert len(by_day["days"]) == 2      # two calendar days
+        assert len(by_month["days"]) == 1    # collapsed into one month
+        mb = by_month["days"][0]
+        assert mb["date"] == "2026-06-01"    # month-floor
+        assert mb["observed"] == 9           # union of ips 1..9 over the month
+        assert mb["estimate"] is not None
+    finally:
+        db.close()
+
+
 def test_ip_ua_distinguishes_shared_ip():
     db = SessionLocal()
     try:

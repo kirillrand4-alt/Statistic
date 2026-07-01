@@ -1779,7 +1779,8 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
         mode = "sep"
         plot = [p for p in phrases if p["query"] in chosen] or phrases[:8]
 
-    # optional: daily audience estimate (Chapman/IP+UA) across ALL sites, last 60 days
+    # optional: MONTHLY audience estimate (Chapman/IP+UA) across ALL sites, to compare
+    # with the (monthly) Wordstat demand. Window = Wordstat period, capped to ~14 months.
     aud_days = aud_est = aud_median = aud_range = None
     if aud:
         from datetime import timedelta
@@ -1789,12 +1790,13 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
         aud_sites = [x["id"] for x in A.sites_with_visits(db)]
         if len(aud_sites) >= 2:
             a_end = date.today()
-            a_start = a_end - timedelta(days=60)
+            floor = a_end - timedelta(days=430)  # ~14 месяцев (визиты Метрики — свежие)
+            a_start = max(d_start, floor) if d_start else floor
             res = A.estimate(db, aud_sites, DateRange(start=a_start, end=a_end),
-                             source="ad_kw_search", mode="ip_ua")
+                             source="ad_kw_search", mode="ip_ua", bucket="month")
             aud_days = res["days"]
             aud_est, aud_median = res["period_estimate"], res["daily_median"]
-            aud_range = (a_start.isoformat(), a_end.isoformat())
+            aud_range = (a_start.strftime("%Y-%m"), a_end.strftime("%Y-%m"))
 
     return templates.TemplateResponse(request, "demand.html", {
         "request": request, "has_data": demand.has_data(db), "msg": msg,
