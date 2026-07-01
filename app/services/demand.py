@@ -17,12 +17,12 @@ from app.db.models import AppSetting, WordstatHistory as W, WordstatSeries as WS
 KEYLIST_SETTING = "wordstat_keylist"  # newline-joined uploaded phrases (original case)
 
 
-def _src(granularity="month"):
-    """Return (Model, base_conditions) for a granularity: month → wordstat_history,
-    day/week → wordstat_series filtered by granularity."""
+def _src(granularity="month", match="broad"):
+    """Return (Model, base_conditions) for a granularity + frequency match type:
+    month → wordstat_history, day/week → wordstat_series (filtered by granularity)."""
     if granularity in ("day", "week"):
-        return WS, [WS.granularity == granularity]
-    return W, []
+        return WS, [WS.granularity == granularity, WS.match_type == match]
+    return W, [W.match_type == match]
 
 
 def norm_key(s: str) -> str:
@@ -159,20 +159,30 @@ def aggregate(label: str, phrases) -> dict | None:
     }
 
 
-def regions(db: Session, granularity="month") -> list[str]:
-    M, base = _src(granularity)
+def regions(db: Session, granularity="month", match="broad") -> list[str]:
+    M, base = _src(granularity, match)
     stmt = select(distinct(M.region)).order_by(M.region)
     for c in base:
         stmt = stmt.where(c)
     return [r for (r,) in db.execute(stmt).all() if r]
 
 
-def devices(db: Session, granularity="month") -> list[str]:
-    M, base = _src(granularity)
+def devices(db: Session, granularity="month", match="broad") -> list[str]:
+    M, base = _src(granularity, match)
     stmt = select(distinct(M.device)).order_by(M.device)
     for c in base:
         stmt = stmt.where(c)
     return [r for (r,) in db.execute(stmt).all() if r]
+
+
+def match_types(db: Session, granularity="month") -> list[str]:
+    """Which frequency match types have data (broad/phrase/exact/order), in a stable order."""
+    M = WS if granularity in ("day", "week") else W
+    stmt = select(distinct(M.match_type))
+    if granularity in ("day", "week"):
+        stmt = stmt.where(M.granularity == granularity)
+    present = {m for (m,) in db.execute(stmt).all() if m}
+    return [m for m in ("broad", "phrase", "exact", "order") if m in present]
 
 
 def _scope(stmt, M, base, region, device, start=None, end=None):
@@ -189,17 +199,17 @@ def _scope(stmt, M, base, region, device, start=None, end=None):
     return stmt
 
 
-def bounds(db: Session, region=None, device=None,
-           granularity="month") -> tuple[date_type | None, date_type | None]:
-    """Earliest/latest point present for the given region/device/granularity."""
-    M, base = _src(granularity)
+def bounds(db: Session, region=None, device=None, granularity="month",
+           match="broad") -> tuple[date_type | None, date_type | None]:
+    """Earliest/latest point present for the given region/device/granularity/match."""
+    M, base = _src(granularity, match)
     lo, hi = db.execute(_scope(select(func.min(M.date), func.max(M.date)), M, base,
                                region, device)).one()
     return lo, hi
 
 
-def has_data(db: Session, granularity="month") -> bool:
-    M, base = _src(granularity)
+def has_data(db: Session, granularity="month", match="broad") -> bool:
+    M, base = _src(granularity, match)
     stmt = select(M.id).limit(1)
     for c in base:
         stmt = stmt.where(c)
@@ -207,7 +217,7 @@ def has_data(db: Session, granularity="month") -> bool:
 
 
 def load(db: Session, region=None, device=None, start=None, end=None, search=None,
-         keyset=None, granularity="month"):
+         keyset=None, granularity="month", match="broad"):
     """Return ``(points, phrases)``.
 
     ``points`` — отсортированные ISO-метки периода (ось X: месяцы/недели/дни).
@@ -216,7 +226,7 @@ def load(db: Session, region=None, device=None, start=None, end=None, search=Non
     ``keyset`` — если задан (множество нормализованных фраз), оставляем только их.
     ``granularity`` — month | week | day (источник — соотв. таблица).
     """
-    M, base = _src(granularity)
+    M, base = _src(granularity, match)
     stmt = _scope(select(M.query, M.date, M.value), M, base, region, device, start, end)
     if search:
         stmt = stmt.where(M.query.ilike(f"%{search}%"))

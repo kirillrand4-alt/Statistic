@@ -15,6 +15,11 @@ _ADDED_COLUMNS = [
     ("visit", "extra", "TEXT"),
     ("project", "favorite_goals", "TEXT"),
     ("serp_result", "snippet", "TEXT"),
+    # Wordstat frequency match type (broad | phrase | exact | order); existing rows
+    # were broad-match. Uniqueness stays via a match-aware query_hash, so no need to
+    # touch the unique constraint — this column is just a label for filter/display.
+    ("wordstat_history", "match_type", "VARCHAR(8) DEFAULT 'broad'"),
+    ("wordstat_series", "match_type", "VARCHAR(8) DEFAULT 'broad'"),
 ]
 
 

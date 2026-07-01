@@ -159,22 +159,21 @@ def _month_floor(ddmmyyyy: str):
     return datetime.strptime(ddmmyyyy, "%d.%m.%Y").date().replace(day=1)
 
 
-def _done_hashes(db, region, dev, lo, hi, graph="month") -> set:
-    """query_hash set already having ANY data for region/device/granularity within the
-    window — these phrases are fully collected (saved atomically), so a resumed run can
-    skip them. Monthly uses wordstat_history; day/week use wordstat_series."""
+def _done_hashes(db, region, dev, lo, hi, graph="month", match="broad") -> set:
+    """query_hash set already having ANY data for region/device/granularity/match within
+    the window — these phrases are fully collected (saved atomically), so a resumed run
+    can skip them. Monthly uses wordstat_history; day/week use wordstat_series."""
     from sqlalchemy import and_, distinct, select
 
     if graph == "month":
         from app.db.models import WordstatHistory as W
-        cond = and_(W.region == region, W.device == dev, W.date >= lo, W.date <= hi)
-        col = W.query_hash
+        cond = and_(W.region == region, W.device == dev, W.match_type == match,
+                    W.date >= lo, W.date <= hi)
     else:
         from app.db.models import WordstatSeries as W
         cond = and_(W.region == region, W.device == dev, W.granularity == graph,
-                    W.date >= lo, W.date <= hi)
-        col = W.query_hash
-    rows = db.execute(select(distinct(col)).where(cond)).all()
+                    W.match_type == match, W.date >= lo, W.date <= hi)
+    rows = db.execute(select(distinct(W.query_hash)).where(cond)).all()
     return {h for (h,) in rows}
 
 
@@ -273,6 +272,22 @@ def _parse_graph(resp):
         return "error", f"структура ответа: {str(e)[:80]}"
 
 
+def _match_query(phrase: str, match: str = "broad") -> str:
+    """Wrap a phrase in the Wordstat operator for a frequency match type:
+    broad — как есть; phrase — «"фраза"»; exact — «"!фраза"» (точные словоформы);
+    order — «"[!фраза]"» (+ фиксированный порядок слов)."""
+    if match == "broad":
+        return phrase
+    words = phrase.split()
+    if match == "phrase":
+        return f'"{phrase}"'
+    if match == "exact":
+        return '"' + " ".join("!" + w for w in words) + '"'
+    if match == "order":
+        return '"[' + " ".join("!" + w for w in words) + ']"'
+    return phrase
+
+
 def _phrase_key(s: str) -> str:
     """Word-order/regcase/ё-insensitive key. Wordstat без операторов игнорирует
     порядок слов, поэтому «винтовой компрессор» = «компрессор винтовой» = один и тот
@@ -282,8 +297,8 @@ def _phrase_key(s: str) -> str:
     return " ".join(sorted(w for w in s.split() if w))
 
 
-def _value_map(db, region, dev) -> dict:
-    """phrase -> tuple of its monthly values (same region/device). Phrases with an
+def _value_map(db, region, dev, match="broad") -> dict:
+    """phrase -> tuple of its monthly values (same region/device/match). Phrases with an
     identical tuple are the same Wordstat query (used as the dedup equivalence)."""
     from sqlalchemy import select
 
@@ -291,21 +306,22 @@ def _value_map(db, region, dev) -> dict:
     m: dict = {}
     for q, _d, v in db.execute(
             select(W.query, W.date, W.value)
-            .where(W.region == region, W.device == dev)
+            .where(W.region == region, W.device == dev, W.match_type == match)
             .order_by(W.query, W.date)).all():
         m.setdefault(q, []).append(int(v or 0))
     return {q: tuple(vals) for q, vals in m.items()}
 
 
-def _series_rows(db, region, dev, granularity) -> dict:
-    """phrase -> [(date, value), …] already collected for a day/week granularity."""
+def _series_rows(db, region, dev, granularity, match="broad") -> dict:
+    """phrase -> [(date, value), …] already collected for a day/week granularity/match."""
     from sqlalchemy import select
 
     from app.db.models import WordstatSeries as WS
     out: dict = {}
     for q, d, v in db.execute(
             select(WS.query, WS.date, WS.value)
-            .where(WS.region == region, WS.device == dev, WS.granularity == granularity)
+            .where(WS.region == region, WS.device == dev, WS.granularity == granularity,
+                   WS.match_type == match)
             .order_by(WS.query, WS.date)).all():
         out.setdefault(q, []).append((d, int(v or 0)))
     return out
@@ -325,7 +341,7 @@ def _sanitize_phrase(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[/:;\\]+", " ", s or "")).strip()
 
 
-def _save(db, phrase, region, device, rows, graph="month") -> int:
+def _save(db, phrase, region, device, rows, graph="month", match="broad") -> int:
     from app.db.models import WordstatHistory, WordstatSeries
     from app.utils import query_hash
     dialect = db.get_bind().dialect.name
@@ -336,23 +352,28 @@ def _save(db, phrase, region, device, rows, graph="month") -> int:
     else:  # pragma: no cover
         raise RuntimeError(f"Unsupported dialect {dialect!r}")
     dev = "all" if device == "desktop,phone,tablet" else device
-    qh = query_hash(phrase)
+    # match-aware hash -> different match types are distinct rows without touching the
+    # unique constraint; the stored query stays clean for display
+    qh = query_hash(_match_query(phrase, match))
     if not rows:
         return 0
-    if graph == "month":  # monthly -> historic table (unchanged)
+    if graph == "month":  # monthly -> historic table
         vals = [{"query": phrase, "query_hash": qh, "region": region, "device": dev,
-                 "date": d, "value": v} for d, v in rows]
+                 "match_type": match, "date": d, "value": v} for d, v in rows]
         stmt = insert(WordstatHistory).values(vals)
         stmt = stmt.on_conflict_do_update(
             index_elements=["query_hash", "region", "device", "date"],
-            set_={"value": stmt.excluded.value, "query": stmt.excluded.query})
+            set_={"value": stmt.excluded.value, "query": stmt.excluded.query,
+                  "match_type": stmt.excluded.match_type})
     else:  # day / week -> fine-grained table (granularity keeps them separate)
         vals = [{"query": phrase, "query_hash": qh, "region": region, "device": dev,
-                 "granularity": graph, "date": d, "value": v} for d, v in rows]
+                 "granularity": graph, "match_type": match, "date": d, "value": v}
+                for d, v in rows]
         stmt = insert(WordstatSeries).values(vals)
         stmt = stmt.on_conflict_do_update(
             index_elements=["query_hash", "region", "device", "granularity", "date"],
-            set_={"value": stmt.excluded.value, "query": stmt.excluded.query})
+            set_={"value": stmt.excluded.value, "query": stmt.excluded.query,
+                  "match_type": stmt.excluded.match_type})
     db.execute(stmt)
     db.commit()
     return len(vals)
@@ -481,7 +502,8 @@ def _solve_captcha(page, mode: str = "manual") -> None:
 
 
 def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
-                captcha="manual", skip_done=False, graph="month", dedup=False) -> None:
+                captcha="manual", skip_done=False, graph="month", dedup=False,
+                match="broad") -> None:
     import random
     from datetime import datetime
 
@@ -509,9 +531,9 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
         else:
             lo = datetime.strptime(d_from, "%d.%m.%Y").date()
             hi = datetime.strptime(d_to, "%d.%m.%Y").date()
-        done = _done_hashes(db, region, dev, lo, hi, graph)
+        done = _done_hashes(db, region, dev, lo, hi, graph, match)
         before = len(phrases)
-        phrases = [ph for ph in phrases if query_hash(ph) not in done]
+        phrases = [ph for ph in phrases if query_hash(_match_query(ph, match)) not in done]
         print(f"Возобновление: уже собрано {before - len(phrases)}, осталось {len(phrases)}.",
               flush=True)
         if not phrases:
@@ -530,9 +552,9 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
         return _eq_key(ph, value_key)
 
     if dedup:
-        value_key = _value_map(db, region, dev)
+        value_key = _value_map(db, region, dev, match)
         if graph != "month":  # pre-seed already-collected day/week data (resume + copy)
-            for q, rows in _series_rows(db, region, dev, graph).items():
+            for q, rows in _series_rows(db, region, dev, graph, match).items():
                 eq_rows.setdefault(eqkey(q), rows)
         uniq = len({eqkey(ph) for ph in phrases})
         with_ref = sum(1 for ph in phrases if ph in value_key)
@@ -540,8 +562,8 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
               f"(дублей ~{len(phrases) - uniq} скопируем без запроса). "
               f"С месячным эталоном — {with_ref}, уже готовых групп — {len(eq_rows)}.", flush=True)
 
-    print(f"Сбор Wordstat ({graph}): {len(phrases)} фраз, регион={region}, устройство={dev}, "
-          f"период {d_from}–{d_to}, пауза ~{delay}с/запрос.", flush=True)
+    print(f"Сбор Wordstat ({graph}/{match}): {len(phrases)} фраз, регион={region}, "
+          f"устройство={dev}, период {d_from}–{d_to}, пауза ~{delay}с/запрос.", flush=True)
     ok = empty = fail = dup = 0
     failed: list[str] = []
     err_dumps = 0
@@ -580,13 +602,13 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
             if dedup and eqkey(phrase) in eq_rows:  # same query already known — copy, no request
                 dup += 1
                 rep = eq_rows[eqkey(phrase)]
-                n = _save(db, phrase, region, device, rep, graph) if rep else 0
+                n = _save(db, phrase, region, device, rep, graph, match) if rep else 0
                 print(f"  [{i}/{len(phrases)}] «{phrase}» — дубль, скопировано {n} точек · "
                       f"ok={ok} empty={empty} dup={dup} fail={fail}", flush=True)
                 continue
-            kind, data, last_txt, status = _fetch(phrase)
+            kind, data, last_txt, status = _fetch(_match_query(phrase, match))
             used = phrase
-            if kind == "error":  # fallback: Wordstat давится на пунктуации (/, : …)
+            if kind == "error" and match == "broad":  # sanitize только для широкого (в операторах пунктуация нужна)
                 clean = _sanitize_phrase(phrase)
                 if clean and clean != phrase:
                     k2, d2, t2, s2 = _fetch(clean)
@@ -600,7 +622,7 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
             eta = (elapsed / i) * (len(phrases) - i)
             if kind == "ok":
                 ok += 1
-                n = _save(db, phrase, region, device, data, graph)  # под ИСХОДНОЙ фразой
+                n = _save(db, phrase, region, device, data, graph, match)  # под ИСХОДНОЙ фразой
                 if dedup:
                     eq_rows[eqkey(phrase)] = data  # representative — copy to its dupes later
                 note = f"{n} точек" + (" (очищено)" if used != phrase else "")
@@ -740,6 +762,10 @@ def main() -> None:
                     help="провайдер решателя капч (с --set-captcha; по умолч. capmonster)")
     ap.add_argument("--graph", choices=("month", "week", "day"), default="month",
                     help="гранулярность: month (по умолч.) / week / day (по дням)")
+    ap.add_argument("--match", choices=("broad", "phrase", "exact", "order", "all"),
+                    default="broad",
+                    help="тип частотности: broad — как есть; phrase — «\"фраза\"»; "
+                         "exact — «\"!фраза\"»; order — «\"[!фраза]\"»; all — все 4")
     ap.add_argument("--dedup", action="store_true",
                     help="не запрашивать дубли: фразы с одинаковым месячным рядом — один "
                          "запрос Wordstat, остальным копируем данные (экономит запросы/капчу)")
@@ -774,8 +800,12 @@ def main() -> None:
             phrases = _db_phrases(a.site)
         else:
             phrases = []
-        cmd_collect(phrases, a.region, a.device, a.d_from, a.d_to, a.delay, a.limit,
-                    a.captcha, a.skip_done, a.graph, a.dedup)
+        matches = ("broad", "phrase", "exact", "order") if a.match == "all" else (a.match,)
+        for mt in matches:
+            if len(matches) > 1:
+                print(f"\n===== Частотность: {mt} =====", flush=True)
+            cmd_collect(phrases, a.region, a.device, a.d_from, a.d_to, a.delay, a.limit,
+                        a.captcha, a.skip_done, a.graph, a.dedup, mt)
     else:
         ap.print_help()
 

@@ -155,6 +155,33 @@ def test_value_equivalence_dedup():
         db.close()
 
 
+def test_match_query_operators():
+    p = "винтовой компрессор"
+    assert ws._match_query(p, "broad") == "винтовой компрессор"
+    assert ws._match_query(p, "phrase") == '"винтовой компрессор"'
+    assert ws._match_query(p, "exact") == '"!винтовой !компрессор"'
+    assert ws._match_query(p, "order") == '"[!винтовой !компрессор]"'
+
+
+def test_save_match_types_are_distinct_rows():
+    import datetime as _dt
+
+    from app.db.base import SessionLocal
+    from app.db.models import WordstatHistory
+    db = SessionLocal()
+    try:
+        for m, val in [("broad", 300), ("phrase", 120), ("exact", 90), ("order", 50)]:
+            ws._save(db, "винтовой компрессор", "all", "all",
+                     [(_dt.date(2025, 1, 1), val)], "month", m)
+        rows = db.query(WordstatHistory).all()
+        assert len(rows) == 4  # same phrase+date, 4 match types -> 4 rows (no collision)
+        assert {r.match_type: r.value for r in rows} == {
+            "broad": 300, "phrase": 120, "exact": 90, "order": 50}
+        assert all(r.query == "винтовой компрессор" for r in rows)  # stored query stays clean
+    finally:
+        db.close()
+
+
 def test_align_week_to_monday_sunday():
     # Wordstat weekly needs Monday start / Sunday end (matches the UI's real request)
     assert ws._align_week("03.07.2024", "30.06.2026") == ("01.07.2024", "28.06.2026")

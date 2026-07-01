@@ -450,6 +450,7 @@ class WordstatHistory(Base):
     query_hash: Mapped[str] = mapped_column(String(40), index=True)
     region: Mapped[str] = mapped_column(String(48), default="all")
     device: Mapped[str] = mapped_column(String(48), default="all")
+    match_type: Mapped[str] = mapped_column(String(8), default="broad")  # broad|phrase|exact|order
     date: Mapped[date_type] = mapped_column(Date)   # first day of the month
     value: Mapped[int] = mapped_column(Integer, default=0)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -474,6 +475,7 @@ class WordstatSeries(Base):
     region: Mapped[str] = mapped_column(String(48), default="all")
     device: Mapped[str] = mapped_column(String(48), default="all")
     granularity: Mapped[str] = mapped_column(String(8), default="day")  # day | week
+    match_type: Mapped[str] = mapped_column(String(8), default="broad")  # broad|phrase|exact|order
     date: Mapped[date_type] = mapped_column(Date)
     value: Mapped[int] = mapped_column(Integer, default=0)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
