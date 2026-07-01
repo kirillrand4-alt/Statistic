@@ -69,6 +69,18 @@ def test_daily_skips_null_value_points():
     assert rows == [(dt.date(2026, 6, 1), 153), (dt.date(2026, 6, 2), 148)]
 
 
+def test_weekly_points_use_x_field():
+    # real Wordstat WEEK format: date is in "x" (not "day"), month/year null
+    body = {"graph": {"images": {"timeSeries": {"preparedValues": {"absolute": [
+        {"month": None, "x": "2024-07-01", "y": 1039},   # week start (Monday)
+        {"month": None, "x": "2024-07-08", "y": 1124},
+        {"month": None, "x": "2024-07-15", "y": None},   # gap -> skipped
+    ]}}}}}
+    kind, rows = ws._parse_graph(_Resp(body))
+    assert kind == "ok"
+    assert rows == [(dt.date(2024, 7, 1), 1039), (dt.date(2024, 7, 8), 1124)]
+
+
 def test_monthly_points_still_day_1():
     body = _graph([{"year": 2025, "month": 0, "y": 100}])  # no 'day' -> defaults to 1
     _, rows = ws._parse_graph(_Resp(body))

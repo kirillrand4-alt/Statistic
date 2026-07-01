@@ -253,8 +253,8 @@ def _parse_graph(resp):
             v = p.get("y", p.get("value"))
             if v is None:
                 continue
-            day = p.get("day")
-            if isinstance(day, str) and "-" in day:       # day / week: ISO date string
+            day = p.get("day") or p.get("x")               # day: "day"; week: "x"
+            if isinstance(day, str) and "-" in day:        # ISO date string (day/week start)
                 try:
                     d = date.fromisoformat(day[:10])
                 except ValueError:
