@@ -698,6 +698,40 @@ def cmd_probe(phrase, region, device, graph) -> None:
     print(f"\nМаксимальное окно ({graph}): ~{best} дней (~{best // 30} мес; дальше — HTTP 400).")
 
 
+def cmd_freqtest(phrase, region, device) -> None:
+    """Send all 4 match operators for one phrase (month) and print what Wordstat
+    returns — so we can see if quotes/!/[] actually change the frequency."""
+    from urllib.parse import quote
+
+    d_from, d_to = _default_range("month")
+    print(f"Проверка операторов для «{phrase}» (регион={region}), период {d_from}–{d_to}:", flush=True)
+    with _pw()() as p:
+        ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=False, viewport=VIEWPORT)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.goto(WORDSTAT_URL, wait_until="domcontentloaded", timeout=60000)
+        for match in ("broad", "phrase", "exact", "order"):
+            op = _match_query(phrase, match)
+            ref = f"https://wordstat.yandex.ru/?region={region}&view=graph&words={quote(op)}"
+            resp = ctx.request.post(
+                GRAPH_URL, data=json.dumps(_payload(op, region, device, d_from, d_to, "month")),
+                headers={"content-type": "application/json", "referer": ref}, timeout=45000)
+            kind, rows = _parse_graph(resp)
+            if kind == "captcha":
+                _solve_captcha(page, "manual")
+                resp = ctx.request.post(
+                    GRAPH_URL, data=json.dumps(_payload(op, region, device, d_from, d_to, "month")),
+                    headers={"content-type": "application/json", "referer": ref}, timeout=45000)
+                kind, rows = _parse_graph(resp)
+            last = rows[-1][1] if rows else 0
+            total = sum(v for _, v in rows) if rows else 0
+            print(f"  {match:6} searchValue={op!r:45} → {kind} (HTTP {resp.status}), "
+                  f"точек {len(rows) if rows else 0}, последнее {last}, сумма {total}", flush=True)
+            page.wait_for_timeout(1500)
+        ctx.close()
+    print("\nЕсли «последнее/сумма» ОТЛИЧАЮТСЯ по строкам — операторы работают. "
+          "Если одинаковые или везде 0 — Wordstat их игнорирует/не принимает.")
+
+
 def cmd_status() -> None:
     """Show what's already in wordstat_history (so you can verify a run)."""
     from app.db.base import SessionLocal, init_db
@@ -773,6 +807,8 @@ def main() -> None:
     ap.add_argument("--probe", action="store_true",
                     help="найти макс. окно Wordstat для гранулярности из --graph "
                          "(перебор окон на одной фразе)")
+    ap.add_argument("--freqtest", metavar="PHRASE",
+                    help="проверить, применяет ли Wordstat операторы: шлёт все 4 формы одной фразы")
     a = ap.parse_args()
     if a.set_captcha or a.captcha_provider:
         from app.db.base import init_db
@@ -784,6 +820,8 @@ def main() -> None:
         return
     if a.login:
         cmd_login()
+    elif a.freqtest:
+        cmd_freqtest(a.freqtest, a.region, a.device)
     elif a.probe:
         src = (_read_phrases(a.phrases) if a.phrases else
                (_list_phrases() if a.from_list else _db_phrases(a.site) if a.from_db else []))
