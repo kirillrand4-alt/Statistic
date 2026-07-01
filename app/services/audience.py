@@ -26,29 +26,6 @@ from app.providers.base import DateRange
 from app.utils import domain_of
 
 
-# --- именованные базы ключевых слов (для вкладок «Аудитория <бренд>») --------
-def _kw_key(base: str) -> str:
-    return f"audience_kw:{(base or '').strip().lower()}"
-
-
-def get_kw_base(db: Session, base: str) -> str:
-    from app.db.models import AppSetting
-    row = db.get(AppSetting, _kw_key(base))
-    return row.value if row and row.value else ""
-
-
-def set_kw_base(db: Session, base: str, raw: str) -> None:
-    from app.db.models import AppSetting
-    key = _kw_key(base)
-    row = db.get(AppSetting, key)
-    val = (raw or "").strip()
-    if row is None:
-        db.add(AppSetting(key=key, value=val))
-    else:
-        row.value = val
-    db.commit()
-
-
 def sites_with_visits(db: Session) -> list[dict]:
     """Сайты, по которым есть визиты (для выбора в интерфейсе)."""
     from sqlalchemy import func

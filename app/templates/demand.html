@@ -2,13 +2,14 @@
 {% block title %}Спрос · SEO Статистика{% endblock %}
 {% block content %}
 {% set gran_label = {'month': 'по месяцам', 'week': 'по неделям', 'day': 'по дням'} %}
-<h2>Спрос <small>— частотность Wordstat, {{ gran_label[gran] }}</small></h2>
+<h2>Спрос {{ base }} <small>— частотность Wordstat, {{ gran_label[gran] }}</small></h2>
 {% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
 
 {% set match_label = {'broad': 'широкая', 'phrase': '"фраза"', 'exact': '"!фраза"', 'order': '"[!фраза]"'} %}
 <form method="get" action="{{ base_path }}/demand" class="grid" style="margin-bottom:.6rem">
   <input type="hidden" name="list" value="{{ list_state }}">
   <input type="hidden" name="dedup" value="{{ 1 if dedup else 0 }}">
+  <input type="hidden" name="base" value="{{ base }}">
   <input type="hidden" name="region" value="{{ cur_region }}">
   <input type="hidden" name="device" value="{{ cur_device }}">
   <label>Детализация графика
@@ -51,6 +52,7 @@
       не собрано {{ missing|length }}{% endif %}{% endif %}</small>{% endif %}
   </header>
   <form method="post" action="{{ base_path }}/ui/demand/list" enctype="multipart/form-data">
+    <input type="hidden" name="base" value="{{ base }}">
     <div class="grid">
       <label>Ключи — по одному в строке <small>(чтобы <strong>удалить</strong> фразы — сотрите строки и нажмите «Сохранить»)</small>
         <textarea name="urls_text" rows="6" placeholder="компрессор купить&#10;винтовой компрессор&#10;ресивер 500 л">{{ keylist|join('\n') }}</textarea>
@@ -65,16 +67,17 @@
   <div class="grid">
     {% if has_data %}
     {% if use_list %}
-    <a href="{{ base_path }}/demand?list=off&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}"
+    <a href="{{ base_path }}/demand?base={{ base }}&list=off&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}"
        role="button" class="secondary outline">Показать все ключи</a>
     {% else %}
-    <a href="{{ base_path }}/demand?list=on&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}"
+    <a href="{{ base_path }}/demand?base={{ base }}&list=on&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}"
        role="button" class="secondary outline">Показать только список</a>
     {% endif %}
     {% endif %}
     <form method="post" action="{{ base_path }}/ui/demand/list/clear"
-          onsubmit="return confirm('Очистить сохранённый список ключей?');">
-      <button type="submit" class="secondary outline">Очистить список</button>
+          onsubmit="return confirm('Очистить сохранённую базу ключей?');">
+      <input type="hidden" name="base" value="{{ base }}">
+      <button type="submit" class="secondary outline">Очистить базу</button>
     </form>
   </div>
   {% if missing %}
@@ -96,6 +99,7 @@
   <input type="hidden" name="aud" value="{{ 1 if aud else 0 }}">
   <input type="hidden" name="gran" value="{{ gran }}">
   <input type="hidden" name="match" value="{{ match }}">
+  <input type="hidden" name="base" value="{{ base }}">
   <label>Регион
     <select name="region" onchange="this.form.submit()">
       {% for r in regions %}<option value="{{ r }}" {% if r==cur_region %}selected{% endif %}>{{ r }}</option>{% endfor %}
@@ -116,6 +120,7 @@
   <input type="hidden" name="mode" value="{{ mode }}">
   <input type="hidden" name="gran" value="{{ gran }}">
   <input type="hidden" name="match" value="{{ match }}">
+  <input type="hidden" name="base" value="{{ base }}">
   <input type="hidden" name="region" value="{{ cur_region }}">
   <input type="hidden" name="device" value="{{ cur_device }}">
   <input type="hidden" name="start" value="{{ m_start }}">
@@ -147,7 +152,7 @@
 <article>
   <header>
     Фразы: {{ phrases|length }}{% if dedup and raw_count > phrases|length %} <small>(свёрнуто дублей: {{ raw_count - phrases|length }})</small>{% endif %}
-    <a href="{{ base_path }}/demand/export?list={{ list_state }}&dedup={{ 1 if dedup else 0 }}&gran={{ gran }}&match={{ match }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&search={{ search|urlencode }}"
+    <a href="{{ base_path }}/demand/export?base={{ base }}&list={{ list_state }}&dedup={{ 1 if dedup else 0 }}&gran={{ gran }}&match={{ match }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&search={{ search|urlencode }}"
        role="button" class="secondary outline" style="float:right">⬇ Экспорт CSV</a>
   </header>
   {% if phrases %}
@@ -157,6 +162,7 @@
     <input type="hidden" name="aud" value="{{ 1 if aud else 0 }}">
     <input type="hidden" name="gran" value="{{ gran }}">
   <input type="hidden" name="match" value="{{ match }}">
+  <input type="hidden" name="base" value="{{ base }}">
     <input type="hidden" name="region" value="{{ cur_region }}">
     <input type="hidden" name="device" value="{{ cur_device }}">
     <input type="hidden" name="start" value="{{ m_start }}">
@@ -200,7 +206,7 @@
           <td>{{ p.max|numfmt }}</td>
           <td>{{ p.last|numfmt }}</td>
           <td>{% if p.change is none %}—{% elif p.change >= 0 %}<ins>+{{ p.change }}%</ins>{% else %}<del>{{ p.change }}%</del>{% endif %}</td>
-          <td><a href="{{ base_path }}/demand?mode=sep&list={{ list_state }}&dedup={{ 1 if dedup else 0 }}&gran={{ gran }}&match={{ match }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&q={{ p.query|urlencode }}"
+          <td><a href="{{ base_path }}/demand?base={{ base }}&mode=sep&list={{ list_state }}&dedup={{ 1 if dedup else 0 }}&gran={{ gran }}&match={{ match }}&region={{ cur_region }}&device={{ cur_device }}&start={{ m_start }}&end={{ m_end }}&q={{ p.query|urlencode }}"
                  title="Показать график только по этой фразе">📈</a></td>
         </tr>
         {% endfor %}

@@ -19,10 +19,16 @@ KEYLIST_SETTING = "wordstat_keylist"  # newline-joined uploaded phrases (origina
 
 def _src(granularity="month", match="broad"):
     """Return (Model, base_conditions) for a granularity + frequency match type:
-    month → wordstat_history, day/week → wordstat_series (filtered by granularity)."""
-    if granularity in ("day", "week"):
-        return WS, [WS.granularity == granularity, WS.match_type == match]
-    return W, [W.match_type == match]
+    month → wordstat_history, day/week → wordstat_series (filtered by granularity).
+    ``broad`` also matches NULL (rows collected до появления колонки match_type)."""
+    from sqlalchemy import or_
+    M = WS if granularity in ("day", "week") else W
+    base = [M.granularity == granularity] if granularity in ("day", "week") else []
+    if match == "broad":
+        base.append(or_(M.match_type == "broad", M.match_type.is_(None)))
+    else:
+        base.append(M.match_type == match)
+    return M, base
 
 
 def norm_key(s: str) -> str:
@@ -41,34 +47,45 @@ def parse_keylist(raw: str) -> list[str]:
     return out
 
 
-def get_keylist(db: Session) -> list[str]:
-    row = db.get(AppSetting, KEYLIST_SETTING)
+BASES = ["прокомпрессор", "meyer"]  # именованные базы ключей (вкладки Спроса)
+
+
+def _keylist_key(base: str) -> str:
+    """AppSetting-ключ базы. «прокомпрессор» — старый ключ (сохраняет уже
+    загруженный список), остальные — с суффиксом."""
+    b = (base or BASES[0]).strip().lower()
+    return KEYLIST_SETTING if b == BASES[0] else f"{KEYLIST_SETTING}:{b}"
+
+
+def get_keylist(db: Session, base=BASES[0]) -> list[str]:
+    row = db.get(AppSetting, _keylist_key(base))
     return parse_keylist(row.value) if row and row.value else []
 
 
-def set_keylist(db: Session, raw: str) -> list[str]:
+def set_keylist(db: Session, raw: str, base=BASES[0]) -> list[str]:
     phrases = parse_keylist(raw)
-    row = db.get(AppSetting, KEYLIST_SETTING)
+    key = _keylist_key(base)
+    row = db.get(AppSetting, key)
     val = "\n".join(phrases)
     if row is None:
-        db.add(AppSetting(key=KEYLIST_SETTING, value=val))
+        db.add(AppSetting(key=key, value=val))
     else:
         row.value = val
     db.commit()
     return phrases
 
 
-def clear_keylist(db: Session) -> None:
-    row = db.get(AppSetting, KEYLIST_SETTING)
+def clear_keylist(db: Session, base=BASES[0]) -> None:
+    row = db.get(AppSetting, _keylist_key(base))
     if row is not None:
         db.delete(row)
         db.commit()
 
 
-def delete_phrases(db: Session, phrases) -> int:
+def delete_phrases(db: Session, phrases, base=BASES[0]) -> int:
     """Полностью удалить фразы: их собранную историю Wordstat (по всем регионам/
-    устройствам) и запись в загруженном списке. Сопоставление по нормализованной
-    фразе (регистр/ё/пробелы), а не по точному совпадению. Возвращает число фраз."""
+    устройствам, данные общие для баз) и запись в базе ключей ``base``. Сопоставление
+    по нормализованной фразе (регистр/ё/пробелы). Возвращает число фраз."""
     phrases = [p for p in (phrases or []) if p and p.strip()]
     if not phrases:
         return 0
@@ -85,23 +102,24 @@ def delete_phrases(db: Session, phrases) -> int:
         db.execute(delete(W).where(W.query_hash.in_(hashes)))
         db.execute(delete(WS).where(WS.query_hash.in_(hashes)))
         db.commit()
-    kl = get_keylist(db)
+    kl = get_keylist(db, base)
     remaining = [k for k in kl if norm_key(k) not in norms]
     if len(remaining) != len(kl):
         affected |= {norm_key(k) for k in kl if norm_key(k) in norms}
-        set_keylist(db, "\n".join(remaining))
+        set_keylist(db, "\n".join(remaining), base)
     return len(affected)
 
 
 def clear_all(db: Session) -> int:
     """Удалить всю собранную историю Wordstat — месячную и дневную/недельную (и
-    список ключей). Возвращает число удалённых строк."""
+    все базы ключей). Возвращает число удалённых строк."""
     n = (db.execute(select(func.count()).select_from(W)).scalar() or 0)
     n += (db.execute(select(func.count()).select_from(WS)).scalar() or 0)
     db.execute(delete(W))
     db.execute(delete(WS))
     db.commit()
-    clear_keylist(db)
+    for b in BASES:
+        clear_keylist(db, b)
     return n
 
 
@@ -181,7 +199,7 @@ def match_types(db: Session, granularity="month") -> list[str]:
     stmt = select(distinct(M.match_type))
     if granularity in ("day", "week"):
         stmt = stmt.where(M.granularity == granularity)
-    present = {m for (m,) in db.execute(stmt).all() if m}
+    present = {(m or "broad") for (m,) in db.execute(stmt).all()}  # NULL считаем broad
     return [m for m in ("broad", "phrase", "exact", "order") if m in present]
 
 

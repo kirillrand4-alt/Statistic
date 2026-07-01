@@ -1,8 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Аудитория {{ base }} · SEO Статистика{% endblock %}
+{% block title %}Аудитория · SEO Статистика{% endblock %}
 {% block content %}
-<h2>Аудитория {{ base }} <small>— оценка уникальных людей по пересечению сайтов</small></h2>
-{% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
+<h2>Аудитория / охват <small>— оценка уникальных людей по пересечению сайтов</small></h2>
 
 <details>
   <summary><small>Как это считается и насколько можно верить</small></summary>
@@ -31,7 +30,6 @@
   .aud-actions a { font-size:.85rem; }
 </style>
 <form method="get" action="{{ base_path }}/audience">
-  <input type="hidden" name="base" value="{{ base }}">
   <fieldset>
     <legend><strong>Сайты</strong> (аудитория между ними пересекается; нужно ≥2)</legend>
     <div class="aud-actions">
@@ -56,8 +54,8 @@
         <option value="all" {% if source=='all' %}selected{% endif %}>Весь трафик (вкл. прямые — боты)</option>
       </select>
     </label>
-    <label>База ключей «{{ base }}» <small>(через запятую/строку; пусто = все)</small>
-      <textarea name="kw" rows="2" placeholder="компрессор, ресивер…">{{ kw }}</textarea>
+    <label>Ключевые слова <small>(через запятую; пусто = все)</small>
+      <input type="text" name="kw" value="{{ kw }}" placeholder="компрессор, ресивер…">
     </label>
     <label>Ключ сопоставления
       <select name="mode">
@@ -68,8 +66,6 @@
     <label>С <input type="date" name="start" value="{{ range.start }}"></label>
     <label>По <input type="date" name="end" value="{{ range.end }}"></label>
     <label>&nbsp;<button type="submit">Посчитать</button></label>
-    <label>&nbsp;<button type="submit" class="secondary outline"
-        formmethod="post" formaction="{{ base_path }}/ui/audience/kw">💾 Сохранить базу «{{ base }}»</button></label>
   </div>
 </form>
 

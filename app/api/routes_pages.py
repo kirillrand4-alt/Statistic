@@ -1747,14 +1747,16 @@ def _month_to_date(s: str | None) -> date | None:
 def demand_page(request: Request, region: str | None = None, device: str | None = None,
                 start: str | None = None, end: str | None = None, search: str | None = None,
                 list: str = "on", mode: str = "sep", dedup: int = 0, aud: int = 0,
-                gran: str = "month", match: str = "broad", q: list[str] = Query(default=[]),
+                gran: str = "month", match: str = "broad", base: str = "прокомпрессор",
+                q: list[str] = Query(default=[]),
                 msg: str | None = None, db: Session = Depends(get_db)):
     """Спрос: частотность Wordstat по собранным фразам — график + таблица.
-    ``gran`` — month|week|day; ``match`` — broad|phrase|exact|order (тип частотности).
-    Фильтры: регион, устройство, период, поиск, список (``list=on/off``). ``dedup=1`` —
-    не считать смысловые дубли. Режим графика ``mode``: sep / sum_checked / sum_list / sum_db."""
+    ``base`` — именованная база ключей (вкладки «Спрос прокомпрессор» / «Спрос meyer»);
+    ``gran`` — month|week|day; ``match`` — broad|phrase|exact|order. Фильтры: регион,
+    устройство, период, поиск, список. ``dedup=1`` — не считать смысловые дубли."""
     from app.services import demand
 
+    base = base if base in demand.BASES else demand.BASES[0]
     gran = gran if gran in ("month", "week", "day") else "month"
     mt = match if match in ("broad", "phrase", "exact", "order") else "broad"
     regs = demand.regions(db, gran, mt)
@@ -1765,7 +1767,7 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
     d_start = _month_to_date(start) or lo
     d_end = _month_to_date(end) or hi
     s = (search or "").strip() or None
-    keylist = demand.get_keylist(db)
+    keylist = demand.get_keylist(db, base)
     use_list = list != "off" and bool(keylist)
     list_keyset = {demand.norm_key(k) for k in keylist} if keylist else None
     keyset = list_keyset if use_list else None
@@ -1825,6 +1827,7 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
         "request": request, "has_data": demand.has_data(db, gran, mt),
         "has_month": demand.has_data(db, "month", mt), "gran": gran, "msg": msg,
         "match": mt, "match_types": demand.match_types(db, gran),
+        "base": base, "bases": demand.BASES,
         "regions": regs, "devices": devs, "cur_region": cur_region, "cur_device": cur_device,
         "m_start": d_start.strftime("%Y-%m") if d_start else "",
         "m_end": d_end.strftime("%Y-%m") if d_end else "",
@@ -1838,9 +1841,9 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
 
 
 @router.post("/ui/demand/list")
-async def ui_demand_list(urls_text: str | None = Form(None),
+async def ui_demand_list(urls_text: str | None = Form(None), base: str = Form("прокомпрессор"),
                          file: UploadFile | None = File(None), db: Session = Depends(get_db)):
-    """Сохранить загруженный список ключей (textarea + файл) — потом он фильтрует «Спрос»."""
+    """Сохранить базу ключей для вкладки «Спрос <base>» (textarea + файл)."""
     from app.services import demand
 
     raw = ""
@@ -1848,22 +1851,23 @@ async def ui_demand_list(urls_text: str | None = Form(None),
         raw += (await file.read()).decode("utf-8", errors="ignore") + "\n"
     if urls_text:
         raw += urls_text
-    phrases = demand.set_keylist(db, raw)
-    msg = f"Список сохранён: {len(phrases)} ключей." if phrases else "Список очищен."
-    return RedirectResponse(url=f"{BP}/demand?list=on&msg={quote(msg)}", status_code=303)
-
-
-@router.post("/ui/demand/list/clear")
-def ui_demand_list_clear(db: Session = Depends(get_db)):
-    from app.services import demand
-
-    demand.clear_keylist(db)
-    return RedirectResponse(url=f"{BP}/demand?msg={quote('Список ключей очищен.')}",
+    phrases = demand.set_keylist(db, raw, base)
+    msg = f"База «{base}» сохранена: {len(phrases)} ключей." if phrases else "База очищена."
+    return RedirectResponse(url=f"{BP}/demand?base={quote(base)}&list=on&msg={quote(msg)}",
                             status_code=303)
 
 
-def _demand_redirect(list, region, device, start, end, search, msg):
-    qs = (f"?list={quote(list or 'on')}&region={quote(region or '')}"
+@router.post("/ui/demand/list/clear")
+def ui_demand_list_clear(base: str = Form("прокомпрессор"), db: Session = Depends(get_db)):
+    from app.services import demand
+
+    demand.clear_keylist(db, base)
+    return RedirectResponse(
+        url=f"{BP}/demand?base={quote(base)}&msg={quote('База ключей очищена.')}", status_code=303)
+
+
+def _demand_redirect(list, region, device, start, end, search, msg, base="прокомпрессор"):
+    qs = (f"?base={quote(base)}&list={quote(list or 'on')}&region={quote(region or '')}"
           f"&device={quote(device or '')}&start={start or ''}&end={end or ''}"
           f"&search={quote(search or '')}&msg={quote(msg)}")
     return RedirectResponse(url=f"{BP}/demand{qs}", status_code=303)
@@ -1871,14 +1875,15 @@ def _demand_redirect(list, region, device, start, end, search, msg):
 
 @router.post("/ui/demand/delete")
 def ui_demand_delete(q: list[str] = Form(default=[]), list: str = Form("on"),
+                     base: str = Form("прокомпрессор"),
                      region: str = Form(""), device: str = Form(""), start: str = Form(""),
                      end: str = Form(""), search: str = Form(""), db: Session = Depends(get_db)):
-    """Удалить отмеченные фразы целиком: собранные данные Wordstat + запись в списке."""
+    """Удалить отмеченные фразы целиком: собранные данные Wordstat + запись в базе."""
     from app.services import demand
 
-    n = demand.delete_phrases(db, q)
+    n = demand.delete_phrases(db, q, base)
     msg = f"Удалено фраз: {n} (с собранными данными)." if n else "Не выбрано ни одной фразы."
-    return _demand_redirect(list, region, device, start, end, search, msg)
+    return _demand_redirect(list, region, device, start, end, search, msg, base)
 
 
 @router.post("/ui/demand/clear-all")
@@ -1896,12 +1901,13 @@ def ui_demand_clear_all(db: Session = Depends(get_db)):
 def demand_export(region: str | None = None, device: str | None = None, start: str | None = None,
                   end: str | None = None, search: str | None = None, list: str = "on",
                   dedup: int = 0, gran: str = "month", match: str = "broad",
-                  db: Session = Depends(get_db)):
+                  base: str = "прокомпрессор", db: Session = Depends(get_db)):
     import csv
     import io
 
     from app.services import demand
 
+    base = base if base in demand.BASES else demand.BASES[0]
     gran = gran if gran in ("month", "week", "day") else "month"
     mt = match if match in ("broad", "phrase", "exact", "order") else "broad"
     regs = demand.regions(db, gran, mt)
@@ -1911,7 +1917,7 @@ def demand_export(region: str | None = None, device: str | None = None, start: s
     lo, hi = demand.bounds(db, cur_region, cur_device, gran, mt)
     d_start = _month_to_date(start) or lo
     d_end = _month_to_date(end) or hi
-    keylist = demand.get_keylist(db)
+    keylist = demand.get_keylist(db, base)
     keyset = ({demand.norm_key(k) for k in keylist} if (list != "off" and keylist) else None)
     months, phrases = demand.load(db, cur_region, cur_device, d_start, d_end,
                                   (search or "").strip() or None, keyset=keyset,
@@ -1931,43 +1937,24 @@ def demand_export(region: str | None = None, device: str | None = None, start: s
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
-AUDIENCE_BASES = ["прокомпрессор", "meyer"]  # named keyword bases → tabs
-
-
 @router.get("/audience")
 def audience_page(request: Request, sites: list[int] = Query(default=[]),
                   start: str | None = None, end: str | None = None,
                   source: str = "ad_kw_search", kw: str | None = None,
-                  mode: str = "ip_ua", base: str = "прокомпрессор",
-                  msg: str | None = None, db: Session = Depends(get_db)):
+                  mode: str = "ip_ua", db: Session = Depends(get_db)):
     """Аудитория / охват: оценка уникальной аудитории методом повторного отлова
-    (capture-recapture по IP+UA между сайтами за день). ``base`` — именованная база
-    ключевых слов (вкладки «Аудитория прокомпрессор» / «Аудитория meyer»)."""
+    (capture-recapture по IP+UA между сайтами за день)."""
     from app.services import audience as A
 
-    base = base if base in AUDIENCE_BASES else AUDIENCE_BASES[0]
     all_sites = A.sites_with_visits(db)
     ids = [i for i in sites if i in {s["id"] for s in all_sites}] or [s["id"] for s in all_sites]
     dr = parse_date_range(start, end)
-    kw_text = kw if kw is not None else A.get_kw_base(db, base)  # default to the base's saved list
-    keywords = [k.strip() for k in re.split(r"[\n,]", kw_text or "") if k.strip()]
+    keywords = [k.strip() for k in re.split(r"[\n,]", kw or "") if k.strip()]
     result = A.estimate(db, ids, dr, source=source, keywords=keywords, mode=mode) if all_sites else None
     return templates.TemplateResponse(request, "audience.html", {
         "request": request, "all_sites": all_sites, "chosen": set(ids),
-        "range": dr, "source": source, "kw": kw_text or "", "mode": mode, "result": result,
-        "base": base, "bases": AUDIENCE_BASES, "msg": msg,
+        "range": dr, "source": source, "kw": kw or "", "mode": mode, "result": result,
     })
-
-
-@router.post("/ui/audience/kw")
-def ui_audience_kw(base: str = Form("прокомпрессор"), kw: str = Form(""),
-                   db: Session = Depends(get_db)):
-    """Сохранить базу ключевых слов для вкладки «Аудитория <base>»."""
-    from app.services import audience as A
-
-    A.set_kw_base(db, base, kw)
-    return RedirectResponse(url=f"{BP}/audience?base={quote(base)}&msg={quote('База ключей сохранена.')}",
-                            status_code=303)
 
 
 @router.get("/metrika")
