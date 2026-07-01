@@ -1725,7 +1725,7 @@ def _month_to_date(s: str | None) -> date | None:
 @router.get("/demand")
 def demand_page(request: Request, region: str | None = None, device: str | None = None,
                 start: str | None = None, end: str | None = None, search: str | None = None,
-                list: str = "on", mode: str = "sep", dedup: int = 0,
+                list: str = "on", mode: str = "sep", dedup: int = 0, aud: int = 0,
                 q: list[str] = Query(default=[]),
                 msg: str | None = None, db: Session = Depends(get_db)):
     """Спрос: помесячная частотность Wordstat по собранным фразам — график + таблица.
@@ -1779,6 +1779,23 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
         mode = "sep"
         plot = [p for p in phrases if p["query"] in chosen] or phrases[:8]
 
+    # optional: daily audience estimate (Chapman/IP+UA) across ALL sites, last 60 days
+    aud_days = aud_est = aud_median = aud_range = None
+    if aud:
+        from datetime import timedelta
+
+        from app.providers.base import DateRange
+        from app.services import audience as A
+        aud_sites = [x["id"] for x in A.sites_with_visits(db)]
+        if len(aud_sites) >= 2:
+            a_end = date.today()
+            a_start = a_end - timedelta(days=60)
+            res = A.estimate(db, aud_sites, DateRange(start=a_start, end=a_end),
+                             source="ad_kw_search", mode="ip_ua")
+            aud_days = res["days"]
+            aud_est, aud_median = res["period_estimate"], res["daily_median"]
+            aud_range = (a_start.isoformat(), a_end.isoformat())
+
     return templates.TemplateResponse(request, "demand.html", {
         "request": request, "has_data": demand.has_data(db), "msg": msg,
         "regions": regs, "devices": devs, "cur_region": cur_region, "cur_device": cur_device,
@@ -1788,6 +1805,8 @@ def demand_page(request: Request, region: str | None = None, device: str | None 
         "plot": plot, "chosen": chosen, "mode": mode, "is_sum": is_sum,
         "keylist": keylist, "use_list": use_list, "list_state": list,
         "missing": missing, "dedup": dd, "raw_count": raw_count,
+        "aud": bool(aud), "aud_days": aud_days, "aud_est": aud_est,
+        "aud_median": aud_median, "aud_range": aud_range,
     })
 
 

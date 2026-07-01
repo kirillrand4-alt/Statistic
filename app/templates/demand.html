@@ -64,6 +64,7 @@
   <input type="hidden" name="list" value="{{ list_state }}">
   <input type="hidden" name="mode" value="{{ mode }}">
   <input type="hidden" name="dedup" value="{{ 1 if dedup else 0 }}">
+  <input type="hidden" name="aud" value="{{ 1 if aud else 0 }}">
   <label>Регион
     <select name="region" onchange="this.form.submit()">
       {% for r in regions %}<option value="{{ r }}" {% if r==cur_region %}selected{% endif %}>{{ r }}</option>{% endfor %}
@@ -92,6 +93,10 @@
     Не считать одну и ту же фразу несколько раз (смысловые дубли){% if dedup and raw_count > phrases|length %}
     <small>— свёрнуто дублей: {{ raw_count - phrases|length }}</small>{% endif %}
   </label>
+  <label title="Оценка уникальной аудитории по Чапмену (IP+UA, capture-recapture) по дням — по всем сайтам, реклама с ключами + весь поиск, за последние 60 дней">
+    <input type="checkbox" name="aud" value="1" {% if aud %}checked{% endif %} onchange="this.form.submit()">
+    Аудитория по дням (Чапмен, IP+UA) — отдельным графиком ниже
+  </label>
 </form>
 
 {% if plot and months %}
@@ -116,6 +121,7 @@
   <form method="get" action="{{ base_path }}/demand">
     <input type="hidden" name="list" value="{{ list_state }}">
     <input type="hidden" name="dedup" value="{{ 1 if dedup else 0 }}">
+    <input type="hidden" name="aud" value="{{ 1 if aud else 0 }}">
     <input type="hidden" name="region" value="{{ cur_region }}">
     <input type="hidden" name="device" value="{{ cur_device }}">
     <input type="hidden" name="start" value="{{ m_start }}">
@@ -176,6 +182,21 @@
   <p><small>По заданным фильтрам фраз нет{% if use_list %} (список активен — возможно, по этим ключам ещё нет собранных данных){% endif %}.</small></p>
   {% endif %}
 </article>
+
+{% if aud %}
+<article>
+  <header>Аудитория по дням <small>— Чапмен (IP+UA), все сайты, реклама с ключами + весь поиск{% if aud_range %}, {{ aud_range[0] }}…{{ aud_range[1] }}{% endif %}</small></header>
+  {% if aud_days %}
+  <canvas id="auddemand" height="100"></canvas>
+  <small>Оценка всей аудитории за окно ≈ {{ aud_est|numfmt if aud_est else '—' }}; типичный день ≈
+    {{ aud_median|numfmt if aud_median else '—' }}. Метод повторного отлова по пересечению сайтов за день —
+    подробности и оговорки на вкладке «Аудитория». Это оценка уникальных людей, а не число визитов/запросов.</small>
+  {% else %}
+  <p><small>Недостаточно данных для дневной оценки: нужно ≥2 сайта с пересекающейся аудиторией и визиты с IP
+    (поле <code>ym:s:ipAddress</code>) за последние 60 дней.</small></p>
+  {% endif %}
+</article>
+{% endif %}
 {% endif %}
 {% endblock %}
 
@@ -205,6 +226,26 @@
       plugins: {legend: {position: 'bottom'}},
       scales: {y: {beginAtZero: true}}
     }
+  });
+</script>
+{% endif %}
+{% if aud and aud_days %}
+<script>
+  const adays = {{ aud_days|tojson }};
+  new Chart(document.getElementById('auddemand'), {
+    type: 'line',
+    data: {
+      labels: adays.map(d => d.date),
+      datasets: [
+        {label: 'Оценка аудитории (Чапмен)', data: adays.map(d => d.estimate),
+         borderColor: '#b8902f', backgroundColor: 'rgba(184,144,47,.15)', fill: true,
+         tension: 0.25, pointRadius: 2, spanGaps: true, borderWidth: 2},
+        {label: 'Наблюдалось уник. (IP+UA)', data: adays.map(d => d.observed),
+         borderColor: '#1095c1', tension: 0.25, pointRadius: 2, borderWidth: 2}
+      ]
+    },
+    options: {interaction: {mode: 'index', intersect: false},
+              plugins: {legend: {position: 'bottom'}}, scales: {y: {beginAtZero: true}}}
   });
 </script>
 {% endif %}
