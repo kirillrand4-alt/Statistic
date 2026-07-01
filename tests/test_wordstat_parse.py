@@ -143,6 +143,17 @@ def test_value_equivalence_dedup():
         db.close()
 
 
+def test_align_week_to_monday_sunday():
+    # Wordstat weekly needs Monday start / Sunday end (matches the UI's real request)
+    assert ws._align_week("03.07.2024", "30.06.2026") == ("01.07.2024", "28.06.2026")
+    lo, hi = ws._align_week("01.07.2024", "28.06.2026")  # already aligned -> unchanged
+    assert (lo, hi) == ("01.07.2024", "28.06.2026")
+    import datetime
+    d1 = datetime.datetime.strptime(lo, "%d.%m.%Y").date()
+    d2 = datetime.datetime.strptime(hi, "%d.%m.%Y").date()
+    assert d1.weekday() == 0 and d2.weekday() == 6  # Monday, Sunday
+
+
 def test_sanitize_phrase():
     # slash / colon / semicolon / backslash → space; word order & operators kept
     assert ws._sanitize_phrase("компрессор 1000 л/мин") == "компрессор 1000 л мин"

@@ -178,22 +178,32 @@ def _done_hashes(db, region, dev, lo, hi, graph="month") -> set:
     return {h for (h,) in rows}
 
 
+def _align_week(dfrom: str, dto: str) -> tuple[str, str]:
+    """Snap a dd.mm.YYYY range to whole weeks — Wordstat's weekly graph requires the
+    start on a Monday and the end on a Sunday (иначе HTTP 400)."""
+    from datetime import datetime, timedelta
+    df = datetime.strptime(dfrom, "%d.%m.%Y").date()
+    dt_ = datetime.strptime(dto, "%d.%m.%Y").date()
+    df -= timedelta(days=df.weekday())               # -> понедельник (Mon=0)
+    dt_ -= timedelta(days=(dt_.weekday() + 1) % 7)    # -> воскресенье
+    return df.strftime("%d.%m.%Y"), dt_.strftime("%d.%m.%Y")
+
+
 def _default_range(graph="month") -> tuple[str, str]:
-    """Default window per granularity (dd.mm.YYYY): month — 24 мес (макс Wordstat),
-    week — ~12 мес, day — последние ~60 дней (дневные данные Wordstat ограничены)."""
+    """Default window per granularity (dd.mm.YYYY): month/week — 24 мес (макс Wordstat;
+    неделя выровнена пн…вс), day — последние ~60 дней (дневные данные ограничены)."""
     from datetime import date, timedelta
     today = date.today()
     if graph == "day":
         end = today - timedelta(days=1)
         return (end - timedelta(days=59)).strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y")
     end = today.replace(day=1) - timedelta(days=1)  # last day of previous month
-    months = 12 if graph == "week" else 23
-    sy, sm = end.year, end.month - months
+    sy, sm = end.year, end.month - 23               # 24-month window
     while sm <= 0:
         sm += 12
         sy -= 1
-    start = date(sy, sm, 1)
-    return start.strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y")
+    lo, hi = date(sy, sm, 1).strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y")
+    return _align_week(lo, hi) if graph == "week" else (lo, hi)
 
 
 def _payload(phrase, region, device, d_from, d_to, graph="month") -> dict:
@@ -489,6 +499,8 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
     db = SessionLocal()
     d_from = d_from or _default_range(graph)[0]
     d_to = d_to or _default_range(graph)[1]
+    if graph == "week":  # Wordstat weekly needs Monday…Sunday, иначе 400
+        d_from, d_to = _align_week(d_from, d_to)
     dev = "all" if device == "desktop,phone,tablet" else device
 
     if skip_done:  # resume: drop phrases already collected for this region/device/period
@@ -641,9 +653,11 @@ def cmd_probe(phrase, region, device, graph) -> None:
         for n in cands:
             end = date.today() - timedelta(days=1)
             start = end - timedelta(days=n - 1)
+            sfrom, sto = start.strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y")
+            if graph == "week":
+                sfrom, sto = _align_week(sfrom, sto)
             resp = ctx.request.post(
-                GRAPH_URL, data=json.dumps(_payload(phrase, region, device,
-                    start.strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y"), graph)),
+                GRAPH_URL, data=json.dumps(_payload(phrase, region, device, sfrom, sto, graph)),
                 headers={"content-type": "application/json", "referer": ref}, timeout=45000)
             kind, data = _parse_graph(resp)
             npts = len(data) if isinstance(data, list) else 0
