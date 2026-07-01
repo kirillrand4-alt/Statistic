@@ -142,27 +142,36 @@ def _month_floor(ddmmyyyy: str):
     return datetime.strptime(ddmmyyyy, "%d.%m.%Y").date().replace(day=1)
 
 
-def _done_hashes(db, region, dev, lo_month, hi_month) -> set:
-    """query_hash set already having ANY data for region/device within the window —
-    these phrases are fully collected (each phrase is saved atomically), so a resumed
-    run can skip them."""
-    from sqlalchemy import distinct, select
+def _done_hashes(db, region, dev, lo, hi, graph="month") -> set:
+    """query_hash set already having ANY data for region/device/granularity within the
+    window — these phrases are fully collected (saved atomically), so a resumed run can
+    skip them. Monthly uses wordstat_history; day/week use wordstat_series."""
+    from sqlalchemy import and_, distinct, select
 
-    from app.db.models import WordstatHistory as W
-    rows = db.execute(
-        select(distinct(W.query_hash)).where(
-            W.region == region, W.device == dev,
-            W.date >= lo_month, W.date <= hi_month)
-    ).all()
+    if graph == "month":
+        from app.db.models import WordstatHistory as W
+        cond = and_(W.region == region, W.device == dev, W.date >= lo, W.date <= hi)
+        col = W.query_hash
+    else:
+        from app.db.models import WordstatSeries as W
+        cond = and_(W.region == region, W.device == dev, W.granularity == graph,
+                    W.date >= lo, W.date <= hi)
+        col = W.query_hash
+    rows = db.execute(select(distinct(col)).where(cond)).all()
     return {h for (h,) in rows}
 
 
-def _default_range() -> tuple[str, str]:
-    """24-month window ending at the previous full month (dd.mm.YYYY) — Wordstat max."""
+def _default_range(graph="month") -> tuple[str, str]:
+    """Default window per granularity (dd.mm.YYYY): month — 24 мес (макс Wordstat),
+    week — ~12 мес, day — последние ~60 дней (дневные данные Wordstat ограничены)."""
     from datetime import date, timedelta
     today = date.today()
+    if graph == "day":
+        end = today - timedelta(days=1)
+        return (end - timedelta(days=59)).strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y")
     end = today.replace(day=1) - timedelta(days=1)  # last day of previous month
-    sy, sm = end.year, end.month - 23
+    months = 12 if graph == "week" else 23
+    sy, sm = end.year, end.month - months
     while sm <= 0:
         sm += 12
         sy -= 1
@@ -170,9 +179,9 @@ def _default_range() -> tuple[str, str]:
     return start.strftime("%d.%m.%Y"), end.strftime("%d.%m.%Y")
 
 
-def _payload(phrase, region, device, d_from, d_to) -> dict:
+def _payload(phrase, region, device, d_from, d_to, graph="month") -> dict:
     return {
-        "currentDevice": device, "currentGraphType": "month", "dbname": "rus",
+        "currentDevice": device, "currentGraphType": graph, "dbname": "rus",
         "filters": {"region": region, "tableType": "popular"},
         "searchValue": phrase, "startDate": d_from, "endDate": d_to,
         "text": {"graph": {"title": "", "disclaimer": ""},
@@ -210,7 +219,8 @@ def _parse_graph(resp):
         series = pv.get("absolute")
         if not series:  # ключа нет или пусто -> нет истории по фразе
             return "empty", []
-        rows = [(date(int(p["year"]), int(p["month"]) + 1, 1), int(p["y"]))
+        # month points have year+month (day defaults to 1); day/week points also carry a day
+        rows = [(date(int(p["year"]), int(p["month"]) + 1, int(p.get("day", 1) or 1)), int(p["y"]))
                 for p in series if 0 <= int(p["month"]) <= 11]
         return ("ok", rows) if rows else ("empty", [])
     except Exception as e:  # noqa: BLE001
@@ -224,8 +234,8 @@ def _sanitize_phrase(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[/:;\\]+", " ", s or "")).strip()
 
 
-def _save(db, phrase, region, device, rows) -> int:
-    from app.db.models import WordstatHistory
+def _save(db, phrase, region, device, rows, graph="month") -> int:
+    from app.db.models import WordstatHistory, WordstatSeries
     from app.utils import query_hash
     dialect = db.get_bind().dialect.name
     if dialect == "sqlite":
@@ -236,14 +246,22 @@ def _save(db, phrase, region, device, rows) -> int:
         raise RuntimeError(f"Unsupported dialect {dialect!r}")
     dev = "all" if device == "desktop,phone,tablet" else device
     qh = query_hash(phrase)
-    vals = [{"query": phrase, "query_hash": qh, "region": region, "device": dev,
-             "date": d, "value": v} for d, v in rows]
-    if not vals:
+    if not rows:
         return 0
-    stmt = insert(WordstatHistory).values(vals)
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["query_hash", "region", "device", "date"],
-        set_={"value": stmt.excluded.value, "query": stmt.excluded.query})
+    if graph == "month":  # monthly -> historic table (unchanged)
+        vals = [{"query": phrase, "query_hash": qh, "region": region, "device": dev,
+                 "date": d, "value": v} for d, v in rows]
+        stmt = insert(WordstatHistory).values(vals)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["query_hash", "region", "device", "date"],
+            set_={"value": stmt.excluded.value, "query": stmt.excluded.query})
+    else:  # day / week -> fine-grained table (granularity keeps them separate)
+        vals = [{"query": phrase, "query_hash": qh, "region": region, "device": dev,
+                 "granularity": graph, "date": d, "value": v} for d, v in rows]
+        stmt = insert(WordstatSeries).values(vals)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["query_hash", "region", "device", "granularity", "date"],
+            set_={"value": stmt.excluded.value, "query": stmt.excluded.query})
     db.execute(stmt)
     db.commit()
     return len(vals)
@@ -372,8 +390,9 @@ def _solve_captcha(page, mode: str = "manual") -> None:
 
 
 def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
-                captcha="manual", skip_done=False) -> None:
+                captcha="manual", skip_done=False, graph="month") -> None:
     import random
+    from datetime import datetime
 
     from app.db.base import SessionLocal, init_db
     from app.utils import query_hash
@@ -385,12 +404,17 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
         sys.exit("Нет фраз для сбора (укажи --phrases файл, --from-list или --from-db).")
     init_db()
     db = SessionLocal()
-    d_from = d_from or _default_range()[0]
-    d_to = d_to or _default_range()[1]
+    d_from = d_from or _default_range(graph)[0]
+    d_to = d_to or _default_range(graph)[1]
     dev = "all" if device == "desktop,phone,tablet" else device
 
     if skip_done:  # resume: drop phrases already collected for this region/device/period
-        done = _done_hashes(db, region, dev, _month_floor(d_from), _month_floor(d_to))
+        if graph == "month":
+            lo, hi = _month_floor(d_from), _month_floor(d_to)
+        else:
+            lo = datetime.strptime(d_from, "%d.%m.%Y").date()
+            hi = datetime.strptime(d_to, "%d.%m.%Y").date()
+        done = _done_hashes(db, region, dev, lo, hi, graph)
         before = len(phrases)
         phrases = [ph for ph in phrases if query_hash(ph) not in done]
         print(f"Возобновление: уже собрано {before - len(phrases)}, осталось {len(phrases)}.",
@@ -401,7 +425,7 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
             cmd_status()
             return
 
-    print(f"Сбор Wordstat: {len(phrases)} фраз, регион={region}, устройство={dev}, "
+    print(f"Сбор Wordstat ({graph}): {len(phrases)} фраз, регион={region}, устройство={dev}, "
           f"период {d_from}–{d_to}, пауза ~{delay}с/запрос.", flush=True)
     ok = empty = fail = 0
     failed: list[str] = []
@@ -420,7 +444,7 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
             k, d, txt, status = "error", None, "", 0
             for attempt in range(3):
                 resp = ctx.request.post(
-                    GRAPH_URL, data=json.dumps(_payload(ph, region, device, d_from, d_to)),
+                    GRAPH_URL, data=json.dumps(_payload(ph, region, device, d_from, d_to, graph)),
                     headers={"content-type": "application/json", "referer": ref}, timeout=45000)
                 status = resp.status
                 try:
@@ -446,11 +470,15 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
                     k2, d2, t2, s2 = _fetch(clean)
                     if k2 in ("ok", "empty"):
                         kind, data, last_txt, status, used = k2, d2, t2, s2, clean
+            if i == 1 and graph != "month" and last_txt:  # verify the day/week shape
+                with open(os.path.join(DEBUG_DIR, f"sample_{graph}.json"), "w",
+                          encoding="utf-8") as f:
+                    f.write(f"// phrase: {phrase}\n// graph: {graph}\n" + last_txt[:20000])
             elapsed = time.monotonic() - t0
             eta = (elapsed / i) * (len(phrases) - i)
             if kind == "ok":
                 ok += 1
-                n = _save(db, phrase, region, device, data)  # под ИСХОДНОЙ фразой
+                n = _save(db, phrase, region, device, data, graph)  # под ИСХОДНОЙ фразой
                 note = f"{n} точек" + (" (очищено)" if used != phrase else "")
             elif kind == "empty":
                 empty += 1
@@ -503,6 +531,17 @@ def cmd_status() -> None:
             print("Топ фраз (по макс. частотности):")
             for q, c, mx in rows:
                 print(f"  {mx:>11}  {c:>3} точек  {q}")
+        # fine-grained (day/week) series, if any
+        from app.db.models import WordstatSeries as WS
+        for g in ("day", "week"):
+            n = db.execute(select(func.count(distinct(WS.query_hash)))
+                           .where(WS.granularity == g)).scalar() or 0
+            if n:
+                t = db.execute(select(func.count()).where(WS.granularity == g)).scalar() or 0
+                glo, ghi = db.execute(select(func.min(WS.date), func.max(WS.date))
+                                      .where(WS.granularity == g)).one()
+                label = "по дням" if g == "day" else "по неделям"
+                print(f"Wordstat {label}: фраз {n}, строк {t}, период {glo}…{ghi}")
     finally:
         db.close()
 
@@ -533,6 +572,8 @@ def main() -> None:
                     help="сохранить ключ облачного решателя капч (шифруется)")
     ap.add_argument("--captcha-provider", choices=("capmonster", "anticaptcha", "2captcha"),
                     help="провайдер решателя капч (с --set-captcha; по умолч. capmonster)")
+    ap.add_argument("--graph", choices=("month", "week", "day"), default="month",
+                    help="гранулярность: month (по умолч.) / week / day (по дням)")
     a = ap.parse_args()
     if a.set_captcha or a.captcha_provider:
         from app.db.base import init_db
@@ -558,7 +599,7 @@ def main() -> None:
         else:
             phrases = []
         cmd_collect(phrases, a.region, a.device, a.d_from, a.d_to, a.delay, a.limit,
-                    a.captcha, a.skip_done)
+                    a.captcha, a.skip_done, a.graph)
     else:
         ap.print_help()
 

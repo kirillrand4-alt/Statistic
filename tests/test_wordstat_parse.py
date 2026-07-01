@@ -43,6 +43,50 @@ def test_captcha_detected_by_marker_and_by_status():
     assert ws._parse_graph(_Resp("{}", status=403))[0] == "captcha"
 
 
+def test_daily_points_parsed_with_real_days():
+    body = {"graph": {"images": {"timeSeries": {"preparedValues": {"absolute": [
+        {"year": 2026, "month": 5, "day": 1, "y": 1993},   # month 5 (0-based) = June
+        {"year": 2026, "month": 5, "day": 2, "y": 2018},
+        {"year": 2026, "month": 5, "day": 3, "y": 2315},
+    ]}}}}}
+    kind, rows = ws._parse_graph(_Resp(body))
+    assert kind == "ok"
+    assert rows == [(dt.date(2026, 6, 1), 1993), (dt.date(2026, 6, 2), 2018),
+                    (dt.date(2026, 6, 3), 2315)]
+
+
+def test_monthly_points_still_day_1():
+    body = _graph([{"year": 2025, "month": 0, "y": 100}])  # no 'day' -> defaults to 1
+    _, rows = ws._parse_graph(_Resp(body))
+    assert rows == [(dt.date(2025, 1, 1), 100)]
+
+
+def test_save_routes_day_to_series_table():
+    from app.db.base import SessionLocal
+    from app.db.models import WordstatHistory, WordstatSeries
+    from app.utils import query_hash
+    db = SessionLocal()
+    try:
+        rows = [(dt.date(2026, 6, 1), 1993), (dt.date(2026, 6, 2), 2018)]
+        n = ws._save(db, "винтовой компрессор", "all", "desktop,phone,tablet", rows, graph="day")
+        assert n == 2
+        got = db.query(WordstatSeries).all()
+        assert len(got) == 2
+        assert all(r.granularity == "day" and r.device == "all" for r in got)
+        assert {r.date for r in got} == {dt.date(2026, 6, 1), dt.date(2026, 6, 2)}
+        # monthly table untouched
+        assert db.query(WordstatHistory).count() == 0
+        # re-save upserts (no duplicates)
+        ws._save(db, "винтовой компрессор", "all", "desktop,phone,tablet",
+                 [(dt.date(2026, 6, 1), 2000)], graph="day")
+        db.expire_all()  # core upsert bypassed the identity map — refetch from DB
+        assert db.query(WordstatSeries).count() == 2
+        v = db.query(WordstatSeries).filter_by(date=dt.date(2026, 6, 1)).one().value
+        assert v == 2000
+    finally:
+        db.close()
+
+
 def test_sanitize_phrase():
     # slash / colon / semicolon / backslash → space; word order & operators kept
     assert ws._sanitize_phrase("компрессор 1000 л/мин") == "компрессор 1000 л мин"

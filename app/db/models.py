@@ -455,6 +455,30 @@ class WordstatHistory(Base):
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class WordstatSeries(Base):
+    """Fine-grained Wordstat demand — by day or week (the «Динамика» graph in the
+    new Wordstat supports «По дням»/«По неделям»). Kept separate from the monthly
+    ``wordstat_history`` so monthly and daily points never collide on the same date.
+    ``date`` = the day (day granularity) or the week's start day (week granularity)."""
+
+    __tablename__ = "wordstat_series"
+    __table_args__ = (
+        UniqueConstraint("query_hash", "region", "device", "granularity", "date",
+                         name="uq_wordstat_series"),
+        Index("ix_wordstat_series_query", "query_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    query: Mapped[str] = mapped_column(Text)
+    query_hash: Mapped[str] = mapped_column(String(40), index=True)
+    region: Mapped[str] = mapped_column(String(48), default="all")
+    device: Mapped[str] = mapped_column(String(48), default="all")
+    granularity: Mapped[str] = mapped_column(String(8), default="day")  # day | week
+    date: Mapped[date_type] = mapped_column(Date)
+    value: Mapped[int] = mapped_column(Integer, default=0)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class AppSetting(Base):
     """Runtime-editable key/value config (optionally encrypted)."""
 
