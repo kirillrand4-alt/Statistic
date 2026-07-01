@@ -21,14 +21,26 @@
   <code>ym:s:ipAddress</code>, <code>ym:s:clientID</code>, устройство/ОС/браузер.</p></article>
 {% else %}
 
+<style>
+  .aud-sites { display:flex; flex-wrap:wrap; gap:.15rem 1.25rem; margin:.3rem 0 .6rem; }
+  .aud-sites label { flex:0 0 auto; min-width:230px; margin:0; white-space:nowrap;
+                     font-size:.95rem; display:flex; align-items:center; gap:.4rem; }
+  .aud-sites label input { margin:0; flex:0 0 auto; }
+  .aud-actions { display:flex; gap:1rem; margin-bottom:.4rem; }
+  .aud-actions a { font-size:.85rem; }
+</style>
 <form method="get" action="{{ base_path }}/audience">
   <fieldset>
     <legend><strong>Сайты</strong> (аудитория между ними пересекается; нужно ≥2)</legend>
-    <div class="grid">
+    <div class="aud-actions">
+      <a href="#" onclick="audAll(true);return false">✓ выбрать все</a>
+      <a href="#" onclick="audAll(false);return false">✗ снять все</a>
+    </div>
+    <div class="aud-sites">
       {% for s in all_sites %}
       <label><input type="checkbox" name="sites" value="{{ s.id }}"
-                    {% if s.id in chosen %}checked{% endif %}> {{ s.domain }}
-        <small>({{ s.visits|numfmt }})</small></label>
+                    {% if s.id in chosen %}checked{% endif %}>
+        <span>{{ s.domain }} <small>({{ s.visits|numfmt }})</small></span></label>
       {% endfor %}
     </div>
   </fieldset>
@@ -121,7 +133,7 @@
   <header>Уникальных ({{ r.mode }}) по каждому сайту за период</header>
   <table class="sortable">
     <thead><tr><th>Сайт</th><th>Уникальных IP+UA</th></tr></thead>
-    <tbody>{% for s in r.sites %}<tr><td>{{ s.name }}</td><td>{{ s.keys|numfmt }}</td></tr>{% endfor %}</tbody>
+    <tbody>{% for s in r.sites %}<tr><td>{{ s.name }}</td><td>{{ s['uniq']|numfmt }}</td></tr>{% endfor %}</tbody>
   </table>
 </article>
 {% endif %}
@@ -130,6 +142,11 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+  function audAll(on) {
+    document.querySelectorAll('.aud-sites input[type=checkbox]').forEach(c => { c.checked = on; });
+  }
+</script>
 {% if result and result.days %}
 <script>
   const days = {{ result.days|tojson }};

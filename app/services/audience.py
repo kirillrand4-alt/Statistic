@@ -160,8 +160,8 @@ def estimate(db: Session, site_ids, dr: DateRange, source="ad_kw_search", keywor
         if per_site[sid]:
             s = db.get(Site, sid)
             sites.append({"id": sid, "name": (domain_of(s.property_uri) or s.property_uri)
-                          if s else str(sid), "keys": len(per_site[sid])})
-    sites.sort(key=lambda x: x["keys"], reverse=True)
+                          if s else str(sid), "uniq": len(per_site[sid])})
+    sites.sort(key=lambda x: x["uniq"], reverse=True)
 
     pairs = []
     chapmans = []
@@ -176,6 +176,7 @@ def estimate(db: Session, site_ids, dr: DateRange, source="ad_kw_search", keywor
                 chapmans.append(ch["n"])
             pairs.append({"a": id2name[a], "b": id2name[b], "na": na, "nb": nb,
                           "overlap": m, "chapman": ch})
+    pairs.sort(key=lambda p: p["overlap"], reverse=True)  # самые информативные пары сверху
 
     period_sets = [per_site[sid] for sid in present]
     period_estimate = schnabel(period_sets) if len(period_sets) >= 2 else None
