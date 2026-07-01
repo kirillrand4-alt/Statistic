@@ -1926,24 +1926,43 @@ def demand_export(region: str | None = None, device: str | None = None, start: s
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
+AUDIENCE_BASES = ["прокомпрессор", "meyer"]  # named keyword bases → tabs
+
+
 @router.get("/audience")
 def audience_page(request: Request, sites: list[int] = Query(default=[]),
                   start: str | None = None, end: str | None = None,
                   source: str = "ad_kw_search", kw: str | None = None,
-                  mode: str = "ip_ua", db: Session = Depends(get_db)):
+                  mode: str = "ip_ua", base: str = "прокомпрессор",
+                  msg: str | None = None, db: Session = Depends(get_db)):
     """Аудитория / охват: оценка уникальной аудитории методом повторного отлова
-    (capture-recapture по IP+UA между сайтами за день)."""
+    (capture-recapture по IP+UA между сайтами за день). ``base`` — именованная база
+    ключевых слов (вкладки «Аудитория прокомпрессор» / «Аудитория meyer»)."""
     from app.services import audience as A
 
+    base = base if base in AUDIENCE_BASES else AUDIENCE_BASES[0]
     all_sites = A.sites_with_visits(db)
     ids = [i for i in sites if i in {s["id"] for s in all_sites}] or [s["id"] for s in all_sites]
     dr = parse_date_range(start, end)
-    keywords = [k.strip() for k in re.split(r"[\n,]", kw or "") if k.strip()]
+    kw_text = kw if kw is not None else A.get_kw_base(db, base)  # default to the base's saved list
+    keywords = [k.strip() for k in re.split(r"[\n,]", kw_text or "") if k.strip()]
     result = A.estimate(db, ids, dr, source=source, keywords=keywords, mode=mode) if all_sites else None
     return templates.TemplateResponse(request, "audience.html", {
         "request": request, "all_sites": all_sites, "chosen": set(ids),
-        "range": dr, "source": source, "kw": kw or "", "mode": mode, "result": result,
+        "range": dr, "source": source, "kw": kw_text or "", "mode": mode, "result": result,
+        "base": base, "bases": AUDIENCE_BASES, "msg": msg,
     })
+
+
+@router.post("/ui/audience/kw")
+def ui_audience_kw(base: str = Form("прокомпрессор"), kw: str = Form(""),
+                   db: Session = Depends(get_db)):
+    """Сохранить базу ключевых слов для вкладки «Аудитория <base>»."""
+    from app.services import audience as A
+
+    A.set_kw_base(db, base, kw)
+    return RedirectResponse(url=f"{BP}/audience?base={quote(base)}&msg={quote('База ключей сохранена.')}",
+                            status_code=303)
 
 
 @router.get("/metrika")
