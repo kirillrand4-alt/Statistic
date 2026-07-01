@@ -246,6 +246,15 @@ def _parse_graph(resp):
         return "error", f"структура ответа: {str(e)[:80]}"
 
 
+def _phrase_key(s: str) -> str:
+    """Word-order/regcase/ё-insensitive key. Wordstat без операторов игнорирует
+    порядок слов, поэтому «винтовой компрессор» = «компрессор винтовой» = один и тот
+    же запрос. Используется, чтобы не запрашивать явные дубли повторно.
+    (Морфологию не сводим — «компрессоры» ≠ «компрессор» — это безопаснее.)"""
+    s = re.sub(r"[^\w\s]", " ", (s or "").lower().replace("ё", "е"))
+    return " ".join(sorted(w for w in s.split() if w))
+
+
 def _sanitize_phrase(s: str) -> str:
     """Wordstat getGraph давится на части пунктуации в фразе (/, :, ;, \\ и т.п.) —
     для повторной попытки заменяем их пробелами: «1000 л/мин» → «1000 л мин»
@@ -409,9 +418,11 @@ def _solve_captcha(page, mode: str = "manual") -> None:
 
 
 def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
-                captcha="manual", skip_done=False, graph="month") -> None:
+                captcha="manual", skip_done=False, graph="month", dedup=False) -> None:
     import random
     from datetime import datetime
+
+    from sqlalchemy import distinct, select
 
     from app.db.base import SessionLocal, init_db
     from app.utils import query_hash
@@ -444,9 +455,22 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
             cmd_status()
             return
 
+    # dedup: word-order duplicates are the same Wordstat request — skip variants of
+    # phrases already collected (for this granularity) or already fetched this run
+    seen_keys: set = set()
+    if dedup:
+        from app.db.models import WordstatHistory, WordstatSeries
+        if graph == "month":
+            got = db.execute(select(distinct(WordstatHistory.query))).scalars()
+        else:
+            got = db.execute(select(distinct(WordstatSeries.query))
+                             .where(WordstatSeries.granularity == graph)).scalars()
+        seen_keys = {_phrase_key(q) for q in got if q}
+        print(f"Дедуп включён: уникальных словоформ уже в базе — {len(seen_keys)}.", flush=True)
+
     print(f"Сбор Wordstat ({graph}): {len(phrases)} фраз, регион={region}, устройство={dev}, "
           f"период {d_from}–{d_to}, пауза ~{delay}с/запрос.", flush=True)
-    ok = empty = fail = 0
+    ok = empty = fail = dup = 0
     failed: list[str] = []
     err_dumps = 0
     os.makedirs(DEBUG_DIR, exist_ok=True)
@@ -481,6 +505,11 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
             return k, d, txt, status
 
         for i, phrase in enumerate(phrases, 1):
+            if dedup and _phrase_key(phrase) in seen_keys:  # variant already covered — no request
+                dup += 1
+                print(f"  [{i}/{len(phrases)}] «{phrase}» — дубль словоформы, пропуск · "
+                      f"ok={ok} empty={empty} dup={dup} fail={fail}", flush=True)
+                continue
             kind, data, last_txt, status = _fetch(phrase)
             used = phrase
             if kind == "error":  # fallback: Wordstat давится на пунктуации (/, : …)
@@ -498,9 +527,11 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
             if kind == "ok":
                 ok += 1
                 n = _save(db, phrase, region, device, data, graph)  # под ИСХОДНОЙ фразой
+                seen_keys.add(_phrase_key(phrase))  # cover this word-form's variants
                 note = f"{n} точек" + (" (очищено)" if used != phrase else "")
             elif kind == "empty":
                 empty += 1
+                seen_keys.add(_phrase_key(phrase))  # no data → variants would be empty too
                 note = "нет данных (низкочастотный)"
             else:  # error
                 fail += 1
@@ -511,7 +542,7 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
                               encoding="utf-8") as f:
                         f.write(f"// phrase: {phrase}\n// status: {status}\n" + last_txt[:20000])
                     err_dumps += 1
-            tail = f"ok={ok} empty={empty} fail={fail} ~{eta/60:.0f}м осталось"
+            tail = f"ok={ok} empty={empty} dup={dup} fail={fail} ~{eta/60:.0f}м осталось"
             print(f"  [{i}/{len(phrases)}] «{phrase}» — {note} · {tail}", flush=True)
             # jitter the pause a bit so the request cadence isn't perfectly regular
             page.wait_for_timeout(int(delay * random.uniform(0.6, 1.5) * 1000))
@@ -524,7 +555,7 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
               f"повтор: --collect --phrases \"{failed_path}\"")
         if err_dumps:
             print(f"Сырые ответы по первым {err_dumps} ошибкам — в {DEBUG_DIR}\\err_*.json")
-    print(f"\nГотово: собрано {ok}, без данных {empty}, ошибок {fail}.\n")
+    print(f"\nГотово: собрано {ok}, без данных {empty}, дублей пропущено {dup}, ошибок {fail}.\n")
     cmd_status()  # show what's now in the DB so you can verify the run
 
 
@@ -593,6 +624,9 @@ def main() -> None:
                     help="провайдер решателя капч (с --set-captcha; по умолч. capmonster)")
     ap.add_argument("--graph", choices=("month", "week", "day"), default="month",
                     help="гранулярность: month (по умолч.) / week / day (по дням)")
+    ap.add_argument("--dedup", action="store_true",
+                    help="не запрашивать явные дубли (перестановки слов), если словоформа "
+                         "уже собрана — экономит запросы/капчу")
     a = ap.parse_args()
     if a.set_captcha or a.captcha_provider:
         from app.db.base import init_db
@@ -618,7 +652,7 @@ def main() -> None:
         else:
             phrases = []
         cmd_collect(phrases, a.region, a.device, a.d_from, a.d_to, a.delay, a.limit,
-                    a.captcha, a.skip_done, a.graph)
+                    a.captcha, a.skip_done, a.graph, a.dedup)
     else:
         ap.print_help()
 

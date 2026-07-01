@@ -101,6 +101,17 @@ def test_save_routes_day_to_series_table():
         db.close()
 
 
+def test_phrase_key_collapses_word_order_not_morphology():
+    k = ws._phrase_key
+    # word order / punctuation / case / ё -> same key (Wordstat ignores order)
+    assert k("винтовой компрессор") == k("компрессор винтовой")
+    assert k("винтовой. компрессор.") == k("компрессор винтовой")
+    assert k("Купить Винтовой Компрессор") == k("винтовой компрессор купить")
+    # morphology stays distinct (safe — we don't over-merge)
+    assert k("винтовые компрессоры") != k("винтовой компрессор")
+    assert k("ремонт компрессора") != k("ремонт компрессоров")
+
+
 def test_sanitize_phrase():
     # slash / colon / semicolon / backslash → space; word order & operators kept
     assert ws._sanitize_phrase("компрессор 1000 л/мин") == "компрессор 1000 л мин"
