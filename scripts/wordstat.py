@@ -255,6 +255,42 @@ def _phrase_key(s: str) -> str:
     return " ".join(sorted(w for w in s.split() if w))
 
 
+def _value_map(db, region, dev) -> dict:
+    """phrase -> tuple of its monthly values (same region/device). Phrases with an
+    identical tuple are the same Wordstat query (used as the dedup equivalence)."""
+    from sqlalchemy import select
+
+    from app.db.models import WordstatHistory as W
+    m: dict = {}
+    for q, _d, v in db.execute(
+            select(W.query, W.date, W.value)
+            .where(W.region == region, W.device == dev)
+            .order_by(W.query, W.date)).all():
+        m.setdefault(q, []).append(int(v or 0))
+    return {q: tuple(vals) for q, vals in m.items()}
+
+
+def _series_rows(db, region, dev, granularity) -> dict:
+    """phrase -> [(date, value), …] already collected for a day/week granularity."""
+    from sqlalchemy import select
+
+    from app.db.models import WordstatSeries as WS
+    out: dict = {}
+    for q, d, v in db.execute(
+            select(WS.query, WS.date, WS.value)
+            .where(WS.region == region, WS.device == dev, WS.granularity == granularity)
+            .order_by(WS.query, WS.date)).all():
+        out.setdefault(q, []).append((d, int(v or 0)))
+    return out
+
+
+def _eq_key(phrase, value_map):
+    """Equivalence key: identical monthly series → same query (('v', …)); phrases with
+    no monthly reference fall back to word-order key (('w', …))."""
+    vk = value_map.get(phrase)
+    return ("v",) + vk if vk else ("w", _phrase_key(phrase))
+
+
 def _sanitize_phrase(s: str) -> str:
     """Wordstat getGraph давится на части пунктуации в фразе (/, :, ;, \\ и т.п.) —
     для повторной попытки заменяем их пробелами: «1000 л/мин» → «1000 л мин»
@@ -422,7 +458,7 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
     import random
     from datetime import datetime
 
-    from sqlalchemy import distinct, select
+    from sqlalchemy import select
 
     from app.db.base import SessionLocal, init_db
     from app.utils import query_hash
@@ -455,18 +491,22 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
             cmd_status()
             return
 
-    # dedup: word-order duplicates are the same Wordstat request — skip variants of
-    # phrases already collected (for this granularity) or already fetched this run
-    seen_keys: set = set()
+    # dedup by VALUE-equivalence: phrases with an identical monthly series are the
+    # same Wordstat query, so their day/week series match too — collect one, copy to
+    # the rest (no request). Fallback for phrases without monthly data: word order.
+    eq_rows: dict = {}   # equivalence key -> representative rows (for skip + replicate)
+    value_key: dict = {}
+
+    def eqkey(ph):
+        return _eq_key(ph, value_key)
+
     if dedup:
-        from app.db.models import WordstatHistory, WordstatSeries
-        if graph == "month":
-            got = db.execute(select(distinct(WordstatHistory.query))).scalars()
-        else:
-            got = db.execute(select(distinct(WordstatSeries.query))
-                             .where(WordstatSeries.granularity == graph)).scalars()
-        seen_keys = {_phrase_key(q) for q in got if q}
-        print(f"Дедуп включён: уникальных словоформ уже в базе — {len(seen_keys)}.", flush=True)
+        value_key = _value_map(db, region, dev)
+        if graph != "month":  # pre-seed already-collected day/week data (resume + copy)
+            for q, rows in _series_rows(db, region, dev, graph).items():
+                eq_rows.setdefault(eqkey(q), rows)
+        print(f"Дедуп по значениям: групп с известными данными — {len(eq_rows)}, "
+              f"фраз с месячным эталоном — {len(value_key)}.", flush=True)
 
     print(f"Сбор Wordstat ({graph}): {len(phrases)} фраз, регион={region}, устройство={dev}, "
           f"период {d_from}–{d_to}, пауза ~{delay}с/запрос.", flush=True)
@@ -505,9 +545,11 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
             return k, d, txt, status
 
         for i, phrase in enumerate(phrases, 1):
-            if dedup and _phrase_key(phrase) in seen_keys:  # variant already covered — no request
+            if dedup and eqkey(phrase) in eq_rows:  # same query already known — copy, no request
                 dup += 1
-                print(f"  [{i}/{len(phrases)}] «{phrase}» — дубль словоформы, пропуск · "
+                rep = eq_rows[eqkey(phrase)]
+                n = _save(db, phrase, region, device, rep, graph) if rep else 0
+                print(f"  [{i}/{len(phrases)}] «{phrase}» — дубль, скопировано {n} точек · "
                       f"ok={ok} empty={empty} dup={dup} fail={fail}", flush=True)
                 continue
             kind, data, last_txt, status = _fetch(phrase)
@@ -527,11 +569,13 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
             if kind == "ok":
                 ok += 1
                 n = _save(db, phrase, region, device, data, graph)  # под ИСХОДНОЙ фразой
-                seen_keys.add(_phrase_key(phrase))  # cover this word-form's variants
+                if dedup:
+                    eq_rows[eqkey(phrase)] = data  # representative — copy to its dupes later
                 note = f"{n} точек" + (" (очищено)" if used != phrase else "")
             elif kind == "empty":
                 empty += 1
-                seen_keys.add(_phrase_key(phrase))  # no data → variants would be empty too
+                if dedup:
+                    eq_rows[eqkey(phrase)] = []  # no data → dupes are empty too
                 note = "нет данных (низкочастотный)"
             else:  # error
                 fail += 1
@@ -555,7 +599,7 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
               f"повтор: --collect --phrases \"{failed_path}\"")
         if err_dumps:
             print(f"Сырые ответы по первым {err_dumps} ошибкам — в {DEBUG_DIR}\\err_*.json")
-    print(f"\nГотово: собрано {ok}, без данных {empty}, дублей пропущено {dup}, ошибок {fail}.\n")
+    print(f"\nГотово: собрано {ok}, без данных {empty}, дублей скопировано {dup}, ошибок {fail}.\n")
     cmd_status()  # show what's now in the DB so you can verify the run
 
 
@@ -625,8 +669,8 @@ def main() -> None:
     ap.add_argument("--graph", choices=("month", "week", "day"), default="month",
                     help="гранулярность: month (по умолч.) / week / day (по дням)")
     ap.add_argument("--dedup", action="store_true",
-                    help="не запрашивать явные дубли (перестановки слов), если словоформа "
-                         "уже собрана — экономит запросы/капчу")
+                    help="не запрашивать дубли: фразы с одинаковым месячным рядом — один "
+                         "запрос Wordstat, остальным копируем данные (экономит запросы/капчу)")
     a = ap.parse_args()
     if a.set_captcha or a.captcha_provider:
         from app.db.base import init_db

@@ -112,6 +112,37 @@ def test_phrase_key_collapses_word_order_not_morphology():
     assert k("ремонт компрессора") != k("ремонт компрессоров")
 
 
+def test_value_equivalence_dedup():
+    import datetime as _dt
+
+    from app.db.base import SessionLocal
+    from app.db.models import WordstatHistory
+    from app.utils import query_hash
+    db = SessionLocal()
+    try:
+        # two phrases with IDENTICAL monthly series (morphology variants) + one distinct
+        def month(q, vals):
+            for i, v in enumerate(vals, 1):
+                db.add(WordstatHistory(query=q, query_hash=query_hash(q), region="all",
+                                       device="all", date=_dt.date(2025, i, 1), value=v))
+        month("винтовые компрессоры", [65869, 65869, 65869])
+        month("винтового компрессора", [65869, 65869, 65869])   # same series -> same query
+        month("поршневой компрессор", [60391, 60391, 60391])    # different
+        db.commit()
+
+        vmap = ws._value_map(db, "all", "all")
+        # identical-series phrases share the SAME equivalence key
+        assert ws._eq_key("винтовые компрессоры", vmap) == ws._eq_key("винтового компрессора", vmap)
+        # a different series -> different key
+        assert ws._eq_key("поршневой компрессор", vmap) != ws._eq_key("винтовые компрессоры", vmap)
+        # word-order dedup would NOT have merged these (different word sets)
+        assert ws._phrase_key("винтовые компрессоры") != ws._phrase_key("винтового компрессора")
+        # a phrase with no monthly reference falls back to the word-order key
+        assert ws._eq_key("новая фраза", vmap)[0] == "w"
+    finally:
+        db.close()
+
+
 def test_sanitize_phrase():
     # slash / colon / semicolon / backslash → space; word order & operators kept
     assert ws._sanitize_phrase("компрессор 1000 л/мин") == "компрессор 1000 л мин"
