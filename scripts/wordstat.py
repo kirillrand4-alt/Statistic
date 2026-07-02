@@ -857,39 +857,48 @@ def cmd_minustest(phrase, region, device, minus) -> None:
         sys.exit('Укажи минус-слова: --minustest "компрессор" --minus "бу,ремонт,аренда"')
     base = phrase.strip()
     withm = base + " " + " ".join("-" + w for w in words)
-    d_from, d_to = _default_range("month")
-    print(f"Проверка минус-слов для «{base}» (регион={region}), период {d_from}–{d_to}:", flush=True)
-    res = {}
+    print(f"Проверка минус-слов для «{base}» vs «{withm}» (регион={region}):", flush=True)
+    verdicts = {}
     with _pw()() as p:
         ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=False, viewport=VIEWPORT)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(WORDSTAT_URL, wait_until="domcontentloaded", timeout=60000)
-        for label, q in (("без минус-слов", base), ("с минус-словами", withm)):
-            ref = f"https://wordstat.yandex.ru/?region={region}&view=graph&words={quote(q)}"
-            for _ in range(2):  # один ретрай на капчу
-                resp = ctx.request.post(
-                    GRAPH_URL, data=json.dumps(_payload(q, region, device, d_from, d_to, "month")),
-                    headers={"content-type": "application/json", "referer": ref}, timeout=45000)
-                kind, rows = _parse_graph(resp)
-                if kind != "captcha":
-                    break
-                _solve_captcha(page, "manual")
-            last = rows[-1][1] if rows else 0
-            total = sum(v for _, v in rows) if rows else 0
-            res[label] = (last, total)
-            print(f"  {label:18} q={q!r} → {kind}, последнее {last}, сумма {total}", flush=True)
-            page.wait_for_timeout(1500)
+        for gran in ("month", "day"):  # месячное И дневное окно — дневное = идея «по дням через API»
+            gf, gt = _default_range(gran)
+            print(f"\n[{gran}] период {gf}–{gt}:", flush=True)
+            res = {}
+            for label, q in (("без минус-слов", base), ("с минус-словами", withm)):
+                ref = f"https://wordstat.yandex.ru/?region={region}&view=graph&words={quote(q)}"
+                kind, rows = "error", []
+                for _ in range(2):  # один ретрай на капчу
+                    resp = ctx.request.post(
+                        GRAPH_URL, data=json.dumps(_payload(q, region, device, gf, gt, gran)),
+                        headers={"content-type": "application/json", "referer": ref}, timeout=45000)
+                    kind, rows = _parse_graph(resp)
+                    if kind != "captcha":
+                        break
+                    _solve_captcha(page, "manual")
+                last = rows[-1][1] if rows else 0
+                total = sum(v for _, v in rows) if rows else 0
+                res[label] = (last, total)
+                print(f"    {label:18} q={q!r} → {kind}, точек {len(rows)}, последнее {last}, сумма {total}",
+                      flush=True)
+                page.wait_for_timeout(1500)
+            a, b = res.get("без минус-слов", (0, 0)), res.get("с минус-словами", (0, 0))
+            verdicts[gran] = "работают" if (b[1] > 0 and a != b) else ("игнор" if a == b else "?")
         ctx.close()
-    a, b = res.get("без минус-слов", (0, 0)), res.get("с минус-словами", (0, 0))
-    if b[1] > 0 and a != b:
-        print("\n✅ Минус-слова РАБОТАЮТ в «Динамике» (суммы разные). Значит историю за 2 года "
-              "с минус-словами можно собирать обычным --collect — впиши минус-слова прямо во фразу "
-              "списка, напр. «компрессор -бу -ремонт».")
-    elif a == b:
-        print("\n❌ Минус-слова ИГНОРИРУЮТСЯ (суммы одинаковые) — как и операторы. Историю с "
-              "минус-словами через скрапинг «Динамики» получить нельзя.")
+    print("\n=== ИТОГ ===")
+    for gran, v in verdicts.items():
+        print(f"  {gran}: минус-слова {v}")
+    if any(v == "работают" for v in verdicts.values()):
+        g = next(k for k, v in verdicts.items() if v == "работают")
+        print(f"\n✅ На гранулярности «{g}» минус-слова РАБОТАЮТ. Значит историю с минус-словами "
+              f"можно собирать обычным --collect --graph {g} — впиши минус-слова прямо во фразу "
+              "(напр. «компрессор -бу -ремонт»), окна по периоду скрипт проходит сам.")
     else:
-        print("\n⚠ Неоднозначно (возможно капча/ошибка) — повтори тест.")
+        print("\n❌ Минус-слова игнорируются и по месяцам, и по дням — как операторы. "
+              "Историю с минус-словами через «Динамику» (в т.ч. дневными окнами) получить нельзя: "
+              "эндпоинт возвращает broad на любой ввод. Остаётся только текущий срез через Арсенкин.")
 
 
 def cmd_tabletest(phrase, region, device) -> None:
