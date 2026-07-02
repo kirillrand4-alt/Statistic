@@ -725,6 +725,21 @@ def ui_donors_run(length: int = Form(100), max_records: int = Form(0)):
                 if started else "Сбор уже идёт.")
 
 
+@router.post("/ui/donors/clear")
+def ui_donors_clear(confirm: str = Form(""), db: Session = Depends(get_db)):
+    from app.services import donors as D
+
+    def back(m: str):
+        return RedirectResponse(url=f"{BP}/donors?msg={quote(m)}", status_code=303)
+
+    if D.current_status().get("running"):
+        return back("Идёт сбор — дождитесь окончания, потом очищайте.")
+    if confirm != "yes":
+        return back("Очистка не подтверждена.")
+    n = D.wipe(db)
+    return back(f"База доноров очищена: удалено {n}. Теперь запустите сбор с новыми фильтрами.")
+
+
 @router.get("/cannibalization")
 def cannibalization_page(request: Request, domain: str | None = None,
                          period_days: int = 90, min_query_impr: str | None = None,

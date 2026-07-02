@@ -12,6 +12,8 @@ Examples:
     python scripts/miralinks_catalog.py --cookie-file c.txt --body-file b.txt --probe
     # full pull (respects pagination + a polite pause between pages)
     python scripts/miralinks_catalog.py --cookie-file c.txt --body-file b.txt --apply
+    # wipe the base before re-pulling with different filters (upsert never removes)
+    python scripts/miralinks_catalog.py --wipe
     # export the stored catalog to CSV
     python scripts/miralinks_catalog.py --dump donors.csv
 """
@@ -50,6 +52,16 @@ def probe(cookie: str, body: str, length: int) -> None:
               f"цена={r['price_rur']}₽ трафик={r['traffic']} [{r['region']}] {r['topics']}")
 
 
+def wipe() -> None:
+    init_db()
+    db = SessionLocal()
+    try:
+        n = D.wipe(db)
+        print(f"База доноров очищена: удалено {n} строк.")
+    finally:
+        db.close()
+
+
 def dump(path: str) -> None:
     init_db()
     db = SessionLocal()
@@ -74,7 +86,13 @@ def main() -> None:
     ap.add_argument("--probe", action="store_true", help="только проверить (1 страница)")
     ap.add_argument("--apply", action="store_true", help="реально тянуть и сохранять")
     ap.add_argument("--dump", help="выгрузить сохранённый каталог в этот CSV/XLSX и выйти")
+    ap.add_argument("--wipe", action="store_true",
+                    help="удалить ВСЕ сохранённые доноры (перед сбором с новыми фильтрами) и выйти")
     a = ap.parse_args()
+
+    if a.wipe:
+        wipe()
+        return
 
     if a.dump:
         dump(a.dump)

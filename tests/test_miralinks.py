@@ -147,3 +147,24 @@ def test_donor_rows_filter_and_export(db):
     fname, buf, _ = D.build_export(D.donor_rows(db), fmt="csv")
     body = buf.getvalue().decode("utf-8-sig")
     assert fname.endswith(".csv") and "Домен" in body and "a.ru" in body
+
+
+def test_wipe_clears_all_donors(db):
+    from datetime import date
+    db.add_all([
+        DonorSite(source="miralinks", external_id="1", domain="a.ru", sqi=5000,
+                  captured_on=date(2026, 6, 1)),
+        DonorSite(source="miralinks", external_id="2", domain="b.ru", sqi=3000,
+                  captured_on=date(2026, 6, 1)),
+        DonorSite(source="other", external_id="9", domain="c.ru", sqi=1000,
+                  captured_on=date(2026, 6, 1)),
+    ])
+    db.commit()
+    assert D.count(db) == 3
+    # default wipes only the miralinks source
+    assert D.wipe(db) == 2
+    assert D.count(db) == 1
+    assert [r.domain for r in D.donor_rows(db)] == ["c.ru"]
+    # source=None wipes everything
+    assert D.wipe(db, source=None) == 1
+    assert D.count(db) == 0

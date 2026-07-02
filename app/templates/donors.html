@@ -23,6 +23,16 @@
   </form>
   <small>Тянем каталог постранично с твоей сессией, с паузой между страницами (бережно к их
   серверу). Если cookie протух — увидишь сообщение об ошибке, просто обнови cookie в Настройках.</small>
+
+  <hr>
+  <form method="post" action="{{ base_path }}/ui/donors/clear"
+        onsubmit="return confirm('Удалить ВСЕ {{ total|numfmt }} доноров из базы? Это нужно перед сбором с новыми фильтрами, иначе старые площадки останутся.');">
+    <input type="hidden" name="confirm" value="yes">
+    <button type="submit" class="outline secondary" {% if status.running or not total %}disabled{% endif %}>
+      🗑 Очистить базу доноров ({{ total|numfmt }})</button>
+    <small>Перед сбором с <strong>другими</strong> фильтрами очистите базу: сбор только добавляет/обновляет
+    совпадения (по id), но не удаляет площадки, выпавшие из нового фильтра.</small>
+  </form>
 </article>
 
 <form method="get" action="{{ base_path }}/donors" class="grid">

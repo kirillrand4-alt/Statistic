@@ -162,6 +162,24 @@ def count(db) -> int:
     return db.execute(select(func.count()).select_from(DonorSite)).scalar_one()
 
 
+def wipe(db, source: str | None = "miralinks") -> int:
+    """Delete donor rows from the base. ``source=None`` wipes every source.
+
+    Used before re-pulling with different catalog filters: the pull upserts by
+    (source, external_id), so it only adds/refreshes matches and never removes
+    donors that fell out of the new filter — clear first to get a clean set.
+    Returns the number of rows deleted.
+    """
+    from sqlalchemy import delete
+
+    stmt = delete(DonorSite)
+    if source:
+        stmt = stmt.where(DonorSite.source == source)
+    n = db.execute(stmt).rowcount or 0
+    db.commit()
+    return n
+
+
 def donor_rows(db, *, q=None, region=None, topic=None, min_sqi=None, max_price=None,
                min_dr=None, min_traffic=None, max_spamness=None, sort="sqi",
                limit: int | None = 500) -> list[DonorSite]:
