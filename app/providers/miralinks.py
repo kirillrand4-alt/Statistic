@@ -66,16 +66,22 @@ def set_search_data(body: str, obj: dict) -> str:
 
 
 def _coerce(v: str):
-    """CLI value → int/float/bool where it clearly is one, else the raw string."""
+    """CLI value → keep as string (Miralinks sends range filters as strings, e.g.
+    ``"s_minTraffic":"10"``). Only ``true``/``false`` become booleans, and an
+    explicit ``num:123`` prefix forces a JSON number when a field needs one."""
     s = v.strip()
     low = s.lower()
     if low in ("true", "false"):
         return low == "true"
-    for cast in (int, float):
+    if low.startswith("num:"):
+        body = s[4:].strip()
         try:
-            return cast(s)
+            return int(body)
         except ValueError:
-            pass
+            try:
+                return float(body)
+            except ValueError:
+                return body
     return s
 
 
@@ -83,8 +89,9 @@ def patch_search_data(body: str, updates: dict) -> str:
     """Merge ``{key: value}`` filter overrides into the body's searchData.
 
     A value of ``None`` (or the string ``"__del__"``) removes that key. String
-    values are coerced to int/float/bool when unambiguous so numeric ranges land
-    as numbers, matching how the catalog UI sends them.
+    values are kept as strings to match the catalog's wire format for range
+    filters; use a ``num:`` prefix to force a JSON number, ``true``/``false`` for
+    booleans.
     """
     obj = get_search_data(body)
     for k, v in updates.items():

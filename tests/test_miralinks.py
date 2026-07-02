@@ -154,11 +154,14 @@ def test_search_data_roundtrip_and_patch():
             "&searchData=%7B%22catalog%22%3A%22yandex%22%2C%22sqiFrom%22%3A100%7D&bar=1")
     sd = M.get_search_data(body)
     assert sd == {"catalog": "yandex", "sqiFrom": 100}
-    # patch: numbers coerced, string kept, missing key added, None removes
+    # patch: values kept as strings (Miralinks wire format), missing key added, None removes
     out = M.patch_search_data(body, {"sqiFrom": "3860", "sqiTo": "5550",
                                      "mrFrom": "100", "mrTo": "100", "catalog": None})
     sd2 = M.get_search_data(out)
-    assert sd2 == {"sqiFrom": 3860, "sqiTo": 5550, "mrFrom": 100, "mrTo": 100}
+    assert sd2 == {"sqiFrom": "3860", "sqiTo": "5550", "mrFrom": "100", "mrTo": "100"}
+    # num: prefix forces a JSON number, true/false → bool
+    n = M.get_search_data(M.patch_search_data(body, {"t": "num:144", "flag": "true"}))
+    assert n["t"] == 144 and n["flag"] is True
     # untouched params survive and pagination still swappable
     assert "iColumns=41" in out and "bar=1" in out
     assert "iDisplayStart=99" in M.set_param(out, "iDisplayStart", 99)
