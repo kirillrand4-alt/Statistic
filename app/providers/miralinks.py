@@ -110,6 +110,21 @@ def _auth_failed(status_code: int, text: str) -> bool:
     return "<html" in head or "<!doctype" in head or "login" in head and "json" not in head
 
 
+def _json_session_expired(data) -> bool:
+    """Soft auth-fail: HTTP 200 with a JSON body like
+    ``{"flag":"user_session_expire","result":"error","message":"Вы не вошли в систему"}``.
+    Miralinks returns this instead of a redirect when the session cookie has died."""
+    if not isinstance(data, dict):
+        return False
+    flag = str(data.get("flag") or "").lower()
+    if any(w in flag for w in ("session", "expire", "auth", "login")):
+        return True
+    if str(data.get("result") or "").lower() == "error" and "aaData" not in data:
+        msg = str(data.get("message") or "").lower()
+        return any(w in msg for w in ("не вошли", "войдите", "войти", "session", "login", "авториз"))
+    return False
+
+
 class Miralinks:
     def __init__(self, cookie: str, body_template: str, url: str = DEFAULT_URL,
                  timeout: int = 60, retries: int = 4):
@@ -149,10 +164,15 @@ class Miralinks:
                 return {"error": "auth", "status": r.status_code,
                         "detail": "Сессия Miralinks недействительна — обновите cookie в Настройках."}
             try:
-                return r.json()
+                data = r.json()
             except Exception:  # noqa: BLE001
                 last = {"error": "non-json", "status": r.status_code, "raw": (r.text or "")[:200]}
                 time.sleep(2 * (attempt + 1))
+                continue
+            if _json_session_expired(data):
+                return {"error": "auth", "status": r.status_code,
+                        "detail": "Сессия Miralinks истекла (вы не вошли) — обновите cookie в Настройках."}
+            return data
         return last
 
 

@@ -67,6 +67,27 @@ def test_auth_failed_detection():
     assert not M._auth_failed(200, '{"aaData": []}')
 
 
+def test_json_session_expired_detection():
+    assert M._json_session_expired(
+        {"flag": "user_session_expire", "result": "error", "data": [],
+         "message": "Вы не вошли в систему"})
+    assert M._json_session_expired({"result": "error", "message": "Please login"})
+    # a genuine empty catalog page is NOT an auth failure
+    assert not M._json_session_expired({"iTotalRecords": 0, "aaData": []})
+    assert not M._json_session_expired({"aaData": [{"rowData": {}}]})
+
+
+def test_fetch_page_surfaces_soft_session_expiry(monkeypatch):
+    class _Expire:
+        def post(self, *a, **k):
+            return _Resp({"flag": "user_session_expire", "result": "error",
+                          "message": "Вы не вошли в систему"})
+
+    monkeypatch.setattr(M, "httpx", _Expire())
+    res = M.Miralinks("stale", "iDisplayStart=0&iDisplayLength=100").fetch_page(0, 100)
+    assert res.get("error") == "auth" and "cookie" in res["detail"].lower()
+
+
 class _Resp:
     def __init__(self, data=None, code=200, text='{"ok":1}'):
         self._d, self.status_code, self.text = data, code, text
