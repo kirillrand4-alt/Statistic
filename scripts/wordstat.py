@@ -845,6 +845,53 @@ def cmd_freqtest(phrase, region, device) -> None:
           "Если одинаковые или везде 0 — Wordstat их игнорирует/не принимает.")
 
 
+def cmd_minustest(phrase, region, device, minus) -> None:
+    """Проверить, учитывает ли «Динамика» (getGraph) минус-слова. Сравниваем
+    2-летний ряд «фразы» и «фразы -минус1 -минус2». Если суммы отличаются —
+    минус-слова работают, и историю с ними можно собирать обычным --collect
+    (просто вписать минус-слова прямо во фразу)."""
+    from urllib.parse import quote
+
+    words = [w.strip().lstrip("-") for w in (minus or "").replace(",", " ").split() if w.strip()]
+    if not words:
+        sys.exit('Укажи минус-слова: --minustest "компрессор" --minus "бу,ремонт,аренда"')
+    base = phrase.strip()
+    withm = base + " " + " ".join("-" + w for w in words)
+    d_from, d_to = _default_range("month")
+    print(f"Проверка минус-слов для «{base}» (регион={region}), период {d_from}–{d_to}:", flush=True)
+    res = {}
+    with _pw()() as p:
+        ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=False, viewport=VIEWPORT)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.goto(WORDSTAT_URL, wait_until="domcontentloaded", timeout=60000)
+        for label, q in (("без минус-слов", base), ("с минус-словами", withm)):
+            ref = f"https://wordstat.yandex.ru/?region={region}&view=graph&words={quote(q)}"
+            for _ in range(2):  # один ретрай на капчу
+                resp = ctx.request.post(
+                    GRAPH_URL, data=json.dumps(_payload(q, region, device, d_from, d_to, "month")),
+                    headers={"content-type": "application/json", "referer": ref}, timeout=45000)
+                kind, rows = _parse_graph(resp)
+                if kind != "captcha":
+                    break
+                _solve_captcha(page, "manual")
+            last = rows[-1][1] if rows else 0
+            total = sum(v for _, v in rows) if rows else 0
+            res[label] = (last, total)
+            print(f"  {label:18} q={q!r} → {kind}, последнее {last}, сумма {total}", flush=True)
+            page.wait_for_timeout(1500)
+        ctx.close()
+    a, b = res.get("без минус-слов", (0, 0)), res.get("с минус-словами", (0, 0))
+    if b[1] > 0 and a != b:
+        print("\n✅ Минус-слова РАБОТАЮТ в «Динамике» (суммы разные). Значит историю за 2 года "
+              "с минус-словами можно собирать обычным --collect — впиши минус-слова прямо во фразу "
+              "списка, напр. «компрессор -бу -ремонт».")
+    elif a == b:
+        print("\n❌ Минус-слова ИГНОРИРУЮТСЯ (суммы одинаковые) — как и операторы. Историю с "
+              "минус-словами через скрапинг «Динамики» получить нельзя.")
+    else:
+        print("\n⚠ Неоднозначно (возможно капча/ошибка) — повтори тест.")
+
+
 def cmd_tabletest(phrase, region, device) -> None:
     """Dump getTable (Топы запросов) for broad vs "phrase" vs "!exact" — to find where
     the operator-applied total frequency lives (getGraph ignores operators)."""
@@ -974,6 +1021,11 @@ def main() -> None:
                     help="проверить, применяет ли Wordstat операторы: шлёт все 4 формы одной фразы")
     ap.add_argument("--tabletest", metavar="PHRASE",
                     help="дамп getTable (Топы запросов) для broad/phrase/exact — ищем точную частотность")
+    ap.add_argument("--minustest", metavar="PHRASE",
+                    help="проверить, учитывает ли «Динамика» минус-слова (сравнить ряд фразы "
+                         "с и без минус-слов); минус-слова задать в --minus")
+    ap.add_argument("--minus", default="",
+                    help="минус-слова через запятую/пробел (для --minustest), напр. \"бу,ремонт,аренда\"")
     ap.add_argument("--profile", metavar="DIR",
                     help="папка профиля браузера = отдельный аккаунт Яндекса. Укажи новую "
                          "папку, чтобы войти под другим аккаунтом (если старый заблокирован). "
@@ -1009,6 +1061,8 @@ def main() -> None:
         cmd_freqtest(a.freqtest, a.region, a.device)
     elif a.tabletest:
         cmd_tabletest(a.tabletest, a.region, a.device)
+    elif a.minustest:
+        cmd_minustest(a.minustest, a.region, a.device, a.minus)
     elif a.probe:
         src = (_read_phrases(a.phrases) if a.phrases else
                (_list_phrases(a.base) if a.from_list else _db_phrases(a.site) if a.from_db else []))
