@@ -177,8 +177,15 @@ def main() -> None:
         print("Cookie сохранён в Настройки.")
         return
     if a.save_body:
-        set_cred("miralinks_body", _read(a.save_body, "").strip())
-        print("Тело запроса сохранено в Настройки.")
+        body = (_read(a.save_body, "") or "").strip()
+        if "searchData=" not in body:
+            print("⚠ В теле нет searchData= — похоже, Payload скопирован НЕ в режиме «view source»\n"
+                  "  (скопировался разобранный вид, а не сырая строка). Рабочее тело НЕ перезаписано.\n"
+                  "  В DevTools → вкладка Payload → нажми «view source» → скопируй ВСЮ строку целиком\n"
+                  "  (в ней должно быть …&searchData=%7B…%7D) и повтори --save-body.")
+            sys.exit(1)
+        set_cred("miralinks_body", body)
+        print(f"Тело запроса сохранено в Настройки ({len(body)} символов).")
         return
     if a.wipe:
         wipe()
