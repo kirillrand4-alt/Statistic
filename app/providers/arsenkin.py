@@ -84,6 +84,18 @@ class Arsenkin:
             "queries": list(queries), "se": list(se), "depth": depth,
             "is_snippet": bool(is_snippet), "noreask": bool(noreask)}})
 
+    def set_wordstat(self, queries, regions=(0,), device="",
+                     ws=("base", "quoted", "overal", "exact")) -> dict:
+        """Запустить инструмент «Парсинг Wordstat» (4 типа частотности за ~30 дней).
+
+        ``ws`` — какие частотности собрать: base=широкая, quoted="фраза",
+        overal="!фраза", exact="[!фраза]" (маппинг подтвердить пробой). ``regions``
+        — id регионов Wordstat (0 = все). ``device`` — "" все | desktop | mobile…
+        Точные имена полей могут отличаться — проба печатает сырой ответ."""
+        return self._post("set", {"tools_name": "wordstat", "data": {
+            "type": 1, "queries": list(queries), "device": device,
+            "regions": list(regions), "ws": list(ws)}})
+
     def check(self, task_id) -> dict:
         return self._post("check", {"task_id": task_id})
 
@@ -132,6 +144,55 @@ def parse_result(payload: dict):
                 title, snippet = _title_snippet(snippets, url)
                 yield {"query": query, "se": se.get("ss"), "region": se.get("region"),
                        "position": pos, "url": url, "title": title, "snippet": snippet}
+
+
+# arsenkin ws-код -> наш match_type (broad|phrase|exact|order). overal/exact —
+# «!фраза»/«[!фраза]»; порядок подтвердить пробой (--freq-probe печатает сырое).
+WS_TO_MATCH = {"base": "broad", "quoted": "phrase", "overal": "exact", "exact": "order"}
+
+
+def parse_wordstat_result(payload: dict):
+    """Best-effort разбор ответа инструмента «wordstat» в строки
+    ``{query, ws, region, value}``. Реальную структуру подтверждаем пробой и при
+    необходимости правим здесь — поэтому парсер терпимый к разным формам."""
+    res = (payload or {}).get("result") or {}
+    inner = res.get("result") if isinstance(res.get("result"), (dict, list)) else res
+    rows: list[dict] = []
+
+    def emit(query, ws, value, region=None):
+        rows.append({"query": query, "ws": ws, "region": region,
+                     "value": _num_or_none(value)})
+
+    # форма A: {"result":{"<query>": {"base":N,"quoted":N,"overal":N,"exact":N}}}
+    if isinstance(inner, dict):
+        for query, val in inner.items():
+            if isinstance(val, dict):
+                # либо {ws:value}, либо {region:{ws:value}}
+                if any(k in val for k in WS_TO_MATCH):
+                    for ws, v in val.items():
+                        emit(query, ws, v)
+                else:
+                    for region, wsmap in val.items():
+                        if isinstance(wsmap, dict):
+                            for ws, v in wsmap.items():
+                                emit(query, ws, v, region)
+    # форма B: [{"query":..,"ws":..,"value":..}, ...] или {"data":[...]}
+    seq = inner if isinstance(inner, list) else (inner.get("data") if isinstance(inner, dict) else None)
+    if isinstance(seq, list):
+        for it in seq:
+            if isinstance(it, dict) and ("query" in it or "phrase" in it):
+                q = it.get("query") or it.get("phrase")
+                for ws in WS_TO_MATCH:
+                    if ws in it:
+                        emit(q, ws, it[ws], it.get("region"))
+    return rows
+
+
+def _num_or_none(v):
+    try:
+        return int(float(str(v).replace(" ", "").replace(" ", "")))
+    except (TypeError, ValueError):
+        return None
 
 
 def se_for(types, yandex_region=213, google_region=1011969) -> list[dict]:
