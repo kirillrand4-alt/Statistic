@@ -527,6 +527,18 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
         d_from, d_to = _align_week(d_from, d_to)
     dev = "all" if device == "desktop,phone,tablet" else device
 
+    if match != "broad":  # операторы в скрапинге не работают — не тратим запросы/капчу
+        print(
+            f"⚠ Новый Wordstat через скрапинг НЕ поддерживает операторы (match={match}).\n"
+            "  getGraph и getTable возвращают ШИРОКУЮ частотность на любой ввод — проверено\n"
+            "  командами --freqtest и --tabletest (все 4 формы дают идентичные значения).\n"
+            "  Собирать phrase/exact/order бессмысленно: это дубли broad. Пропускаю.\n"
+            "  Точную/фразовую частотность берите через Яндекс.Директ API (KeywordsResearch)\n"
+            "  или новый Wordstat BETA API — нужен рекламный аккаунт с OAuth-токеном.",
+            flush=True)
+        db.close()
+        return
+
     if skip_done:  # resume: drop phrases already collected for this region/device/period
         if graph == "month":
             lo, hi = _month_floor(d_from), _month_floor(d_to)
@@ -879,7 +891,13 @@ def main() -> None:
         else:
             phrases = []
         grans = ("month", "week", "day") if a.graph == "all" else (a.graph,)
-        matches = ("broad", "phrase", "exact", "order") if a.match == "all" else (a.match,)
+        if a.match == "all":  # операторы в скрапинге не работают — собираем только broad
+            print("ℹ --match all: новый Wordstat отдаёт только широкую частотность "
+                  "(phrase/exact/order = дубли broad, проверено --freqtest/--tabletest). "
+                  "Собираю только broad по всем гранулярностям.", flush=True)
+            matches = ("broad",)
+        else:
+            matches = (a.match,)
         # month first (its broad/… эталон помогает дедупу недели/дня)
         for g in grans:
             for mt in matches:
