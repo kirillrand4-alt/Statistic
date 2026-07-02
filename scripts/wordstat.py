@@ -974,7 +974,15 @@ def main() -> None:
                     help="проверить, применяет ли Wordstat операторы: шлёт все 4 формы одной фразы")
     ap.add_argument("--tabletest", metavar="PHRASE",
                     help="дамп getTable (Топы запросов) для broad/phrase/exact — ищем точную частотность")
+    ap.add_argument("--profile", metavar="DIR",
+                    help="папка профиля браузера = отдельный аккаунт Яндекса. Укажи новую "
+                         "папку, чтобы войти под другим аккаунтом (если старый заблокирован). "
+                         "По умолчанию общий профиль с Вебвизором.")
     a = ap.parse_args()
+    if a.profile:  # переключение на другой аккаунт = отдельный профиль
+        global PROFILE_DIR
+        PROFILE_DIR = os.path.abspath(a.profile)
+        print(f"Профиль браузера: {PROFILE_DIR}", flush=True)
     if a.set_captcha or a.captcha_provider:
         from app.db.base import init_db
         from app.services import captcha as C
