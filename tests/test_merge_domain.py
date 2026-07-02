@@ -89,7 +89,8 @@ def test_dashboard_picks_domain_and_merges(client, db):
     # two GSC properties of one domain -> a single bare-domain entry, auto-merged
     _site(db, "sc-domain:example.com")
     _site(db, "https://example.com/")
-    r = client.get("/?domain=example.com&engines=gsc")
+    # dashboard is progressive: data lives in the X-Partial fragment
+    r = client.get("/?domain=example.com&engines=gsc", headers={"X-Partial": "1"})
     assert r.status_code == 200
     assert "example.com" in r.text          # bare domain in the picker (no protocol)
     assert "склеены" in r.text              # the auto-merge note

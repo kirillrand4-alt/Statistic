@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends layout|default("base.html") %}
 {% from "partials/site_selector.html" import picker, gran_select %}
 {% block title %}Дашборд · SEO Статистика{% endblock %}
 {% block content %}

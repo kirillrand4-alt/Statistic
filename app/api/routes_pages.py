@@ -194,6 +194,12 @@ def dashboard(request: Request, domain: str | None = None,
               end: str | None = None, msg: str | None = None, clean: int = 0,
               ratio: float = 10.0, min_impr: int = 100, devices: int = 0,
               show_tagged: int = 0, gran: str = "day", db: Session = Depends(get_db)):
+    # Progressive render: without the X-Partial header, return the instant shell
+    # (nav + skeleton, no DB aggregation). The shell's JS re-requests this same URL
+    # with X-Partial:1 to fetch the heavy fragment below (which the cache stores).
+    if request.headers.get("x-partial") != "1":
+        return templates.TemplateResponse(request, "lazy_shell.html",
+                                          {"request": request, "shell_title": "Дашборд"})
     domains = _domains(db)
     cur = domain if domain and any(d["domain"] == domain for d in domains) \
         else (domains[0]["domain"] if domains else None)
@@ -213,6 +219,7 @@ def dashboard(request: Request, domain: str | None = None,
             select(CollectionRun).order_by(CollectionRun.started_at.desc()).limit(10)
         ).scalars().all(),
         "gsc_site_url": get_settings().gsc_site_url,
+        "layout": "_fragment.html",  # render only the content fragment (async-loaded)
     }
     if cur and sel:
         engine_ids = _domain_engine_ids(db, cur, sel)  # {code: [site_ids]}

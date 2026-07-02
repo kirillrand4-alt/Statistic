@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ shell_title|default("Загрузка") }} · SEO Статистика{% endblock %}
+{% block content %}
+{# Instant shell: nav + heading render immediately; the heavy data is fetched in a
+   second request (X-Partial header) and injected here, so the page never blocks on
+   the DB aggregation. The fragment response is cached, so reloads are instant. #}
+<div id="lazy-content" aria-live="polite">
+  <article aria-busy="true">Загрузка данных…</article>
+</div>
+<noscript><article>Для этой страницы нужен включённый JavaScript.</article></noscript>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var box = document.getElementById('lazy-content');
+  if (!box) return;
+  fetch(window.location.href, {headers: {'X-Partial': '1'}, credentials: 'same-origin'})
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+    .then(function (html) {
+      box.innerHTML = html;
+      // innerHTML does NOT run <script> tags — re-inject them so charts initialise
+      box.querySelectorAll('script').forEach(function (old) {
+        var s = document.createElement('script');
+        for (var i = 0; i < old.attributes.length; i++)
+          s.setAttribute(old.attributes[i].name, old.attributes[i].value);
+        s.textContent = old.textContent;
+        old.parentNode.replaceChild(s, old);
+      });
+      if (window.initSortable) window.initSortable(box);       // re-arm table sorting
+      if (window.initSiteSearch) window.initSiteSearch(box);   // re-arm domain combobox
+    })
+    .catch(function (e) {
+      box.innerHTML = '<article>Не удалось загрузить данные (' + e.message +
+        '). <a href="#" onclick="location.reload();return false;">Повторить</a></article>';
+    });
+})();
+</script>
+{% endblock %}

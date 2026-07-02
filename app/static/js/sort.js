@@ -43,7 +43,9 @@
     applyLimit(table);
   }
 
-  document.querySelectorAll("table.sortable").forEach(function (table) {
+  function enhanceTable(table) {
+    if (table.dataset.sortInit) return;   // idempotent: safe to re-run after async inject
+    table.dataset.sortInit = "1";
     // ----- row-display limit -----
     const tb = table.tBodies[0];
     const total = tb ? tb.rows.length : 0;
@@ -94,5 +96,18 @@
         sortBy(table, col, dir);
       });
     });
-  });
+  }
+
+  // Scan a root (default: whole document) for sortable tables. Exposed so
+  // async-injected fragments (progressive pages) can re-arm their tables.
+  function initSortable(root) {
+    (root || document).querySelectorAll("table.sortable").forEach(enhanceTable);
+  }
+  window.initSortable = initSortable;
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", function () { initSortable(document); });
+  } else {
+    initSortable(document);
+  }
 })();

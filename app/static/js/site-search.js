@@ -93,7 +93,12 @@
     }
   }
 
-  document.addEventListener("DOMContentLoaded", function () {
-    document.querySelectorAll('select[name="site_id"], select.searchable').forEach(enhance);
-  });
+  // Scan a root (default: whole document) for enhanceable selects. Exposed so
+  // async-injected fragments (progressive pages) can re-arm their comboboxes.
+  function initSiteSearch(root) {
+    (root || document).querySelectorAll('select[name="site_id"], select.searchable').forEach(enhance);
+  }
+  window.initSiteSearch = initSiteSearch;
+
+  document.addEventListener("DOMContentLoaded", function () { initSiteSearch(document); });
 })();

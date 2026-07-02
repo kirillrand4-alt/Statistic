@@ -122,7 +122,9 @@ def test_ui_admin_flows(client):
 
     # backfill via UI (mock provider) then verify dashboard surfaces data
     assert client.post("/ui/backfill", data={"site_id": site_id, "days": 40}).status_code == 200
-    page = client.get(f"/?site_id={site_id}")
+    # dashboard is progressive: the shell loads instantly, data comes from the
+    # X-Partial fragment request the shell's JS makes
+    page = client.get(f"/?site_id={site_id}", headers={"X-Partial": "1"})
     assert page.status_code == 200
     assert "Топ страниц" in page.text
 
@@ -180,3 +182,18 @@ def test_yandex_connect_route(client):
     assert r.status_code == 200  # redirect to dashboard, followed
     sites = client.get("/api/sites").json()
     assert any(s["source"] == "yandex_webmaster" for s in sites)
+
+
+def test_dashboard_progressive_shell_and_fragment(client):
+    # Without the X-Partial header the dashboard returns the instant shell
+    # (skeleton, no heavy body) so HTML renders before any DB aggregation.
+    shell = client.get("/")
+    assert shell.status_code == 200
+    assert 'id="lazy-content"' in shell.text
+    assert "Динамика" not in shell.text          # heavy body is NOT computed here
+    # The shell's JS re-requests with X-Partial:1 to get the data fragment —
+    # just the content, no full-page <head>/<html> wrapper.
+    frag = client.get("/", headers={"X-Partial": "1"})
+    assert frag.status_code == 200
+    assert "<!doctype html>" not in frag.text.lower()
+    assert 'id="lazy-content"' not in frag.text

@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 # Heavy analytics pages to prime on startup so the first real visitor gets a HIT.
 WARM_PATHS = ("/", "/keywords", "/pages", "/errors", "/compare")
+# Progressive pages whose heavy data fragment (X-Partial) is worth pre-warming too.
+WARM_PARTIAL_PATHS = ("/",)
 
 # key -> (expires_epoch, body, media_type)
 _STORE: "OrderedDict[str, tuple[float, bytes, str]]" = OrderedDict()
@@ -79,28 +81,37 @@ def stats() -> dict:
         return {"entries": len(_STORE), "live": live}
 
 
-async def warm(app, base_path: str = "", paths=WARM_PATHS) -> int:
+async def warm(app, base_path: str = "", paths=WARM_PATHS,
+               partial_paths=WARM_PARTIAL_PATHS) -> int:
     """Prime the page cache in-process by GETting the heavy pages through the ASGI
     app (no network port — works the same on Windows/Linux), so the first real
     visitor after a restart gets an instant HIT instead of paying the recompute.
 
-    Best-effort: any page that errors is logged and skipped. Returns how many
-    pages were primed successfully.
+    ``paths`` are warmed normally (light shells + non-progressive pages);
+    ``partial_paths`` are warmed with the X-Partial header so the heavy data
+    fragment of a progressive page is precomputed too. Best-effort: any page that
+    errors is logged and skipped. Returns how many requests were primed (HTTP 200).
     """
     import httpx
 
     bp = base_path or ""
     primed = 0
     transport = httpx.ASGITransport(app=app)
+
+    def _url(rel):
+        return f"{bp}/{rel.lstrip('/')}" if bp else rel
+
     async with httpx.AsyncClient(transport=transport, base_url="http://warmup",
                                  timeout=180.0) as client:
-        for rel in paths:
-            path = f"{bp}/{rel.lstrip('/')}" if bp else rel
+        jobs = [(_url(r), None) for r in paths] + \
+               [(_url(r), {"X-Partial": "1"}) for r in partial_paths]
+        for path, headers in jobs:
             try:
-                r = await client.get(path)
+                r = await client.get(path, headers=headers or {})
                 if r.status_code == 200:
                     primed += 1
-                logger.info("cache warm %s -> %s (%s)", path, r.status_code,
+                logger.info("cache warm %s%s -> %s (%s)", path,
+                            " [partial]" if headers else "", r.status_code,
                             r.headers.get("X-Page-Cache", "-"))
             except Exception:  # noqa: BLE001 — warmup is best-effort
                 logger.warning("cache warm failed for %s", path, exc_info=False)
@@ -145,7 +156,11 @@ class PageCacheMiddleware(BaseHTTPMiddleware):
         if not _cacheable(rel) or "msg" in qp:
             return await call_next(request)
         force = "nocache" in qp
+        # progressive pages serve two variants of the same URL: the light shell
+        # (no header) and the heavy data fragment (X-Partial:1) — cache separately
         key = rel + "?" + _norm_qs(qp)
+        if request.headers.get("x-partial") == "1":
+            key += "|partial"
         if not force:
             hit = get(key)
             if hit is not None:

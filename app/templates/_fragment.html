@@ -1,0 +1,6 @@
+{# Bare layout for progressive (async) page fragments: only the content and its
+   scripts — no <html>/<head>/nav. Fetched by lazy_shell.html and injected into
+   the already-rendered page shell, so heavy pages show HTML instantly and compute
+   their data in a second request (which the page cache then stores). #}
+{% block content %}{% endblock %}
+{% block scripts %}{% endblock %}
