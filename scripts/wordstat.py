@@ -414,6 +414,41 @@ def _list_phrases(base: str | None = None) -> list[str]:
         db.close()
 
 
+def cmd_show_lists(base: str | None = None) -> None:
+    """Показать базы ключей вкладок «Спрос» — что реально загружено в каждой."""
+    from app.db.base import SessionLocal, init_db
+    from app.services import demand
+    init_db()
+    db = SessionLocal()
+    try:
+        bases = [base] if base else demand.BASES
+        for b in bases:
+            kl = demand.get_keylist(db, b)
+            print(f"\n=== база «{b}» (ключ {demand._keylist_key(b)}): {len(kl)} фраз ===")
+            for p in kl[:60]:
+                print(f"  {p}")
+            if len(kl) > 60:
+                print(f"  … ещё {len(kl) - 60}")
+    finally:
+        db.close()
+
+
+def cmd_set_list(path: str, base: str | None = None) -> None:
+    """Загрузить список ключей из файла в базу вкладки «Спрос» (--base)."""
+    from app.db.base import SessionLocal, init_db
+    from app.services import demand
+    b = base or demand.BASES[0]
+    with open(path, encoding="utf-8-sig") as fh:  # utf-8-sig: срезаем BOM Блокнота
+        text = fh.read()
+    init_db()
+    db = SessionLocal()
+    try:
+        phrases = demand.set_keylist(db, text, b)
+        print(f"База «{b}»: загружено {len(phrases)} уникальных фраз (из {path}).")
+    finally:
+        db.close()
+
+
 def _find_sitekey(page) -> str | None:
     """Best-effort: read the Yandex SmartCaptcha sitekey from the page DOM."""
     try:
@@ -828,8 +863,12 @@ def main() -> None:
     ap.add_argument("--from-list", dest="from_list", action="store_true",
                     help="фразы из списка, загруженного на вкладке «Спрос»")
     ap.add_argument("--base", default=None,
-                    help="с --from-list: имя базы ключей вкладки Спроса "
+                    help="с --from-list/--set-list: имя базы ключей вкладки Спроса "
                          "(прокомпрессор по умолч., meyer, …)")
+    ap.add_argument("--show-lists", action="store_true",
+                    help="показать базы ключей вкладок «Спрос» (что загружено) и выйти")
+    ap.add_argument("--set-list", metavar="FILE",
+                    help="загрузить ключи из файла в базу (--base) и выйти")
     ap.add_argument("--site", type=int, help="с --from-db: только запросы этого site_id")
     ap.add_argument("--region", default="all", help="регион Wordstat (по умолч. all)")
     ap.add_argument("--device", default="desktop,phone,tablet", help="устройства")
@@ -870,6 +909,12 @@ def main() -> None:
         C.save_config(provider=a.captcha_provider, api_key=a.set_captcha)
         prov, key = C.config()
         print(f"Решатель капч: провайдер={prov}, ключ {'задан' if key else 'НЕ задан'}.")
+        return
+    if a.show_lists:
+        cmd_show_lists(a.base)
+        return
+    if a.set_list:
+        cmd_set_list(a.set_list, a.base)
         return
     if a.login:
         cmd_login()
