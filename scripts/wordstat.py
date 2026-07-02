@@ -449,6 +449,27 @@ def cmd_set_list(path: str, base: str | None = None) -> None:
         db.close()
 
 
+def cmd_delete_data(base: str | None, phrases_file: str | None) -> None:
+    """Удалить собранные данные Wordstat для фраз базы (--base) или из файла
+    (--phrases). Список ключей базы СОХРАНЯЕТСЯ — можно сразу пересобрать."""
+    from app.db.base import SessionLocal, init_db
+    from app.services import demand
+
+    b = base or demand.BASES[0]
+    init_db()
+    db = SessionLocal()
+    try:
+        phrases = _read_phrases(phrases_file) if phrases_file else demand.get_keylist(db, b)
+        if not phrases:
+            print(f"Нет фраз для удаления (база «{b}» пуста или файл не задан).")
+            return
+        n = demand.delete_data(db, phrases)
+        print(f"Удалены собранные данные Wordstat для {n} фраз "
+              f"(база «{b}», {len(phrases)} в списке). Список ключей сохранён — можно пересобрать.")
+    finally:
+        db.close()
+
+
 def cmd_rebuild_list(base: str | None, exclude_base: str | None,
                      exclude_contains: list[str] | None) -> None:
     """Наполнить keylist базы ``base`` ВСЕМИ собранными фразами Wordstat, исключив
@@ -912,6 +933,9 @@ def main() -> None:
                     help="показать базы ключей вкладок «Спрос» (что загружено) и выйти")
     ap.add_argument("--set-list", metavar="FILE",
                     help="загрузить ключи из файла в базу (--base) и выйти")
+    ap.add_argument("--delete-data", action="store_true",
+                    help="удалить собранные данные Wordstat для фраз базы (--base) "
+                         "или файла (--phrases); список ключей сохраняется")
     ap.add_argument("--rebuild-list", action="store_true",
                     help="наполнить базу (--base) всеми собранными фразами Wordstat и выйти")
     ap.add_argument("--exclude-base", default=None,
@@ -964,6 +988,9 @@ def main() -> None:
         return
     if a.set_list:
         cmd_set_list(a.set_list, a.base)
+        return
+    if a.delete_data:
+        cmd_delete_data(a.base, a.phrases)
         return
     if a.rebuild_list:
         cmd_rebuild_list(a.base, a.exclude_base, a.exclude_contains)

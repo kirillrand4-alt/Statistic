@@ -168,6 +168,21 @@ def test_delete_phrases_removes_data_and_list_entry():
         db.close()
 
 
+def test_delete_data_keeps_keylist():
+    db = _setup()
+    try:
+        demand.set_keylist(db, "компрессор купить\nресивер 500л")
+        # delete data for one phrase, keeping the keylist intact
+        n = demand.delete_data(db, ["Компрессор Купить"])  # case/space-insensitive
+        assert n == 1
+        _, phrases = demand.load(db, "all", "all", None, None)
+        assert "компрессор купить" not in {p["query"] for p in phrases}   # data gone
+        assert demand.get_keylist(db) == ["компрессор купить", "ресивер 500л"]  # list kept
+        assert demand.delete_data(db, []) == 0                             # no-op
+    finally:
+        db.close()
+
+
 def test_clear_all():
     db = _setup()
     try:

@@ -110,6 +110,34 @@ def delete_phrases(db: Session, phrases, base=BASES[0]) -> int:
     return len(affected)
 
 
+def delete_data(db: Session, phrases) -> int:
+    """Удалить ТОЛЬКО собранную историю Wordstat (месяц + день/неделя) для указанных
+    фраз, НЕ трогая базы ключей (список остаётся — можно пересобрать). Сопоставление
+    по нормализованной фразе. Возвращает число затронутых фраз.
+
+    Данные Wordstat общие (по ``query_hash`` конкретной фразы), поэтому удаляются
+    только строки этих фраз — на другие базы не влияет, если фразы не совпадают."""
+    phrases = [p for p in (phrases or []) if p and p.strip()]
+    if not phrases:
+        return 0
+    norms = {norm_key(p) for p in phrases}
+    hashes: set = set()
+    affected: set = set()
+    for (qq, h) in db.execute(select(W.query, W.query_hash).distinct()).all():
+        if norm_key(qq) in norms:
+            hashes.add(h)
+            affected.add(norm_key(qq))
+    for (qq, h) in db.execute(select(WS.query, WS.query_hash).distinct()).all():
+        if norm_key(qq) in norms:
+            hashes.add(h)
+            affected.add(norm_key(qq))
+    if hashes:
+        db.execute(delete(W).where(W.query_hash.in_(hashes)))
+        db.execute(delete(WS).where(WS.query_hash.in_(hashes)))
+        db.commit()
+    return len(affected)
+
+
 def clear_all(db: Session) -> int:
     """Удалить всю собранную историю Wordstat — месячную и дневную/недельную (и
     все базы ключей). Возвращает число удалённых строк."""
