@@ -45,7 +45,9 @@ from app.services import donors as D  # noqa: E402
 
 def _read(path: str | None, cred_key: str) -> str | None:
     if path:
-        with open(path, encoding="utf-8") as fh:
+        # utf-8-sig strips a BOM that Windows Notepad prepends — a leading BOM
+        # would corrupt the first request param and make Miralinks 500.
+        with open(path, encoding="utf-8-sig") as fh:
             return fh.read().strip()
     return get_cred(cred_key)
 
@@ -56,6 +58,8 @@ def probe(cookie: str, body: str, length: int) -> None:
     if payload.get("error"):
         print("Ошибка:", payload.get("detail") or payload.get("error"),
               "| status:", payload.get("status"))
+        if payload.get("raw"):
+            print("  Сырой ответ (обрезан):", payload["raw"])
         return
     total = total_records(payload)
     rows = list(parse_rows(payload))

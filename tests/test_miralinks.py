@@ -67,6 +67,25 @@ def test_auth_failed_detection():
     assert not M._auth_failed(200, '{"aaData": []}')
 
 
+def test_auth_failed_ignores_5xx():
+    # a 500 with an HTML error page is a server/request error, NOT an auth failure
+    assert not M._auth_failed(500, "<html><body>Internal Server Error</body></html>")
+    assert not M._auth_failed(502, "")
+
+
+def test_read_strips_bom(tmp_path):
+    import importlib.util
+    import os
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    spec = importlib.util.spec_from_file_location(
+        "mira_cli", os.path.join(repo, "scripts", "miralinks_catalog.py"))
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    p = tmp_path / "body.txt"
+    p.write_bytes(b"\xef\xbb\xbfsEcho=7&iDisplayStart=0")  # UTF-8 BOM + body
+    assert cli._read(str(p), "") == "sEcho=7&iDisplayStart=0"
+
+
 def test_json_session_expired_detection():
     assert M._json_session_expired(
         {"flag": "user_session_expire", "result": "error", "data": [],

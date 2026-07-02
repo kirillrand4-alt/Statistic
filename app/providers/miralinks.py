@@ -103,9 +103,12 @@ def patch_search_data(body: str, updates: dict) -> str:
 
 
 def _auth_failed(status_code: int, text: str) -> bool:
-    """Cookie expired -> Miralinks serves an HTML login page or 401/403/redirect."""
+    """Cookie expired -> Miralinks serves an HTML login page or 401/403/redirect.
+    A 5xx is a server/request error (e.g. malformed body), NOT an auth failure."""
     if status_code in (301, 302, 303, 307, 308, 401, 403):
         return True
+    if status_code >= 500:
+        return False
     head = (text or "")[:600].lower()
     return "<html" in head or "<!doctype" in head or "login" in head and "json" not in head
 
@@ -167,6 +170,11 @@ class Miralinks:
                 data = r.json()
             except Exception:  # noqa: BLE001
                 last = {"error": "non-json", "status": r.status_code, "raw": (r.text or "")[:200]}
+                if r.status_code >= 500:
+                    last["detail"] = (
+                        f"Miralinks вернул HTTP {r.status_code}. Обычно это битое тело запроса — "
+                        "перекопируйте Payload (view source) заново и сохраните: тело не должно "
+                        "начинаться с невидимого символа (BOM). Либо временный сбой сервера — повторите.")
                 time.sleep(2 * (attempt + 1))
                 continue
             if _json_session_expired(data):
