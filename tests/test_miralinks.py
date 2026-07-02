@@ -149,6 +149,29 @@ def test_donor_rows_filter_and_export(db):
     assert fname.endswith(".csv") and "Домен" in body and "a.ru" in body
 
 
+def test_search_data_roundtrip_and_patch():
+    body = ("sEcho=7&iColumns=41&iDisplayStart=0&iDisplayLength=20"
+            "&searchData=%7B%22catalog%22%3A%22yandex%22%2C%22sqiFrom%22%3A100%7D&bar=1")
+    sd = M.get_search_data(body)
+    assert sd == {"catalog": "yandex", "sqiFrom": 100}
+    # patch: numbers coerced, string kept, missing key added, None removes
+    out = M.patch_search_data(body, {"sqiFrom": "3860", "sqiTo": "5550",
+                                     "mrFrom": "100", "mrTo": "100", "catalog": None})
+    sd2 = M.get_search_data(out)
+    assert sd2 == {"sqiFrom": 3860, "sqiTo": 5550, "mrFrom": 100, "mrTo": 100}
+    # untouched params survive and pagination still swappable
+    assert "iColumns=41" in out and "bar=1" in out
+    assert "iDisplayStart=99" in M.set_param(out, "iDisplayStart", 99)
+
+
+def test_get_search_data_absent_or_bad():
+    assert M.get_search_data("sEcho=7&iDisplayStart=0") == {}
+    assert M.get_search_data("searchData=not-json") == {}
+    # appends searchData when the body has none
+    out = M.set_search_data("sEcho=7", {"sqiFrom": 3860})
+    assert M.get_search_data(out) == {"sqiFrom": 3860}
+
+
 def test_wipe_clears_all_donors(db):
     from datetime import date
     db.add_all([

@@ -39,6 +39,62 @@ def set_param(body: str, name: str, value) -> str:
     return new if n else f"{body}&{name}={value}"
 
 
+def get_search_data(body: str) -> dict:
+    """Decode the ``searchData`` filter JSON from a urlencoded catalog body.
+
+    Miralinks packs all catalog filters (ИКС/MR/каталог/etc.) into a single
+    URL-encoded JSON blob ``searchData=%7B...%7D``. Returns {} if absent/unparseable.
+    """
+    from urllib.parse import unquote_plus
+
+    m = re.search(r"(?:^|&)searchData=([^&]*)", body or "")
+    if not m:
+        return {}
+    try:
+        obj = json.loads(unquote_plus(m.group(1)))
+        return obj if isinstance(obj, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def set_search_data(body: str, obj: dict) -> str:
+    """Re-encode ``obj`` as the body's ``searchData`` (append if missing)."""
+    from urllib.parse import quote
+
+    enc = quote(json.dumps(obj, ensure_ascii=False, separators=(",", ":")), safe="")
+    return set_param(body, "searchData", enc)
+
+
+def _coerce(v: str):
+    """CLI value → int/float/bool where it clearly is one, else the raw string."""
+    s = v.strip()
+    low = s.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    for cast in (int, float):
+        try:
+            return cast(s)
+        except ValueError:
+            pass
+    return s
+
+
+def patch_search_data(body: str, updates: dict) -> str:
+    """Merge ``{key: value}`` filter overrides into the body's searchData.
+
+    A value of ``None`` (or the string ``"__del__"``) removes that key. String
+    values are coerced to int/float/bool when unambiguous so numeric ranges land
+    as numbers, matching how the catalog UI sends them.
+    """
+    obj = get_search_data(body)
+    for k, v in updates.items():
+        if v is None or v == "__del__":
+            obj.pop(k, None)
+        else:
+            obj[k] = _coerce(v) if isinstance(v, str) else v
+    return set_search_data(body, obj)
+
+
 def _auth_failed(status_code: int, text: str) -> bool:
     """Cookie expired -> Miralinks serves an HTML login page or 401/403/redirect."""
     if status_code in (301, 302, 303, 307, 308, 401, 403):
