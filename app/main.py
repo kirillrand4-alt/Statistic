@@ -32,6 +32,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+
     init_db()
     db = SessionLocal()
     try:
@@ -45,9 +47,28 @@ async def lifespan(app: FastAPI):
             catch_up_if_overdue()
         except Exception:  # noqa: BLE001
             logging.getLogger(__name__).exception("Startup catch-up failed")
+
+    # Prime the page cache in the background so the first visit after a restart is
+    # instant (the heavy dashboard aggregation is precomputed, not paid on request).
+    warm_task = None
+    settings = get_settings()
+    if settings.page_cache_ttl > 0:
+        async def _warm():
+            from app import cache
+            try:
+                await asyncio.sleep(1.5)  # let startup settle before self-requesting
+                n = await cache.warm(app, settings.base_path)
+                logging.getLogger(__name__).info("Page cache warmed: %d page(s)", n)
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001
+                logging.getLogger(__name__).warning("Page cache warmup failed", exc_info=False)
+        warm_task = asyncio.create_task(_warm())
     try:
         yield
     finally:
+        if warm_task is not None:
+            warm_task.cancel()
         shutdown_scheduler()
 
 

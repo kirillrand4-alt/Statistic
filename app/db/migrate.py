@@ -22,6 +22,13 @@ _ADDED_COLUMNS = [
     ("wordstat_series", "match_type", "VARCHAR(8) DEFAULT 'broad'"),
 ]
 
+# (index_name, table, columns-DDL) — create_all() only builds indexes for NEW
+# tables, so indexes added to a model whose table already exists must be created
+# here. CREATE INDEX IF NOT EXISTS is valid on both SQLite and Postgres.
+_ADDED_INDEXES = [
+    ("ix_cr_started_at", "collection_run", "started_at"),
+]
+
 
 def ensure_schema(engine) -> None:
     insp = inspect(engine)
@@ -32,3 +39,9 @@ def ensure_schema(engine) -> None:
         if column not in {c["name"] for c in insp.get_columns(table)}:
             with engine.begin() as conn:
                 conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    for name, table, cols in _ADDED_INDEXES:
+        if table not in tables:
+            continue  # create_all() builds it on the new table
+        if name not in {ix["name"] for ix in insp.get_indexes(table)}:
+            with engine.begin() as conn:
+                conn.exec_driver_sql(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({cols})")

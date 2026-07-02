@@ -499,6 +499,7 @@ class CollectionRun(Base):
     __tablename__ = "collection_run"
     __table_args__ = (
         Index("ix_cr_site_job_date", "site_id", "job_type", "target_date"),
+        Index("ix_cr_started_at", "started_at"),  # dashboard lists recent runs by started_at desc
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

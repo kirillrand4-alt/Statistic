@@ -13,12 +13,18 @@ actions, downloads, ``/webvisor`` video) are simply not in the allowlist.
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import OrderedDict
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+
+logger = logging.getLogger(__name__)
+
+# Heavy analytics pages to prime on startup so the first real visitor gets a HIT.
+WARM_PATHS = ("/", "/keywords", "/pages", "/errors", "/compare")
 
 # key -> (expires_epoch, body, media_type)
 _STORE: "OrderedDict[str, tuple[float, bytes, str]]" = OrderedDict()
@@ -71,6 +77,34 @@ def stats() -> dict:
     with _LOCK:
         live = sum(1 for exp, _, _ in _STORE.values() if exp >= now)
         return {"entries": len(_STORE), "live": live}
+
+
+async def warm(app, base_path: str = "", paths=WARM_PATHS) -> int:
+    """Prime the page cache in-process by GETting the heavy pages through the ASGI
+    app (no network port — works the same on Windows/Linux), so the first real
+    visitor after a restart gets an instant HIT instead of paying the recompute.
+
+    Best-effort: any page that errors is logged and skipped. Returns how many
+    pages were primed successfully.
+    """
+    import httpx
+
+    bp = base_path or ""
+    primed = 0
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://warmup",
+                                 timeout=180.0) as client:
+        for rel in paths:
+            path = f"{bp}/{rel.lstrip('/')}" if bp else rel
+            try:
+                r = await client.get(path)
+                if r.status_code == 200:
+                    primed += 1
+                logger.info("cache warm %s -> %s (%s)", path, r.status_code,
+                            r.headers.get("X-Page-Cache", "-"))
+            except Exception:  # noqa: BLE001 — warmup is best-effort
+                logger.warning("cache warm failed for %s", path, exc_info=False)
+    return primed
 
 
 def _rel_path(path: str, bp: str) -> str:
