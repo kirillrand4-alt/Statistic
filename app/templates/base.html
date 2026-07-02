@@ -8,9 +8,26 @@
   <title>{% block title %}SEO Статистика{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Cormorant+Garamond:wght@500;600;700&family=Playfair+Display:wght@600;700&family=PT+Serif:wght@400;700&display=swap" rel="stylesheet">
+  {# Google Fonts грузим НЕ блокируя отрисовку (media=print → swap на all по onload).
+     Если fonts.googleapis.com недоступен (частая история из РФ), страница всё равно
+     рисуется сразу системным шрифтом — без зависания на минуту. #}
+  <link rel="stylesheet" media="print" onload="this.media='all'"
+        href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Cormorant+Garamond:wght@500;600;700&family=Playfair+Display:wght@600;700&family=PT+Serif:wght@400;700&display=swap">
+  <noscript>
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Cormorant+Garamond:wght@500;600;700&family=Playfair+Display:wght@600;700&family=PT+Serif:wght@400;700&display=swap">
+  </noscript>
   <link rel="stylesheet" href="{{ base_path }}/static/vendor/pico.min.css">
   <link rel="stylesheet" href="{{ base_path }}/static/css/app.css">
+</head>
+<body>
+  <main class="container">
+    {% include "partials/nav.html" %}
+    {% block content %}{% endblock %}
+    <footer><small>SEO Статистика · источники: Google Search Console, Яндекс.Вебмастер, Яндекс.Метрика</small></footer>
+  </main>
+  {# Chart.js вынесен из <head>, чтобы не блокировать первую отрисовку; грузится
+     перед per-page скриптами, поэтому графики по-прежнему инициализируются. #}
   <script src="{{ base_path }}/static/vendor/chart.umd.min.js"></script>
   <script>
     if (window.Chart) {  /* tint charts to match the ivory & gold theme */
@@ -19,13 +36,6 @@
       Chart.defaults.font.family = "system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
     }
   </script>
-</head>
-<body>
-  <main class="container">
-    {% include "partials/nav.html" %}
-    {% block content %}{% endblock %}
-    <footer><small>SEO Статистика · источники: Google Search Console, Яндекс.Вебмастер, Яндекс.Метрика</small></footer>
-  </main>
   {% block scripts %}{% endblock %}
   <script>/* переключатель темы: золото <-> нежно салатовый (сохраняется в браузере) */
     (function () {

@@ -101,6 +101,11 @@ def create_app() -> FastAPI:
     if settings.page_cache_ttl > 0:
         app.add_middleware(PageCacheMiddleware, ttl=settings.page_cache_ttl, base_path=bp)
 
+    # Compress HTML/CSS/JS responses (added last = outermost, so it also compresses
+    # pages served from the cache). Big win on slow/VPN links.
+    from starlette.middleware.gzip import GZipMiddleware
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
+
     for module in (
         routes_projects,
         routes_metrics,
