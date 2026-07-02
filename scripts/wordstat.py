@@ -151,6 +151,7 @@ def cmd_discover(query: str) -> None:
 
 
 GRAPH_URL = "https://wordstat.yandex.ru/wordstat/api/getGraph"
+TABLE_URL = "https://wordstat.yandex.ru/wordstat/api/getTable"
 
 
 def _month_floor(ddmmyyyy: str):
@@ -732,6 +733,40 @@ def cmd_freqtest(phrase, region, device) -> None:
           "Если одинаковые или везде 0 — Wordstat их игнорирует/не принимает.")
 
 
+def cmd_tabletest(phrase, region, device) -> None:
+    """Dump getTable (Топы запросов) for broad vs "phrase" vs "!exact" — to find where
+    the operator-applied total frequency lives (getGraph ignores operators)."""
+    from urllib.parse import quote
+
+    d_from, d_to = _default_range("month")
+    print(f"getTable для «{phrase}» (broad / phrase / exact), период {d_from}–{d_to}:", flush=True)
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+    with _pw()() as p:
+        ctx = p.chromium.launch_persistent_context(PROFILE_DIR, headless=False, viewport=VIEWPORT)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.goto(WORDSTAT_URL, wait_until="domcontentloaded", timeout=60000)
+        for match in ("broad", "phrase", "exact"):
+            op = _match_query(phrase, match)
+            ref = f"https://wordstat.yandex.ru/?region={region}&view=table&words={quote(op)}"
+            payload = {"currentDevice": device, "dbname": "rus",
+                       "filters": {"region": region, "tableType": "popular"},
+                       "searchValue": op, "startDate": d_from, "endDate": d_to}
+            resp = ctx.request.post(TABLE_URL, data=json.dumps(payload),
+                                    headers={"content-type": "application/json", "referer": ref},
+                                    timeout=45000)
+            try:
+                txt = resp.text()
+            except Exception:  # noqa: BLE001
+                txt = ""
+            with open(os.path.join(DEBUG_DIR, f"table_{match}.json"), "w", encoding="utf-8") as f:
+                f.write(txt)
+            print(f"\n[{match}] searchValue={op!r} → HTTP {resp.status}\n{txt[:600]}", flush=True)
+            page.wait_for_timeout(1500)
+        ctx.close()
+    print(f"\nПолные ответы — в {DEBUG_DIR}\\table_*.json. "
+          "Ищем поле с общей частотностью фразы (должно отличаться по операторам).")
+
+
 def cmd_status() -> None:
     """Show what's already in wordstat_history (so you can verify a run)."""
     from app.db.base import SessionLocal, init_db
@@ -809,6 +844,8 @@ def main() -> None:
                          "(перебор окон на одной фразе)")
     ap.add_argument("--freqtest", metavar="PHRASE",
                     help="проверить, применяет ли Wordstat операторы: шлёт все 4 формы одной фразы")
+    ap.add_argument("--tabletest", metavar="PHRASE",
+                    help="дамп getTable (Топы запросов) для broad/phrase/exact — ищем точную частотность")
     a = ap.parse_args()
     if a.set_captcha or a.captcha_provider:
         from app.db.base import init_db
@@ -822,6 +859,8 @@ def main() -> None:
         cmd_login()
     elif a.freqtest:
         cmd_freqtest(a.freqtest, a.region, a.device)
+    elif a.tabletest:
+        cmd_tabletest(a.tabletest, a.region, a.device)
     elif a.probe:
         src = (_read_phrases(a.phrases) if a.phrases else
                (_list_phrases() if a.from_list else _db_phrases(a.site) if a.from_db else []))
