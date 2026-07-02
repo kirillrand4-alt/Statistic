@@ -449,6 +449,49 @@ def cmd_set_list(path: str, base: str | None = None) -> None:
         db.close()
 
 
+def cmd_rebuild_list(base: str | None, exclude_base: str | None,
+                     exclude_contains: list[str] | None) -> None:
+    """Наполнить keylist базы ``base`` ВСЕМИ собранными фразами Wordstat, исключив
+    фразы базы ``exclude_base`` (по нормализованному совпадению) и фразы, содержащие
+    любую из подстрок ``exclude_contains`` (напр. «сепаратор»). Полезно, когда
+    список вкладки потерян, а данные Wordstat уже собраны."""
+    from sqlalchemy import select
+
+    from app.db.base import SessionLocal, init_db
+    from app.db.models import WordstatHistory as W, WordstatSeries as WS
+    from app.services import demand
+
+    b = base or demand.BASES[0]
+    subs = [s.strip().lower() for s in (exclude_contains or []) if s and s.strip()]
+    init_db()
+    db = SessionLocal()
+    try:
+        ex_keys = {demand.norm_key(k) for k in demand.get_keylist(db, exclude_base)} \
+            if exclude_base else set()
+        qs = set()
+        for (q,) in db.execute(select(W.query).distinct()):
+            if q:
+                qs.add(q)
+        for (q,) in db.execute(select(WS.query).distinct()):
+            if q:
+                qs.add(q)
+
+        def excluded(q: str) -> bool:
+            nk = demand.norm_key(q)
+            if nk in ex_keys:
+                return True
+            return any(s in nk for s in subs)
+
+        keep = sorted(q for q in qs if not excluded(q))
+        demand.set_keylist(db, "\n".join(keep), b)
+        print(f"База «{b}»: наполнена {len(keep)} фразами из собранных данных "
+              f"(всего собрано {len(qs)}, исключено {len(qs) - len(keep)} — "
+              f"база «{exclude_base or '—'}»"
+              + (f" + подстроки {subs}" if subs else "") + ").")
+    finally:
+        db.close()
+
+
 def _find_sitekey(page) -> str | None:
     """Best-effort: read the Yandex SmartCaptcha sitekey from the page DOM."""
     try:
@@ -869,6 +912,12 @@ def main() -> None:
                     help="показать базы ключей вкладок «Спрос» (что загружено) и выйти")
     ap.add_argument("--set-list", metavar="FILE",
                     help="загрузить ключи из файла в базу (--base) и выйти")
+    ap.add_argument("--rebuild-list", action="store_true",
+                    help="наполнить базу (--base) всеми собранными фразами Wordstat и выйти")
+    ap.add_argument("--exclude-base", default=None,
+                    help="с --rebuild-list: исключить фразы этой базы (напр. meyer)")
+    ap.add_argument("--exclude-contains", action="append", default=[], metavar="ПОДСТРОКА",
+                    help="с --rebuild-list: исключить фразы с этой подстрокой (повторяемо)")
     ap.add_argument("--site", type=int, help="с --from-db: только запросы этого site_id")
     ap.add_argument("--region", default="all", help="регион Wordstat (по умолч. all)")
     ap.add_argument("--device", default="desktop,phone,tablet", help="устройства")
@@ -915,6 +964,9 @@ def main() -> None:
         return
     if a.set_list:
         cmd_set_list(a.set_list, a.base)
+        return
+    if a.rebuild_list:
+        cmd_rebuild_list(a.base, a.exclude_base, a.exclude_contains)
         return
     if a.login:
         cmd_login()
