@@ -2,7 +2,7 @@
 prokompressor.ru.csv. ВАЖНО: все генераторы в фиде — бренд Enger (203 азот + 12 кислород,
 других нет), поэтому правило «без Enger» здесь ОТКЛЮЧЕНО осознанно — иначе кампании пустые.
 Схема и правила Директа = direct_full (7 слов с точкой-разделителем, [точные] без
-+/-/кавычек, отображаемая ссылка, чанки <=1000 строк по цене). Тип-существительное в
++/-/кавычек, отображаемая ссылка, чанки <=1000 ГРУПП по цене). Тип-существительное в
 ключе двухсловное: «генератор азота» / «генератор кислорода». Минус-фраз на группу нет."""
 import re, os, sys, zipfile, csv
 sys.path.insert(0,".")
@@ -53,7 +53,7 @@ def build():
             h1=D.headline(f"генератор {cat}", p["core"])
             txt=D.trimw(f"Надежный поставщик генераторов {cat} Enger — нам доверяют лидеры рынка. Звоните!",81)
             units.append((p, p["core"], h1, txt, D.dlink(broad), "", build_phrases(p,broad,inner)))
-        chunks=[]; cur=[]; rows=0; seen=set()
+        chunks=[]; cur=[]; seen=set()                           # <=1000 ГРУПП на кампанию
         def dedup(phr, seen):
             kept=[]
             for ph,bid in phr:
@@ -62,12 +62,11 @@ def build():
                 kept.append((ph,bid))
             return kept
         for u in units:
+            if len(cur)>=D.MAXGROUPS:
+                chunks.append(cur); cur=[]; seen=set()
             kept=dedup(u[6], seen)
-            if cur and rows+len(kept)>D.MAXROWS:
-                chunks.append(cur); cur=[]; rows=0; seen=set()
-                kept=dedup(u[6], seen)
             seen |= {ph for ph,_ in kept if not ph.startswith("---")}
-            cur.append((u,kept)); rows+=len(kept)
+            cur.append((u,kept))
         if cur: chunks.append(cur)
         for ci,ch in enumerate(chunks,1):
             lo=int(float(ch[0][0][0]["price"])); hi=int(float(ch[-1][0][0]["price"]))

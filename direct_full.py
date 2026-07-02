@@ -1,6 +1,6 @@
 """Полная раскатка кампаний Я.Директ из prokompressor.ru.csv: компрессоры (без Enger),
 только товары с ценой. Кампания = ДИАПАЗОН ЦЕНЫ: товары сортируются по цене, режутся на
-чанки <=1000 строк (лимит Директа, группа целиком в одном файле); плюс общий ИТОГ-файл.
+чанки <=1000 ГРУПП (лимит Директа: 1000 групп на кампанию; группа=товар); плюс ИТОГ-файл.
 Фразы (6 шаблонов + autotargeting, кросс-минусовка): лимит 7 слов, слово Директ считает
 по пробелу/дефису/слэшу/ТОЧКЕ («5.5»=2 слова). Точные [фразы] с «+»/«-»/кавычками Директ
 не принимает — такие строки не берём. Отображаемая ссылка: только буквы/цифры/одиночный
@@ -19,7 +19,7 @@ TPL="/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/6dbcf451-prices_
 NP ="/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/8871701e-prices_20260626_041449.csv"
 OUTDIR="/home/user/Statistic/direct_campaigns"; ZIP="/home/user/Statistic/Direct_campaigns_FULL.zip"
 ITOG="/home/user/Statistic/Direct_ITOG.xlsx"
-MAXROWS=1000                                             # лимит Директа на файл-кампанию
+MAXGROUPS=1000                                           # лимит Директа: групп (товаров) в кампании
 _BD={"atlas":"Atlas Copco","ir":"Ingersoll Rand"}
 def disp(b): return "" if not b else _BD.get(b, b.capitalize())
 def nrm(u): u=(u or "").strip().lower(); return re.sub(r"^https?://","",u).replace("www.","").rstrip("/")
@@ -198,8 +198,8 @@ def build():
         h1=headline(p["typ"], stem)
         txt=trimw(f"Надежный поставщик компрессоров {p['brand']} — нам доверяют лидеры рынка. Звоните!",81)
         units.append((p, grp, h1, txt, dlink(broad), group_minus(p), build_phrases(p,broad,inner)))
-    # чанки <=MAXROWS строк; дедуп фраз внутри кампании; группа не рвётся между файлами
-    chunks=[]; cur=[]; rows=0; seen=set(); collapsed=0
+    # чанки <=MAXGROUPS групп (группа=товар); дедуп фраз внутри кампании
+    chunks=[]; cur=[]; seen=set(); collapsed=0
     def dedup(phr, seen):
         kept=[]
         for ph,bid in phr:
@@ -208,13 +208,12 @@ def build():
             kept.append((ph,bid))
         return kept
     for u in units:
+        if len(cur)>=MAXGROUPS:
+            chunks.append(cur); cur=[]; seen=set()
         kept=dedup(u[6], seen)
-        if cur and rows+len(kept)>MAXROWS:
-            chunks.append(cur); cur=[]; rows=0; seen=set()
-            kept=dedup(u[6], seen)
         if all(ph.startswith("---") for ph,_ in kept): collapsed+=1
         seen |= {ph for ph,_ in kept if not ph.startswith("---")}
-        cur.append((u,kept)); rows+=len(kept)
+        cur.append((u,kept))
     if cur: chunks.append(cur)
     made=[]; allrows=[]; total=0
     for ci,ch in enumerate(chunks,1):

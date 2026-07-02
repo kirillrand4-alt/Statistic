@@ -1,7 +1,7 @@
 """Отдельная раскатка Я.Директ: ОСУШИТЕЛИ (адсорбционные + рефрижераторные) из
 prokompressor.ru.csv, без Enger, только с ценой. Схема = direct_full (те же правила
 Директа: 7 слов с точкой-разделителем, [точные] без +/-/кавычек, отображаемая ссылка
-одиночными дефисами, кампании-чанки <=1000 строк по цене), но:
+одиночными дефисами, кампании-чанки <=1000 ГРУПП по цене), но:
 - тип-существительное в ключе = «осушитель», прилагательное = адсорбционный/рефрижераторный;
 - точка росы «-20C/-40C/-70C» и напряжение «230V» вычищаются из КЛЮЧА (токен с ведущим
   «-» стал бы минус-словом и зарезал показ), в названии группы остаются;
@@ -67,7 +67,7 @@ def build():
         h1=D.headline("осушитель", p["stem"])
         txt=D.trimw(f"Надежный поставщик осушителей {p['brand']} — нам доверяют лидеры рынка. Звоните!",81)
         units.append((p, p["core"], h1, txt, D.dlink(broad), "", build_phrases(p,broad,inner)))
-    chunks=[]; cur=[]; rows=0; seen=set(); collapsed=0
+    chunks=[]; cur=[]; seen=set(); collapsed=0                  # <=1000 ГРУПП на кампанию
     def dedup(phr, seen):
         kept=[]
         for ph,bid in phr:
@@ -76,13 +76,12 @@ def build():
             kept.append((ph,bid))
         return kept
     for u in units:
+        if len(cur)>=D.MAXGROUPS:
+            chunks.append(cur); cur=[]; seen=set()
         kept=dedup(u[6], seen)
-        if cur and rows+len(kept)>D.MAXROWS:
-            chunks.append(cur); cur=[]; rows=0; seen=set()
-            kept=dedup(u[6], seen)
         if all(ph.startswith("---") for ph,_ in kept): collapsed+=1
         seen |= {ph for ph,_ in kept if not ph.startswith("---")}
-        cur.append((u,kept)); rows+=len(kept)
+        cur.append((u,kept))
     if cur: chunks.append(cur)
     made=[]; allrows=[]; total=0
     for ci,ch in enumerate(chunks,1):
