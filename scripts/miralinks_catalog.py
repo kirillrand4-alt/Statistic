@@ -57,11 +57,29 @@ def probe(cookie: str, body: str, length: int) -> None:
         print("Ошибка:", payload.get("detail") or payload.get("error"),
               "| status:", payload.get("status"))
         return
+    total = total_records(payload)
     rows = list(parse_rows(payload))
-    print(f"Всего под фильтром: {total_records(payload)}; на странице: {len(rows)}")
+    print(f"Всего под фильтром: {total}; на странице: {len(rows)}")
     for r in rows[:10]:
         print(f"  {r['domain']:<28} ИКС={r['sqi']} DR={r['ahrefs_dr']} "
               f"цена={r['price_rur']}₽ трафик={r['traffic']} [{r['region']}] {r['topics']}")
+    if total == 0 and not rows:
+        keys = list(payload.keys())
+        snippet = json.dumps(payload, ensure_ascii=False)[:600]
+        looks_logged_out = not any(k in payload for k in
+                                   ("aaData", "iTotalRecords", "iTotalDisplayRecords"))
+        print("  ⚠ Ноль результатов. Ключи ответа:", keys)
+        print("  Сырой ответ (обрезан):", snippet)
+        if looks_logged_out:
+            print("  → Ответ без данных каталога — cookie почти наверняка протух. Обновите его:\n"
+                  "     скопируйте свежий cookie из DevTools → сохраните: "
+                  "python scripts\\miralinks_catalog.py --save-cookie cookie.txt")
+        else:
+            print("  → Ответ валиден, но каталог вернул 0 — либо cookie протух (сессия отдаёт пусто),\n"
+                  "     либо фильтры слишком строгие. Ослабьте по одному, напр.:\n"
+                  "     python scripts\\miralinks_catalog.py --set-filter s_placement_time= "
+                  "--set-filter s_venality= --set-filter s_maxSpamness=\n"
+                  "     и снова --probe. Если и без фильтров 0 — точно обновляйте cookie.")
 
 
 def show_body(body: str) -> None:
