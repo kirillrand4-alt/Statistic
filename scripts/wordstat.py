@@ -401,14 +401,15 @@ def _db_phrases(site_id=None) -> list[str]:
         db.close()
 
 
-def _list_phrases() -> list[str]:
-    """Phrases from the list uploaded on the «Спрос» page (AppSetting keylist)."""
+def _list_phrases(base: str | None = None) -> list[str]:
+    """Phrases from the list uploaded on a «Спрос» tab (AppSetting keylist).
+    ``base`` — имя базы ключей («прокомпрессор» по умолч., «meyer», …)."""
     from app.db.base import SessionLocal, init_db
     from app.services import demand
     init_db()
     db = SessionLocal()
     try:
-        return demand.get_keylist(db)
+        return demand.get_keylist(db, base or demand.BASES[0])
     finally:
         db.close()
 
@@ -826,6 +827,9 @@ def main() -> None:
     ap.add_argument("--from-db", dest="from_db", action="store_true", help="фразы из таблицы Query")
     ap.add_argument("--from-list", dest="from_list", action="store_true",
                     help="фразы из списка, загруженного на вкладке «Спрос»")
+    ap.add_argument("--base", default=None,
+                    help="с --from-list: имя базы ключей вкладки Спроса "
+                         "(прокомпрессор по умолч., meyer, …)")
     ap.add_argument("--site", type=int, help="с --from-db: только запросы этого site_id")
     ap.add_argument("--region", default="all", help="регион Wordstat (по умолч. all)")
     ap.add_argument("--device", default="desktop,phone,tablet", help="устройства")
@@ -875,7 +879,7 @@ def main() -> None:
         cmd_tabletest(a.tabletest, a.region, a.device)
     elif a.probe:
         src = (_read_phrases(a.phrases) if a.phrases else
-               (_list_phrases() if a.from_list else _db_phrases(a.site) if a.from_db else []))
+               (_list_phrases(a.base) if a.from_list else _db_phrases(a.site) if a.from_db else []))
         cmd_probe(src[0] if src else "компрессор", a.region, a.device, a.graph)
     elif a.status:
         cmd_status()
@@ -885,7 +889,7 @@ def main() -> None:
         if a.phrases:
             phrases = _read_phrases(a.phrases)
         elif a.from_list:
-            phrases = _list_phrases()
+            phrases = _list_phrases(a.base)
         elif a.from_db:
             phrases = _db_phrases(a.site)
         else:
