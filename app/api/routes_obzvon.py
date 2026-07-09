@@ -11,6 +11,8 @@ POST /{base}/clear    — очистить базу целиком (для пе�
 """
 from __future__ import annotations
 
+import base64
+import binascii
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -25,6 +27,25 @@ from app.web import templates
 router = APIRouter(tags=["obzvon"], include_in_schema=False)
 
 OBZ = get_settings().obzvon_path  # "/obzvon" — префикс ссылок/редиректов
+
+
+def _login(request: Request) -> str:
+    """Логин из Basic-заголовка (сам заголовок уже проверен middleware'ом)."""
+    try:
+        scheme, _, cred = (request.headers.get("authorization") or "").partition(" ")
+        if scheme.lower() != "basic":
+            return ""
+        return base64.b64decode(cred.strip()).decode("utf-8").partition(":")[0]
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return ""
+
+
+def _is_admin(request: Request) -> bool:
+    """Загрузка/очистка базы — только для логинов из OBZVON_ADMINS
+    (пустая настройка = можно всем, как раньше)."""
+    admins = {a.strip() for a in
+              get_settings().obzvon_admins.replace(";", ",").split(",") if a.strip()}
+    return True if not admins else _login(request) in admins
 
 
 def _check_base(base: str) -> str:
@@ -77,6 +98,7 @@ def obzvon_page(request: Request, base: str, q: str = "", region: str = "",
         "emails": callbase.split_list(company.emails) if company else [],
         "sites": callbase.split_list(company.sites) if company else [],
         "tel_href": callbase.tel_href,
+        "is_admin": _is_admin(request),
         "base_path": OBZ,  # контекст перекрывает общий Jinja-глобал основного приложения
         "qs_keep": _qs(flt, skip),      # текущее состояние (для форм)
         "qs_next": _qs(flt, skip + 1),  # «Пропустить»
@@ -85,9 +107,11 @@ def obzvon_page(request: Request, base: str, q: str = "", region: str = "",
 
 
 @router.post("/{base}/upload")
-async def obzvon_upload(base: str, file: UploadFile = File(...),
+async def obzvon_upload(request: Request, base: str, file: UploadFile = File(...),
                         db: Session = Depends(get_db)):
     base = _check_base(base)
+    if not _is_admin(request):
+        raise HTTPException(403, "Загрузка базы доступна только администратору обзвона.")
     data = await file.read()
     try:
         rows = callbase.parse_upload(file.filename or "", data)
@@ -118,8 +142,10 @@ def obzvon_delete(base: str, company_id: int = Form(...), q: str = Form(""),
 
 
 @router.post("/{base}/clear")
-def obzvon_clear(base: str, db: Session = Depends(get_db)):
+def obzvon_clear(request: Request, base: str, db: Session = Depends(get_db)):
     base = _check_base(base)
+    if not _is_admin(request):
+        raise HTTPException(403, "Очистка базы доступна только администратору обзвона.")
     n = callbase.clear_base(db, base)
     return RedirectResponse(
         url=f"{OBZ}/{base}?msg={quote(f'База очищена (удалено {n}).')}", status_code=303)

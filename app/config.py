@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     # Обзвон (app.obzvon) — отдельный сервис для продажников со своими паролями.
     obzvon_root_path: str = "/obzvon"          # подпуть, по которому его проксирует nginx
     obzvon_users: str = ""                     # "логин:пароль,логин2:пароль2" (Basic auth)
+    obzvon_admins: str = ""                    # логины (через запятую), кому доступны
+                                               # загрузка/очистка базы; пусто = всем
 
     @property
     def obzvon_path(self) -> str:

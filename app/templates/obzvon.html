@@ -119,10 +119,12 @@
 {% elif db_total %}
 <article><p><strong>Очередь пуста по текущим фильтрам.</strong> Ослабьте фильтры — в базе {{ db_total }} компаний.</p></article>
 {% else %}
-<article><p><strong>База пуста.</strong> Загрузите выгрузку ниже — очередь появится сразу.</p></article>
+<article><p><strong>База пуста.</strong>
+  {% if is_admin %}Загрузите выгрузку ниже — очередь появится сразу.{% else %}Обратитесь к администратору — он загрузит базу компаний.{% endif %}</p></article>
 {% endif %}
 
-{# ---------- Загрузка базы ---------- #}
+{# ---------- Загрузка базы (только администратор) ---------- #}
+{% if is_admin %}
 <article>
   <header>Загрузка базы <small>— xlsx с расчётом приоритетов или tsv/csv из Checko; дубли по ИНН пропускаются</small></header>
   <form method="post" action="{{ base_path }}/{{ base }}/upload" enctype="multipart/form-data">
@@ -140,4 +142,5 @@
   <small>Очередь сортируется по «Приоритет × выручка» из xlsx (если колонок расчёта нет — просто по выручке).
     Удалённые строки страхуются в <code>data/callbase/deleted_{{ base }}.tsv</code>.</small>
 </article>
+{% endif %}
 {% endblock %}

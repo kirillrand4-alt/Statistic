@@ -154,15 +154,24 @@ def test_obzvon_endpoints(db, tmp_path, monkeypatch):
     # ссылок/навигации основного сервиса на странице нет
     assert "Дашборд" not in r.text and "SEO Статистика" not in r.text
 
-    # удалить текущую -> следующая
+    # продажник: страницу видит, загрузку/очистку — нет (ни кнопок, ни эндпоинтов)
+    seller = ("seller", "sell")
+    r = client.get("/obzvon/kc", auth=seller)
+    assert r.status_code == 200 and "ИМК" in r.text
+    assert "Импортировать" not in r.text and "Очистить базу" not in r.text
+    assert client.post("/obzvon/kc/upload", auth=seller,
+                       files={"file": ("b.tsv", _tsv([HEAD, ROW_A]), "text/plain")}).status_code == 403
+    assert client.post("/obzvon/kc/clear", auth=seller).status_code == 403
+
+    # удалить текущую («обзвонили») может и продажник -> следующая
     company, _ = callbase.pick(db, "kc")
-    r = client.post("/obzvon/kc/delete", auth=auth,
+    r = client.post("/obzvon/kc/delete", auth=seller,
                     data={"company_id": company.id, "only_phone": 1, "active_only": 1},
                     follow_redirects=True)
     assert r.status_code == 200
     assert "СТУМЗ" in r.text and "ИМК" not in r.text
 
-    # очистить базу
+    # очистить базу (админ)
     r = client.post("/obzvon/kc/clear", auth=auth, follow_redirects=True)
     assert "База очищена (удалено 1)" in r.text
 

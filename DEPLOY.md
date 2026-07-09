@@ -178,9 +178,12 @@ tail -f /tmp/arsenkin.log
 `/stat` (другой процесс, других роутов там просто нет), а пароли обзвона никак
 не связаны с паролем статистики.
 
-1. Пароли в `/opt/seostat/.env` (пары `логин:пароль` через запятую):
+1. Пароли в `/opt/seostat/.env` (пары `логин:пароль` через запятую; логины из
+   `OBZVON_ADMINS` дополнительно могут загружать/очищать базу — продажники
+   видят только карточки и кнопки «удалить/пропустить»):
 ```
-OBZVON_USERS=vasya:пароль1,petya:пароль2
+OBZVON_USERS=admin:<пароль>,prodazhnik:<пароль>
+OBZVON_ADMINS=admin
 ```
 2. Сервис:
 ```bash
@@ -189,13 +192,17 @@ systemctl daemon-reload
 systemctl enable --now seostat-obzvon
 systemctl status seostat-obzvon --no-pager     # active (running), порт 8012
 ```
-3. nginx: добавьте блоки из `deploy/nginx-obzvon.conf` в тот же `server { … }`,
-   где уже есть `/stat`, затем:
+3. nginx — автоматически (скрипт сам найдёт конфиг, где уже подключён `/stat`,
+   сделает бэкап и вставит блоки из `deploy/nginx-obzvon.conf`; при ошибке
+   `nginx -t` откатит):
 ```bash
-nginx -t && systemctl reload nginx
+bash deploy/wire_obzvon.sh
 ```
+   Вручную: добавить блоки из `deploy/nginx-obzvon.conf` в тот же `server { … }`,
+   где `/stat`, затем `nginx -t && systemctl reload nginx`.
 4. Проверка: `https://parsercompressor.online/obzvon/kc` — браузер спросит
-   логин/пароль из `OBZVON_USERS`. Загрузите xlsx с приоритетами — очередь готова.
+   логин/пароль из `OBZVON_USERS`. Под админом загрузите xlsx с приоритетами —
+   очередь готова.
 
 Смена/добавление паролей: правите `OBZVON_USERS` в `.env` →
 `systemctl restart seostat-obzvon` (основной сервис перезапускать не нужно).
