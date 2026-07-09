@@ -512,3 +512,53 @@ class CollectionRun(Base):
     error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CallCompany(Base):
+    """Компания в базе обзвона (страницы «Обзвон …»). Загружается из выгрузок
+    Checko (xlsx/tsv); ``base`` разделяет базы компаний («kc» — Компрессор Центр,
+    «meyer» — Meyer). Очередь обзвона сортируется по ``rank_metric`` (приоритет
+    ОКВЭД × выручка — колонка готового расчёта из xlsx), затем по выручке.
+    «Удалить и следующая» удаляет строку (копия дописывается в
+    data/callbase/deleted_<base>.tsv)."""
+
+    __tablename__ = "call_company"
+    __table_args__ = (
+        Index("ix_call_company_base_inn", "base", "inn"),
+        Index("ix_call_company_queue", "base", "rank_metric"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    base: Mapped[str] = mapped_column(String(32), index=True)  # kc | meyer
+    inn: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    ogrn: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    kpp: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    okpo: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    name_short: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name_full: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reg_date: Mapped[str | None] = mapped_column(Text, nullable=True)
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    opf: Mapped[str | None] = mapped_column(Text, nullable=True)
+    capital: Mapped[str | None] = mapped_column(Text, nullable=True)
+    director: Mapped[str | None] = mapped_column(Text, nullable=True)
+    director_inn: Mapped[str | None] = mapped_column(Text, nullable=True)
+    founders: Mapped[str | None] = mapped_column(Text, nullable=True)
+    okved_main: Mapped[str | None] = mapped_column(Text, nullable=True)
+    okved_all: Mapped[str | None] = mapped_column(Text, nullable=True)
+    phones: Mapped[str | None] = mapped_column(Text, nullable=True)   # " | "-separated
+    emails: Mapped[str | None] = mapped_column(Text, nullable=True)   # " | "-separated
+    sites: Mapped[str | None] = mapped_column(Text, nullable=True)    # " | "-separated, junk removed
+    fin_year: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    revenue: Mapped[str | None] = mapped_column(Text, nullable=True)      # как в выгрузке: «55,3 млрд руб.»
+    profit: Mapped[str | None] = mapped_column(Text, nullable=True)
+    equity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    staff: Mapped[str | None] = mapped_column(Text, nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, default=0)          # «Итоговый балл приоритета»
+    equipment: Mapped[str | None] = mapped_column(Text, nullable=True)     # по основному ОКВЭД
+    equipment_all: Mapped[str | None] = mapped_column(Text, nullable=True)  # все категории
+    okved_hits: Mapped[str | None] = mapped_column(Text, nullable=True)     # найденные ОКВЭД из справочника
+    calc_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revenue_num: Mapped[float | None] = mapped_column(Float, nullable=True)   # руб., распарсено
+    rank_metric: Mapped[float | None] = mapped_column(Float, nullable=True)   # приоритет × выручка / 10000
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
