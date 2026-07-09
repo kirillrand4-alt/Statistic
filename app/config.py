@@ -56,6 +56,19 @@ class Settings(BaseSettings):
     # Server-side HTML cache for heavy analytics pages (seconds; 0 disables).
     page_cache_ttl: int = 3600
 
+    # Обзвон (app.obzvon) — отдельный сервис для продажников со своими паролями.
+    obzvon_root_path: str = "/obzvon"          # подпуть, по которому его проксирует nginx
+    obzvon_users: str = ""                     # "логин:пароль,логин2:пароль2" (Basic auth)
+
+    @property
+    def obzvon_path(self) -> str:
+        p = (self.obzvon_root_path or "").strip()
+        if not p:
+            return ""
+        if not p.startswith("/"):
+            p = "/" + p
+        return p.rstrip("/")
+
     @property
     def base_path(self) -> str:
         """Normalized subpath prefix: "" or "/stat" (leading slash, no trailing)."""

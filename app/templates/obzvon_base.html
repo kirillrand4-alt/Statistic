@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <script>/* применяем выбранный скин до отрисовки, чтобы не мигало */
+    try { if (localStorage.getItem('skin') === 'green') document.documentElement.setAttribute('data-skin', 'green'); } catch (e) {}</script>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Обзвон{% endblock %}</title>
+  <link rel="stylesheet" href="{{ base_path }}/static/vendor/pico.min.css">
+  <link rel="stylesheet" href="{{ base_path }}/static/css/app.css">
+</head>
+<body>
+  <main class="container">
+    {# Обзвон — отдельный сервис для продажников: никаких ссылок на основной сервис #}
+    <nav>
+      <ul><li><strong><span class="orn">☎</span> Обзвон</strong></li></ul>
+      <ul>
+        {% for slug, name in bases.items() %}
+        <li><a href="{{ base_path }}/{{ slug }}" {% if slug == base %}aria-current="page"{% endif %}>{{ name }}</a></li>
+        {% endfor %}
+        <li><a href="#" id="skin-toggle" role="button" class="outline" title="Сменить тему">🌿</a></li>
+      </ul>
+    </nav>
+    {% block content %}{% endblock %}
+    <footer><small>Обзвон · база потенциальных клиентов</small></footer>
+  </main>
+  <script>/* переключатель темы: золото <-> нежно салатовый (сохраняется в браузере) */
+    (function () {
+      var root = document.documentElement, btn = document.getElementById('skin-toggle');
+      function label() { if (btn) btn.textContent = root.getAttribute('data-skin') === 'green' ? '👑' : '🌿'; }
+      label();
+      if (btn) btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        var green = root.getAttribute('data-skin') === 'green';
+        if (green) root.removeAttribute('data-skin'); else root.setAttribute('data-skin', 'green');
+        try { localStorage.setItem('skin', green ? 'ivory' : 'green'); } catch (_) {}
+        label();
+      });
+    })();
+  </script>
+</body>
+</html>

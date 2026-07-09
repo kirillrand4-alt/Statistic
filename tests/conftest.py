@@ -10,6 +10,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_TMP}/test.db"
 os.environ["ENABLE_SCHEDULER"] = "false"
 os.environ["GSC_SITE_URL"] = ""
 os.environ["PAGE_CACHE_TTL"] = "0"  # disable HTML page cache so tests see live data
+os.environ["OBZVON_USERS"] = "test:test"  # Basic auth of the standalone obzvon app
 
 import pytest  # noqa: E402
 

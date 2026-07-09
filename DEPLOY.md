@@ -171,10 +171,40 @@ tail -f /tmp/arsenkin.log
 `--batch`, `--parallel` (≤5), `--rpm` (≤30) — тонкая настройка.
 
 
+## Обзвон для продажников (отдельный сервис)
+
+Страницы обзвона (`/obzvon/kc`, `/obzvon/meyer`) живут в **отдельном процессе**
+`app.obzvon` со **своими паролями** — продажники не могут попасть в основной
+`/stat` (другой процесс, других роутов там просто нет), а пароли обзвона никак
+не связаны с паролем статистики.
+
+1. Пароли в `/opt/seostat/.env` (пары `логин:пароль` через запятую):
+```
+OBZVON_USERS=vasya:пароль1,petya:пароль2
+```
+2. Сервис:
+```bash
+cp deploy/seostat-obzvon.service /etc/systemd/system/seostat-obzvon.service
+systemctl daemon-reload
+systemctl enable --now seostat-obzvon
+systemctl status seostat-obzvon --no-pager     # active (running), порт 8012
+```
+3. nginx: добавьте блоки из `deploy/nginx-obzvon.conf` в тот же `server { … }`,
+   где уже есть `/stat`, затем:
+```bash
+nginx -t && systemctl reload nginx
+```
+4. Проверка: `https://parsercompressor.online/obzvon/kc` — браузер спросит
+   логин/пароль из `OBZVON_USERS`. Загрузите xlsx с приоритетами — очередь готова.
+
+Смена/добавление паролей: правите `OBZVON_USERS` в `.env` →
+`systemctl restart seostat-obzvon` (основной сервис перезапускать не нужно).
+
 ## Обновление версии
 ```bash
 cd /opt/seostat && git pull && .venv/bin/pip install -r requirements.txt
 systemctl restart seostat
+systemctl restart seostat-obzvon   # если настроен обзвон
 ```
 
 ## Про вашу `parser.service`

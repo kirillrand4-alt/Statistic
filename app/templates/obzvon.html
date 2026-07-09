@@ -1,11 +1,11 @@
-{% extends "base.html" %}
-{% block title %}Обзвон · {{ label }} · SEO Статистика{% endblock %}
+{% extends "obzvon_base.html" %}
+{% block title %}Обзвон · {{ label }}{% endblock %}
 {% block content %}
-<h2>Обзвон · {{ label }} <small>— {{ db_total }} компаний в базе</small></h2>
+<h2>{{ label }} <small>— {{ db_total }} компаний в базе</small></h2>
 {% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
 
 {# ---------- Фильтры очереди ---------- #}
-<form method="get" action="{{ base_path }}/calls/{{ base }}">
+<form method="get" action="{{ base_path }}/{{ base }}">
   <div class="grid">
     <label>Поиск <small>(название / ИНН / адрес / директор)</small>
       <input type="text" name="q" value="{{ flt.q }}" placeholder="например: Иркутск или 3827013097">
@@ -98,7 +98,7 @@
 
   <footer>
     <div class="grid">
-      <form method="post" action="{{ base_path }}/ui/calls/{{ base }}/delete"
+      <form method="post" action="{{ base_path }}/{{ base }}/delete"
             onsubmit="return confirm('Удалить «{{ (company.name_short or '')|e }}» из базы и показать следующую?');">
         <input type="hidden" name="company_id" value="{{ company.id }}">
         <input type="hidden" name="q" value="{{ flt.q }}">
@@ -111,8 +111,8 @@
         <input type="hidden" name="skip" value="{{ skip }}">
         <button type="submit">✅ Обзвонили — удалить и следующая</button>
       </form>
-      <a role="button" class="secondary outline" href="{{ base_path }}/calls/{{ base }}?{{ qs_next }}">Пропустить →</a>
-      {% if skip %}<a role="button" class="secondary outline" href="{{ base_path }}/calls/{{ base }}?{{ qs_first }}">⏮ К началу очереди</a>{% endif %}
+      <a role="button" class="secondary outline" href="{{ base_path }}/{{ base }}?{{ qs_next }}">Пропустить →</a>
+      {% if skip %}<a role="button" class="secondary outline" href="{{ base_path }}/{{ base }}?{{ qs_first }}">⏮ К началу очереди</a>{% endif %}
     </div>
   </footer>
 </article>
@@ -125,14 +125,14 @@
 {# ---------- Загрузка базы ---------- #}
 <article>
   <header>Загрузка базы <small>— xlsx с расчётом приоритетов или tsv/csv из Checko; дубли по ИНН пропускаются</small></header>
-  <form method="post" action="{{ base_path }}/ui/calls/{{ base }}/upload" enctype="multipart/form-data">
+  <form method="post" action="{{ base_path }}/{{ base }}/upload" enctype="multipart/form-data">
     <div class="grid">
       <input type="file" name="file" accept=".xlsx,.xlsm,.csv,.tsv,.txt" required>
       <button type="submit">⬆ Импортировать</button>
     </div>
   </form>
   {% if db_total %}
-  <form method="post" action="{{ base_path }}/ui/calls/{{ base }}/clear"
+  <form method="post" action="{{ base_path }}/{{ base }}/clear"
         onsubmit="return confirm('Полностью очистить базу «{{ label }}» ({{ db_total }} компаний)? Это нужно только для перезаливки.');">
     <button type="submit" class="secondary outline">🗑 Очистить базу целиком</button>
   </form>

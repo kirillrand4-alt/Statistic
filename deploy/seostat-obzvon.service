@@ -1,0 +1,13 @@
+[Unit]
+Description=Obzvon for sales (FastAPI, separate from SEO Statistic)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/seostat
+ExecStart=/opt/seostat/.venv/bin/uvicorn app.obzvon:app --host 127.0.0.1 --port 8012
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

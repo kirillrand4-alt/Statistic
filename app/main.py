@@ -13,7 +13,6 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import (
     routes_admin,
-    routes_calls,
     routes_compare,
     routes_export,
     routes_metrics,
@@ -107,6 +106,8 @@ def create_app() -> FastAPI:
     from starlette.middleware.gzip import GZipMiddleware
     app.add_middleware(GZipMiddleware, minimum_size=1024)
 
+    # Обзвон намеренно НЕ здесь: это отдельное приложение app.obzvon со своими
+    # паролями (продажники не должны видеть основной сервис).
     for module in (
         routes_projects,
         routes_metrics,
@@ -114,7 +115,6 @@ def create_app() -> FastAPI:
         routes_export,
         routes_admin,
         routes_pages,
-        routes_calls,
     ):
         app.include_router(module.router, prefix=bp)
 

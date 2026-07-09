@@ -124,32 +124,52 @@ def test_delete_logs_and_removes(db, tmp_path, monkeypatch):
     assert not callbase.delete_company(db, "kc", first.id)
 
 
-def test_calls_page_endpoints(db, tmp_path, monkeypatch):
+def test_obzvon_endpoints(db, tmp_path, monkeypatch):
     monkeypatch.setattr(callbase, "DATA_DIR", str(tmp_path))
-    from app.main import app
-    client = TestClient(app)
+    from app.obzvon import app as obz_app
+    auth = ("test", "test")
+    client = TestClient(obz_app)
 
-    r = client.get("/calls/kc")
+    # отдельные пароли: без них 401, с неверными 401, с верными 200
+    assert client.get("/obzvon/kc").status_code == 401
+    assert client.get("/obzvon/kc", auth=("test", "wrong")).status_code == 401
+    r = client.get("/obzvon/kc", auth=auth)
     assert r.status_code == 200
     assert "База пуста" in r.text
-    assert client.get("/calls/nope").status_code == 404
+    assert client.get("/obzvon/nope", auth=auth).status_code == 404
+    # корень ведёт на первую базу
+    r = client.get("/obzvon/", auth=auth, follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/obzvon/kc"
+    # роутов основного сервиса в этом приложении нет
+    assert client.get("/", auth=auth, follow_redirects=True).status_code == 200  # редирект в обзвон
+    assert client.get("/keywords", auth=auth).status_code == 404
 
     # загрузка tsv через форму
-    r = client.post("/ui/calls/kc/upload",
+    r = client.post("/obzvon/kc/upload", auth=auth,
                     files={"file": ("base.tsv", _tsv([HEAD, ROW_A, ROW_B]), "text/tab-separated-values")},
                     follow_redirects=True)
     assert r.status_code == 200
     assert "Импортировано 2" in r.text
     assert "ИМК" in r.text and "tel:+73952986170" in r.text
+    # ссылок/навигации основного сервиса на странице нет
+    assert "Дашборд" not in r.text and "SEO Статистика" not in r.text
 
     # удалить текущую -> следующая
     company, _ = callbase.pick(db, "kc")
-    r = client.post("/ui/calls/kc/delete", data={"company_id": company.id, "only_phone": 1,
-                                                 "active_only": 1},
+    r = client.post("/obzvon/kc/delete", auth=auth,
+                    data={"company_id": company.id, "only_phone": 1, "active_only": 1},
                     follow_redirects=True)
     assert r.status_code == 200
     assert "СТУМЗ" in r.text and "ИМК" not in r.text
 
     # очистить базу
-    r = client.post("/ui/calls/kc/clear", follow_redirects=True)
+    r = client.post("/obzvon/kc/clear", auth=auth, follow_redirects=True)
     assert "База очищена (удалено 1)" in r.text
+
+
+def test_obzvon_parse_users():
+    from app.obzvon import parse_users
+    assert parse_users("vasya:p1, petya:p2;dima:p:3") == {
+        "vasya": "p1", "petya": "p2", "dima": "p:3"}
+    assert parse_users("") == {}
+    assert parse_users("bad") == {}
