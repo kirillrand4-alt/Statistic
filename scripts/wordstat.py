@@ -603,9 +603,26 @@ def _solve_captcha(page, mode: str = "manual") -> None:
         page.wait_for_timeout(60000)
 
 
+def _freq_order(db, phrases, region, dev) -> list[str]:
+    """Отсортировать фразы по известной месячной частотности из базы (broad,
+    максимум месяца) по убыванию; фразы без данных — в конец в исходном порядке."""
+    from sqlalchemy import func, select
+
+    from app.db.models import WordstatHistory as W
+    from app.utils import query_hash
+    hs = {ph: query_hash(_match_query(ph, "broad")) for ph in phrases}
+    rows = db.execute(
+        select(W.query_hash, func.max(W.value))
+        .where(W.query_hash.in_(set(hs.values())), W.region == region,
+               W.device == dev, W.match_type == "broad")
+        .group_by(W.query_hash)).all()
+    score = {h: (v or 0) for h, v in rows}
+    return sorted(phrases, key=lambda ph: -score.get(hs[ph], 0))
+
+
 def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
                 captcha="manual", skip_done=False, graph="month", dedup=False,
-                match="broad") -> None:
+                match="broad", order="list") -> None:
     import random
     from datetime import datetime
 
@@ -615,17 +632,20 @@ def cmd_collect(phrases, region, device, d_from, d_to, delay, limit,
     from app.utils import query_hash
     from urllib.parse import quote
 
-    if limit:
-        phrases = phrases[:limit]
     if not phrases:
         sys.exit("Нет фраз для сбора (укажи --phrases файл, --from-list или --from-db).")
     init_db()
     db = SessionLocal()
+    dev = "all" if device == "desktop,phone,tablet" else device
+    if order == "freq":  # ВЧ первыми: при обрыве/лимите главное уже обновлено
+        phrases = _freq_order(db, phrases, region, dev)
+        print("Порядок: по убыванию частотности из базы (без данных — в конце).", flush=True)
+    if limit:
+        phrases = phrases[:limit]
     d_from = d_from or _default_range(graph)[0]
     d_to = d_to or _default_range(graph)[1]
     if graph == "week":  # Wordstat weekly needs Monday…Sunday, иначе 400
         d_from, d_to = _align_week(d_from, d_to)
-    dev = "all" if device == "desktop,phone,tablet" else device
 
     if match != "broad":  # операторы в скрапинге не работают — не тратим запросы/капчу
         print(
@@ -1020,6 +1040,9 @@ def main() -> None:
                     default="broad",
                     help="тип частотности: broad — как есть; phrase — «\"фраза\"»; "
                          "exact — «\"!фраза\"»; order — «\"[!фраза]\"»; all — все 4")
+    ap.add_argument("--order", choices=("list", "freq"), default="list",
+                    help="порядок сбора: list — как в списке (по умолч.); freq — сначала "
+                         "самые частотные (по уже собранным месячным данным из базы)")
     ap.add_argument("--dedup", action="store_true",
                     help="не запрашивать дубли: фразы с одинаковым месячным рядом — один "
                          "запрос Wordstat, остальным копируем данные (экономит запросы/капчу)")
@@ -1103,7 +1126,7 @@ def main() -> None:
                 if len(grans) * len(matches) > 1:
                     print(f"\n===== {g} / {mt} =====", flush=True)
                 cmd_collect(phrases, a.region, a.device, a.d_from, a.d_to, a.delay, a.limit,
-                            a.captcha, a.skip_done, g, a.dedup, mt)
+                            a.captcha, a.skip_done, g, a.dedup, mt, a.order)
     else:
         ap.print_help()
 
