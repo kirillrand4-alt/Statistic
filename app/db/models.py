@@ -554,7 +554,9 @@ class CallCompany(Base):
     profit: Mapped[str | None] = mapped_column(Text, nullable=True)
     equity: Mapped[str | None] = mapped_column(Text, nullable=True)
     staff: Mapped[str | None] = mapped_column(Text, nullable=True)
+    region: Mapped[str | None] = mapped_column(String(96), nullable=True, index=True)  # из адреса
     priority: Mapped[int] = mapped_column(Integer, default=0)          # «Итоговый балл приоритета»
+    max_hit: Mapped[int] = mapped_column(Integer, default=0)           # «Макс. балл по одной связке»
     equipment: Mapped[str | None] = mapped_column(Text, nullable=True)     # по основному ОКВЭД
     equipment_all: Mapped[str | None] = mapped_column(Text, nullable=True)  # все категории
     okved_hits: Mapped[str | None] = mapped_column(Text, nullable=True)     # найденные ОКВЭД из справочника

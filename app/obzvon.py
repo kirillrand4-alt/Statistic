@@ -91,6 +91,13 @@ class BasicAuthASGI:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()  # таблицы (в т.ч. call_company) создаются при старте
+    from app.db.base import SessionLocal
+    from app.services import callbase
+    db = SessionLocal()
+    try:  # добавить новые колонки на живой базе + region для старых строк
+        callbase.ensure_schema(db)
+    finally:
+        db.close()
     yield
 
 

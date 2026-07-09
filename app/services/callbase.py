@@ -38,6 +38,7 @@ HEADERS = {
     "ГодОтч": "fin_year", "Выручка": "revenue", "ЧистПрибыль": "profit",
     "Капитал": "equity", "ССЧ": "staff",
     "Итоговый балл приоритета": "priority",
+    "Макс. балл по одной связке": "max_hit",
     "Оборудование по основному ОКВЭД": "equipment",
     "Все найденные категории оборудования": "equipment_all",
     "Найденные ОКВЭД из справочника": "okved_hits",
@@ -89,6 +90,21 @@ def clean_sites(raw) -> str:
     return " | ".join(out)
 
 
+_POSTCODE = re.compile(r"^\d{5,6}$")
+
+
+def region_from_address(addr) -> str:
+    """Регион из адреса Checko: «664043, Иркутская область, г. Иркутск…» →
+    «Иркутская область»; «117545, г. Москва, …» → «Москва»."""
+    for part in str(addr or "").split(","):
+        p = part.strip()
+        if not p or _POSTCODE.match(p):
+            continue
+        p = re.sub(r"^(г\.\s*о\.|г\.|город)\s+", "", p).strip()
+        return p
+    return ""
+
+
 def _num(v, as_int=False):
     try:
         n = float(str(v).replace(" ", "").replace(",", "."))
@@ -122,7 +138,7 @@ def _rows_from_matrix(matrix) -> list[dict]:
         rec: dict = {}
         for j, field in idx.items():
             val = row[j] if j < len(row) else None
-            if field == "priority":
+            if field in ("priority", "max_hit"):
                 rec[field] = _num(val, as_int=True) or 0
             elif field in ("revenue_num", "rank_metric"):
                 rec[field] = _num(val)
@@ -131,6 +147,7 @@ def _rows_from_matrix(matrix) -> list[dict]:
         if not any(rec.get(k) for k in ("inn", "name_short", "name_full")):
             continue  # пустая строка
         rec["sites"] = clean_sites(rec.get("sites"))
+        rec["region"] = region_from_address(rec.get("address"))
         if rec.get("revenue_num") is None:
             rec["revenue_num"] = parse_money(rec.get("revenue"))
         if rec.get("rank_metric") is None:
@@ -182,7 +199,17 @@ def import_rows(db: Session, base: str, rows: list[dict]) -> tuple[int, int]:
         db.add(CallCompany(base=base, **rec))
         added += 1
     db.commit()
+    _bump_version()
     return added, skipped
+
+
+# Кэш очереди (id в порядке обзвона) на процесс: ключ — (base, фильтры).
+# Любое изменение данных (импорт/удаление/очистка) сбрасывает кэш целиком.
+_queue_cache: dict[tuple, list[int]] = {}
+
+
+def _bump_version() -> None:
+    _queue_cache.clear()
 
 
 def _has(hay, needle: str) -> bool:
@@ -191,33 +218,57 @@ def _has(hay, needle: str) -> bool:
     return needle.casefold() in (hay or "").casefold()
 
 
-def _queue_ids(db: Session, base: str, q="", region="", equipment="", min_priority=0,
-               min_revenue_mln=0.0, only_phone=True, active_only=True) -> list[int]:
-    """id компаний базы под фильтры, в порядке очереди обзвона. Числа и сортировка —
-    в SQL; текстовые фильтры — в Python (кириллица без регистра)."""
+def has_mobile(phones) -> bool:
+    """Есть ли сотовый: номер с девятки (+79…/89…)."""
+    for tok in str(phones or "").split("|"):
+        d = re.sub(r"\D", "", tok)
+        if len(d) == 11 and d[:2] in ("79", "89"):
+            return True
+    return False
+
+
+def _queue_ids(db: Session, base: str, q="", region="", okved="", equipment="",
+               hit_from=0, hit_to=0, rank_from=0.0, rank_to=0.0,
+               rev_from=0.0, rev_to=0.0, only_phone=True, active_only=True,
+               mobile_only=False) -> list[int]:
+    """id компаний базы под фильтры, в порядке очереди обзвона. Точные условия
+    (регион/ОКВЭД из выпадающих списков, диапазоны чисел) — в SQL; текстовый
+    поиск и сотовые — в Python (SQLite не умеет кириллицу без регистра)."""
     C = CallCompany
     stmt = (select(C.id, C.name_short, C.name_full, C.inn, C.address, C.director,
-                   C.equipment, C.equipment_all, C.status)
+                   C.equipment, C.equipment_all, C.status, C.phones)
             .where(C.base == base))
-    if min_priority:
-        stmt = stmt.where(C.priority >= min_priority)
-    if min_revenue_mln:
-        stmt = stmt.where(C.revenue_num >= min_revenue_mln * 1e6)
+    if region:
+        stmt = stmt.where(C.region == region)
+    if okved:
+        stmt = stmt.where(C.okved_main == okved)
+    if hit_from:  # ОКВЭД со связкой такого балла встретился хотя бы раз
+        stmt = stmt.where(C.max_hit >= hit_from)
+    if hit_to:
+        stmt = stmt.where(C.max_hit <= hit_to)
+    if rank_from:  # общий приоритет = балл по всем ОКВЭД × выручка (/10000)
+        stmt = stmt.where(C.rank_metric >= rank_from)
+    if rank_to:
+        stmt = stmt.where(C.rank_metric <= rank_to)
+    if rev_from:
+        stmt = stmt.where(C.revenue_num >= rev_from * 1e6)
+    if rev_to:
+        stmt = stmt.where(C.revenue_num <= rev_to * 1e6)
     if only_phone:
         stmt = stmt.where(C.phones.is_not(None), C.phones != "")
     stmt = stmt.order_by(C.rank_metric.desc().nulls_last(),
                          C.priority.desc(),
                          C.revenue_num.desc().nulls_last(),
                          C.id)
-    q, region, equipment = (q or "").strip(), (region or "").strip(), (equipment or "").strip()
+    q, equipment = (q or "").strip(), (equipment or "").strip()
     ids = []
     for r in db.execute(stmt).all():
         if active_only and "действующ" not in (r.status or "").casefold():
             continue
+        if mobile_only and not has_mobile(r.phones):
+            continue
         if q and not any(_has(v, q) for v in
                          (r.name_short, r.name_full, r.inn, r.address, r.director)):
-            continue
-        if region and not _has(r.address, region):
             continue
         if equipment and not (_has(r.equipment, equipment) or _has(r.equipment_all, equipment)):
             continue
@@ -225,9 +276,64 @@ def _queue_ids(db: Session, base: str, q="", region="", equipment="", min_priori
     return ids
 
 
+def regions(db: Session, base: str) -> list[tuple[str, int]]:
+    """Регионы базы с количеством компаний (для выпадающего списка), по убыванию."""
+    C = CallCompany
+    rows = db.execute(select(C.region, func.count()).where(C.base == base, C.region != "")
+                      .group_by(C.region).order_by(func.count().desc(), C.region)).all()
+    return [(r, n) for r, n in rows if r]
+
+
+def okveds(db: Session, base: str) -> list[tuple[str, int]]:
+    """Основные ОКВЭД базы (код с расшифровкой) с количеством, по убыванию."""
+    C = CallCompany
+    rows = db.execute(select(C.okved_main, func.count()).where(C.base == base, C.okved_main != "")
+                      .group_by(C.okved_main).order_by(func.count().desc(), C.okved_main)).all()
+    return [(o, n) for o, n in rows if o]
+
+
+def equipments(db: Session, base: str) -> list[tuple[str, int]]:
+    """Категории оборудования базы (из расчёта: основная + все найденные)
+    с количеством компаний, по убыванию."""
+    from collections import Counter
+    C = CallCompany
+    cnt: Counter = Counter()
+    for eq, eq_all in db.execute(
+            select(C.equipment, C.equipment_all).where(C.base == base)).all():
+        cats = set(split_list(eq)) | set(split_list(eq_all))
+        for cat in cats:
+            cnt[cat] += 1
+    return sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def ensure_schema(db: Session) -> None:
+    """Дозавести новые колонки call_company на живой базе (ALTER TABLE ADD COLUMN —
+    работает и в SQLite, и в Postgres) и заполнить region по адресу у старых строк."""
+    from sqlalchemy import inspect, text
+    cols = {c["name"] for c in inspect(db.get_bind()).get_columns("call_company")}
+    if "region" not in cols:
+        db.execute(text("ALTER TABLE call_company ADD COLUMN region VARCHAR(96)"))
+    if "max_hit" not in cols:
+        db.execute(text("ALTER TABLE call_company ADD COLUMN max_hit INTEGER DEFAULT 0"))
+    db.commit()
+    rows = db.execute(select(CallCompany.id, CallCompany.address)
+                      .where(CallCompany.region.is_(None))).all()
+    for cid, addr in rows:
+        db.execute(CallCompany.__table__.update().where(CallCompany.id == cid)
+                   .values(region=region_from_address(addr)))
+    if rows:
+        db.commit()
+        _bump_version()
+
+
 def pick(db: Session, base: str, skip: int = 0, **flt):
-    """Текущая карточка очереди: (компания | None, всего_в_очереди)."""
-    ids = _queue_ids(db, base, **flt)
+    """Текущая карточка очереди: (компания | None, всего_в_очереди).
+    Список id кэшируется на процесс — повторные показы/пропуски не сканируют базу."""
+    key = (base,) + tuple(sorted(flt.items()))
+    ids = _queue_cache.get(key)
+    if ids is None:
+        ids = _queue_ids(db, base, **flt)
+        _queue_cache[key] = ids
     skip = max(0, skip)
     company = db.get(CallCompany, ids[skip]) if skip < len(ids) else None
     return company, len(ids)
@@ -259,6 +365,7 @@ def delete_company(db: Session, base: str, company_id: int) -> bool:
         w.writerow([getattr(c, f) if getattr(c, f) is not None else "" for f in fields])
     db.delete(c)
     db.commit()
+    _bump_version()
     return True
 
 
@@ -268,6 +375,7 @@ def clear_base(db: Session, base: str) -> int:
     from sqlalchemy import delete as sql_delete
     db.execute(sql_delete(CallCompany).where(CallCompany.base == base))
     db.commit()
+    _bump_version()
     return n
 
 

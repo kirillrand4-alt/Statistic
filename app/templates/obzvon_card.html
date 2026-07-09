@@ -1,0 +1,134 @@
+{# Фрагмент карточки очереди (подгружается на страницу скриптом). #}
+<span data-dbtotal="{{ db_total }}" hidden></span>
+<script type="application/json" id="filters-data">{{ {"regions": regions, "okveds": okveds, "equipments": equipments}|tojson }}</script>
+{% if wrapped %}<article><small>Очередь закончилась — показываю сначала.</small></article>{% endif %}
+{% if company %}
+<article>
+  <header>
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:.5rem;align-items:baseline">
+      <strong style="font-size:1.25rem">{{ company.name_short or company.name_full }}</strong>
+      <small>№ {{ skip + 1 }} из {{ total }} в очереди
+        {% if company.rank_metric %} · общий приоритет {{ company.rank_metric|numfmt }}{% endif %}
+        {% if company.priority %} · балл по всем ОКВЭД {{ company.priority }}{% endif %}
+        {% if company.max_hit %} · макс. балл связки {{ company.max_hit }}{% endif %}
+      </small>
+    </div>
+    {% if company.equipment %}<small>🛠 {{ company.equipment }}</small>{% endif %}
+  </header>
+
+  {% if phones %}
+  <p style="display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:.8rem">
+    {% for ph in phones %}
+    <a role="button" href="{{ tel_href(ph) }}" style="font-size:1.15rem">📞 {{ ph }}</a>
+    {% endfor %}
+  </p>
+  {% else %}
+  <p><em>Телефонов нет.</em></p>
+  {% endif %}
+
+  <div class="grid">
+    <div>
+      <p><strong>ИНН</strong> {{ company.inn or '—' }} · <strong>КПП</strong> {{ company.kpp or '—' }}<br>
+        <strong>ОГРН</strong> {{ company.ogrn or '—' }} · <strong>ОКПО</strong> {{ company.okpo or '—' }}<br>
+        <strong>Статус:</strong> {{ company.status or '—' }}<br>
+        <strong>Регион:</strong> {{ company.region or '—' }}<br>
+        <strong>Регистрация:</strong> {{ company.reg_date or '—' }} · {{ company.opf or '' }}<br>
+        {% if company.capital %}<strong>Уставный капитал:</strong> {{ company.capital }}<br>{% endif %}
+        <strong>Адрес:</strong> {{ company.address or '—' }}</p>
+      <p>{% if company.director %}<strong>Директор:</strong> {{ company.director }}
+          {% if company.director_inn %}<small>(ИНН {{ company.director_inn }})</small>{% endif %}<br>{% endif %}
+        {% if company.founders %}<strong>Учредители:</strong> {{ company.founders }}{% endif %}</p>
+    </div>
+    <div>
+      <p><strong>Финансы{% if company.fin_year %} ({{ company.fin_year }}){% endif %}:</strong><br>
+        Выручка: {{ company.revenue or '—' }}<br>
+        Чистая прибыль: {{ company.profit or '—' }}<br>
+        Капитал: {{ company.equity or '—' }}<br>
+        Сотрудники: {{ company.staff or '—' }}</p>
+      {% if emails %}<p><strong>Email:</strong><br>
+        {% for e in emails %}<a href="mailto:{{ e }}">{{ e }}</a>{% if not loop.last %}<br>{% endif %}{% endfor %}</p>{% endif %}
+      {% if sites %}<p><strong>Сайты:</strong><br>
+        {% for s in sites %}<a href="{{ s }}" target="_blank" rel="noopener">{{ s }}</a>{% if not loop.last %}<br>{% endif %}{% endfor %}</p>{% endif %}
+    </div>
+  </div>
+
+  <p><strong>Основной ОКВЭД:</strong> {{ company.okved_main or '—' }}</p>
+  {% if okved_all_list %}
+  <details><summary>Все ОКВЭД ({{ okved_all_list|length }})</summary>
+    <ul style="margin-top:.4rem">
+      {% for o in okved_all_list %}<li><small>{{ o }}</small></li>{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+  {% if equipment_all_list or okved_hits_list %}
+  <details><summary>Приоритет: как посчитан</summary>
+    {% if equipment_all_list %}
+    <p style="margin:.4rem 0 0"><strong><small>Все категории оборудования:</small></strong></p>
+    <ul style="margin-top:.2rem">
+      {% for c in equipment_all_list %}<li><small>{{ c }}</small></li>{% endfor %}
+    </ul>
+    {% endif %}
+    {% if okved_hits_list %}
+    <p style="margin:.4rem 0 0"><strong><small>Совпавшие ОКВЭД (балл связки в скобках):</small></strong></p>
+    <ul style="margin-top:.2rem">
+      {% for h in okved_hits_list %}<li><small>{{ h }}</small></li>{% endfor %}
+    </ul>
+    {% endif %}
+    {% if company.calc_comment %}<small><em>{{ company.calc_comment }}</em></small>{% endif %}
+  </details>
+  {% endif %}
+  {% if company.name_full and company.name_short %}<small>{{ company.name_full }}</small>{% endif %}
+
+  <footer>
+    <div class="grid">
+      <form method="post" action="{{ base_path }}/{{ base }}/delete"
+            onsubmit="return confirm('Удалить «{{ (company.name_short or '')|e }}» из базы и показать следующую?');">
+        <input type="hidden" name="company_id" value="{{ company.id }}">
+        <input type="hidden" name="q" value="{{ flt.q }}">
+        <input type="hidden" name="region" value="{{ flt.region }}">
+        <input type="hidden" name="okved" value="{{ flt.okved }}">
+        <input type="hidden" name="equipment" value="{{ flt.equipment }}">
+        <input type="hidden" name="hit_from" value="{{ flt.hit_from }}">
+        <input type="hidden" name="hit_to" value="{{ flt.hit_to }}">
+        <input type="hidden" name="rank_from" value="{{ flt.rank_from }}">
+        <input type="hidden" name="rank_to" value="{{ flt.rank_to }}">
+        <input type="hidden" name="rev_from" value="{{ flt.rev_from }}">
+        <input type="hidden" name="rev_to" value="{{ flt.rev_to }}">
+        <input type="hidden" name="only_phone" value="{{ 1 if flt.only_phone else 0 }}">
+        <input type="hidden" name="active_only" value="{{ 1 if flt.active_only else 0 }}">
+        <input type="hidden" name="mobile_only" value="{{ 1 if flt.mobile_only else 0 }}">
+        <input type="hidden" name="skip" value="{{ skip }}">
+        <button type="submit">✅ Обзвонили — удалить и следующая</button>
+      </form>
+      <a role="button" class="secondary outline" href="{{ base_path }}/{{ base }}?{{ qs_next }}">Пропустить →</a>
+    </div>
+  </footer>
+</article>
+{% elif db_total %}
+<article><p><strong>Очередь пуста по текущим фильтрам.</strong> Ослабьте фильтры — в базе {{ db_total }} компаний.</p></article>
+{% else %}
+<article><p><strong>База пуста.</strong>
+  {% if is_admin %}Загрузите выгрузку ниже — очередь появится сразу.{% else %}Обратитесь к администратору — он загрузит базу компаний.{% endif %}</p></article>
+{% endif %}
+
+{# ---------- Загрузка базы (только администратор) ---------- #}
+{% if is_admin %}
+<article>
+  <header>Загрузка базы <small>— xlsx с расчётом приоритетов или tsv/csv из Checko; дубли по ИНН пропускаются</small></header>
+  <form method="post" action="{{ base_path }}/{{ base }}/upload" enctype="multipart/form-data">
+    <div class="grid">
+      <input type="file" name="file" accept=".xlsx,.xlsm,.csv,.tsv,.txt" required>
+      <button type="submit">⬆ Импортировать</button>
+    </div>
+  </form>
+  {% if db_total %}
+  <form method="post" action="{{ base_path }}/{{ base }}/clear"
+        onsubmit="return confirm('Полностью очистить базу «{{ label }}» ({{ db_total }} компаний)? Это нужно только для перезаливки.');">
+    <button type="submit" class="secondary outline">🗑 Очистить базу целиком</button>
+  </form>
+  {% endif %}
+  <small>Очередь сортируется по общему приоритету (балл по всем ОКВЭД × выручка) из xlsx;
+    если колонок расчёта нет — просто по выручке.
+    Удалённые строки страхуются в <code>data/callbase/deleted_{{ base }}.tsv</code>.</small>
+</article>
+{% endif %}

@@ -1,146 +1,118 @@
 {% extends "obzvon_base.html" %}
 {% block title %}Обзвон · {{ label }}{% endblock %}
 {% block content %}
-<h2>{{ label }} <small>— {{ db_total }} компаний в базе</small></h2>
+<h2>{{ label }} <small id="qhead"></small></h2>
 {% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
 
-{# ---------- Фильтры очереди ---------- #}
-<form method="get" action="{{ base_path }}/{{ base }}">
+{# ---------- Фильтры очереди (каркас отдаётся мгновенно, без БД; списки значений
+     регион/ОКВЭД/оборудование заполняются скриптом из фрагмента карточки) ---------- #}
+<form method="get" action="{{ base_path }}/{{ base }}" id="filters">
+  <input type="hidden" name="f" value="1">{# признак отправки формы: снятый чекбокс = 0 #}
   <div class="grid">
     <label>Поиск <small>(название / ИНН / адрес / директор)</small>
       <input type="text" name="q" value="{{ flt.q }}" placeholder="например: Иркутск или 3827013097">
     </label>
-    <label>Регион <small>(часть адреса)</small>
-      <input type="text" name="region" value="{{ flt.region }}" placeholder="Московская">
+    <label>Регион
+      <select name="region" id="f-region" data-selected="{{ flt.region }}">
+        <option value="">— любой —</option>
+        {% if flt.region %}<option value="{{ flt.region }}" selected>{{ flt.region }}</option>{% endif %}
+      </select>
+    </label>
+    <label>Основной ОКВЭД
+      <select name="okved" id="f-okved" data-selected="{{ flt.okved }}">
+        <option value="">— любой —</option>
+        {% if flt.okved %}<option value="{{ flt.okved }}" selected>{{ flt.okved }}</option>{% endif %}
+      </select>
     </label>
     <label>Оборудование <small>(категория из расчёта)</small>
-      <input type="text" name="equipment" value="{{ flt.equipment }}" placeholder="компрессоры / фотосепараторы">
+      <select name="equipment" id="f-equipment" data-selected="{{ flt.equipment }}">
+        <option value="">— любое —</option>
+        {% if flt.equipment %}<option value="{{ flt.equipment }}" selected>{{ flt.equipment }}</option>{% endif %}
+      </select>
     </label>
   </div>
   <div class="grid">
-    <label>Балл приоритета от
-      <input type="number" name="min_priority" value="{{ flt.min_priority or '' }}" min="0" step="1" placeholder="0">
+    <label>Балл связки ОКВЭД <small>(встретился хотя бы раз)</small>
+      <div class="grid">
+        <select name="hit_from">
+          <option value="0">от —</option>
+          {% for v in [1,2,3,4,5] %}<option value="{{ v }}" {% if flt.hit_from==v %}selected{% endif %}>от {{ v }}</option>{% endfor %}
+        </select>
+        <select name="hit_to">
+          <option value="0">до —</option>
+          {% for v in [1,2,3,4,5] %}<option value="{{ v }}" {% if flt.hit_to==v %}selected{% endif %}>до {{ v }}</option>{% endfor %}
+        </select>
+      </div>
     </label>
-    <label>Выручка от, млн ₽
-      <input type="number" name="min_revenue_mln" value="{{ flt.min_revenue_mln or '' }}" min="0" step="1" placeholder="0">
+    <label>Общий приоритет <small>(балл по всем ОКВЭД × выручка)</small>
+      <div class="grid">
+        <input type="number" name="rank_from" value="{{ flt.rank_from|int if flt.rank_from else '' }}" min="0" placeholder="от">
+        <input type="number" name="rank_to" value="{{ flt.rank_to|int if flt.rank_to else '' }}" min="0" placeholder="до">
+      </div>
     </label>
+    <label>Выручка, млн ₽
+      <div class="grid">
+        <input type="number" name="rev_from" value="{{ flt.rev_from|int if flt.rev_from else '' }}" min="0" placeholder="от">
+        <input type="number" name="rev_to" value="{{ flt.rev_to|int if flt.rev_to else '' }}" min="0" placeholder="до">
+      </div>
+    </label>
+  </div>
+  <div class="grid">
     <fieldset>
       <label><input type="checkbox" name="only_phone" value="1" {% if flt.only_phone %}checked{% endif %}> только с телефоном</label>
+      <label><input type="checkbox" name="mobile_only" value="1" {% if flt.mobile_only %}checked{% endif %}> имеют сотовые номера <small>(+79… / 89…)</small></label>
       <label><input type="checkbox" name="active_only" value="1" {% if flt.active_only %}checked{% endif %}> только действующие</label>
     </fieldset>
-    <button type="submit">Показать очередь</button>
   </div>
 </form>
 
-{# ---------- Карточка текущей компании ---------- #}
-{% if company %}
-<article>
-  <header>
-    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:.5rem;align-items:baseline">
-      <strong style="font-size:1.25rem">{{ company.name_short or company.name_full }}</strong>
-      <small>№ {{ skip + 1 }} из {{ total }} в очереди
-        {% if company.priority %} · балл {{ company.priority }}{% endif %}
-        {% if company.rank_metric %} · приоритет×выручка {{ company.rank_metric|numfmt }}{% endif %}
-      </small>
-    </div>
-    {% if company.equipment %}<small>🛠 {{ company.equipment }}</small>{% endif %}
-  </header>
+{# карточка догружается отдельным запросом — страница и форма пароля мгновенные #}
+<div id="card"><article aria-busy="true">Загружаю карточку…</article></div>
 
-  {% if phones %}
-  <p style="display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:.8rem">
-    {% for ph in phones %}
-    <a role="button" href="{{ tel_href(ph) }}" style="font-size:1.15rem">📞 {{ ph }}</a>
-    {% endfor %}
-  </p>
-  {% else %}
-  <p><em>Телефонов нет.</em></p>
-  {% endif %}
+<script>
+  (function () {
+    // фильтры применяются сами: любое изменение поля перезагружает очередь
+    var form = document.getElementById("filters");
+    if (form) form.addEventListener("change", function () { form.submit(); });
 
-  <div class="grid">
-    <div>
-      <p><strong>ИНН</strong> {{ company.inn or '—' }} · <strong>КПП</strong> {{ company.kpp or '—' }}<br>
-        <strong>ОГРН</strong> {{ company.ogrn or '—' }} · <strong>ОКПО</strong> {{ company.okpo or '—' }}<br>
-        <strong>Статус:</strong> {{ company.status or '—' }}<br>
-        <strong>Регистрация:</strong> {{ company.reg_date or '—' }} · {{ company.opf or '' }}<br>
-        {% if company.capital %}<strong>Уставный капитал:</strong> {{ company.capital }}<br>{% endif %}
-        <strong>Адрес:</strong> {{ company.address or '—' }}</p>
-      <p>{% if company.director %}<strong>Директор:</strong> {{ company.director }}
-          {% if company.director_inn %}<small>(ИНН {{ company.director_inn }})</small>{% endif %}<br>{% endif %}
-        {% if company.founders %}<strong>Учредители:</strong> {{ company.founders }}{% endif %}</p>
-    </div>
-    <div>
-      <p><strong>Финансы{% if company.fin_year %} ({{ company.fin_year }}){% endif %}:</strong><br>
-        Выручка: {{ company.revenue or '—' }}<br>
-        Чистая прибыль: {{ company.profit or '—' }}<br>
-        Капитал: {{ company.equity or '—' }}<br>
-        Сотрудники: {{ company.staff or '—' }}</p>
-      {% if emails %}<p><strong>Email:</strong><br>
-        {% for e in emails %}<a href="mailto:{{ e }}">{{ e }}</a>{% if not loop.last %}<br>{% endif %}{% endfor %}</p>{% endif %}
-      {% if sites %}<p><strong>Сайты:</strong><br>
-        {% for s in sites %}<a href="{{ s }}" target="_blank" rel="noopener">{{ s }}</a>{% if not loop.last %}<br>{% endif %}{% endfor %}</p>{% endif %}
-    </div>
-  </div>
+    var url = "{{ base_path }}/{{ base }}/card{% if card_qs %}?{{ card_qs }}{% endif %}";
 
-  <p><strong>Основной ОКВЭД:</strong> {{ company.okved_main or '—' }}</p>
-  {% if company.okved_all %}
-  <details><summary>Все ОКВЭД</summary><small>{{ company.okved_all.replace(' | ', '; ') }}</small></details>
-  {% endif %}
-  {% if company.equipment_all or company.okved_hits %}
-  <details><summary>Приоритет: как посчитан</summary>
-    <small>
-      {% if company.equipment_all %}<strong>Все категории оборудования:</strong> {{ company.equipment_all }}<br>{% endif %}
-      {% if company.okved_hits %}<strong>Совпавшие ОКВЭД:</strong> {{ company.okved_hits }}<br>{% endif %}
-      {% if company.calc_comment %}<em>{{ company.calc_comment }}</em>{% endif %}
-    </small>
-  </details>
-  {% endif %}
-  {% if company.name_full and company.name_short %}<small>{{ company.name_full }}</small>{% endif %}
+    function fillSelect(id, items) {
+      var sel = document.getElementById(id);
+      if (!sel || !items) return;
+      var selected = sel.getAttribute("data-selected") || "";
+      var first = sel.options[0].cloneNode(true);
+      sel.innerHTML = "";
+      sel.appendChild(first);
+      items.forEach(function (it) {
+        var name = it[0], n = it[1];
+        var o = document.createElement("option");
+        o.value = name;
+        o.textContent = name + " (" + n + ")";
+        if (name === selected) o.selected = true;
+        sel.appendChild(o);
+      });
+    }
 
-  <footer>
-    <div class="grid">
-      <form method="post" action="{{ base_path }}/{{ base }}/delete"
-            onsubmit="return confirm('Удалить «{{ (company.name_short or '')|e }}» из базы и показать следующую?');">
-        <input type="hidden" name="company_id" value="{{ company.id }}">
-        <input type="hidden" name="q" value="{{ flt.q }}">
-        <input type="hidden" name="region" value="{{ flt.region }}">
-        <input type="hidden" name="equipment" value="{{ flt.equipment }}">
-        <input type="hidden" name="min_priority" value="{{ flt.min_priority }}">
-        <input type="hidden" name="min_revenue_mln" value="{{ flt.min_revenue_mln }}">
-        <input type="hidden" name="only_phone" value="{{ 1 if flt.only_phone else 0 }}">
-        <input type="hidden" name="active_only" value="{{ 1 if flt.active_only else 0 }}">
-        <input type="hidden" name="skip" value="{{ skip }}">
-        <button type="submit">✅ Обзвонили — удалить и следующая</button>
-      </form>
-      <a role="button" class="secondary outline" href="{{ base_path }}/{{ base }}?{{ qs_next }}">Пропустить →</a>
-      {% if skip %}<a role="button" class="secondary outline" href="{{ base_path }}/{{ base }}?{{ qs_first }}">⏮ К началу очереди</a>{% endif %}
-    </div>
-  </footer>
-</article>
-{% elif db_total %}
-<article><p><strong>Очередь пуста по текущим фильтрам.</strong> Ослабьте фильтры — в базе {{ db_total }} компаний.</p></article>
-{% else %}
-<article><p><strong>База пуста.</strong>
-  {% if is_admin %}Загрузите выгрузку ниже — очередь появится сразу.{% else %}Обратитесь к администратору — он загрузит базу компаний.{% endif %}</p></article>
-{% endif %}
-
-{# ---------- Загрузка базы (только администратор) ---------- #}
-{% if is_admin %}
-<article>
-  <header>Загрузка базы <small>— xlsx с расчётом приоритетов или tsv/csv из Checko; дубли по ИНН пропускаются</small></header>
-  <form method="post" action="{{ base_path }}/{{ base }}/upload" enctype="multipart/form-data">
-    <div class="grid">
-      <input type="file" name="file" accept=".xlsx,.xlsm,.csv,.tsv,.txt" required>
-      <button type="submit">⬆ Импортировать</button>
-    </div>
-  </form>
-  {% if db_total %}
-  <form method="post" action="{{ base_path }}/{{ base }}/clear"
-        onsubmit="return confirm('Полностью очистить базу «{{ label }}» ({{ db_total }} компаний)? Это нужно только для перезаливки.');">
-    <button type="submit" class="secondary outline">🗑 Очистить базу целиком</button>
-  </form>
-  {% endif %}
-  <small>Очередь сортируется по «Приоритет × выручка» из xlsx (если колонок расчёта нет — просто по выручке).
-    Удалённые строки страхуются в <code>data/callbase/deleted_{{ base }}.tsv</code>.</small>
-</article>
-{% endif %}
+    fetch(url, {credentials: "same-origin"})
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.text(); })
+      .then(function (html) {
+        var card = document.getElementById("card");
+        card.innerHTML = html;
+        var n = card.querySelector("[data-dbtotal]"), h = document.getElementById("qhead");
+        if (h && n) h.textContent = "— " + n.getAttribute("data-dbtotal") + " компаний в базе";
+        try {
+          var data = JSON.parse((card.querySelector("#filters-data") || {}).textContent || "{}");
+          fillSelect("f-region", data.regions);
+          fillSelect("f-okved", data.okveds);
+          fillSelect("f-equipment", data.equipments);
+        } catch (e) {}
+      })
+      .catch(function (e) {
+        document.getElementById("card").innerHTML =
+          '<article><strong>Не удалось загрузить карточку (' + e.message +
+          ').</strong> <a href="javascript:location.reload()">Повторить</a></article>';
+      });
+  })();
+</script>
 {% endblock %}

@@ -10,6 +10,12 @@ from fastapi.testclient import TestClient
 from app.services import callbase
 
 
+@pytest.fixture(autouse=True)
+def _fresh_queue_cache():
+    callbase._bump_version()  # кэш очереди живёт на процесс, БД пересоздаётся на тест
+    yield
+
+
 def _tsv(rows: list[list[str]]) -> bytes:
     return ("\n".join("\t".join(r) for r in rows)).encode("utf-8")
 
@@ -21,10 +27,21 @@ ROW_A = ["3827013097", 'АО "ИМК"', "АО ИРКУТСКАЯ МК", "Дей�
          "imk38@mail.ru", "https://imk-38.ru | https://yastatic.net/ | https://mc.yandex.ru",
          "295,2 млн руб."]
 ROW_B = ["6657004027", 'ООО "СТУМЗ"', "ООО СТАРОУТКИНСКИЙ МЗ", "Действующая компания",
-         "623036, Свердловская область", "+7 343 585-51-79", "zavod@stumz.ru",
+         "623036, Свердловская область", "+7 343 585-51-79 | +7 908 907-92-00", "zavod@stumz.ru",
          "https://stumz.ru", "130,5 млн руб."]
 ROW_NOPHONE = ["7705488260", 'ООО "ТЕХЭКСПОРТ"', "ООО ТЕХЭКСПОРТ", "Действующая компания",
                "117545, г. Москва", "", "", "", "2,2 млрд руб."]
+
+
+def test_region_and_mobile_helpers():
+    assert callbase.region_from_address("664043, Иркутская область, г. Иркутск, ул. Ракитная") == "Иркутская область"
+    assert callbase.region_from_address("117545, г. Москва, вн. тер. г. муниципальный округ") == "Москва"
+    assert callbase.region_from_address("423603, Республика Татарстан, м. р-н Елабужский") == "Республика Татарстан"
+    assert callbase.region_from_address("") == ""
+    assert callbase.has_mobile("+7 908 907-92-00")
+    assert callbase.has_mobile("+7 343 585-51-79 | 89631112233")
+    assert not callbase.has_mobile("+7 343 585-51-79")
+    assert not callbase.has_mobile("")
 
 
 def test_parse_money():
@@ -70,15 +87,16 @@ def test_parse_xlsx_finds_company_sheet_and_priorities(db):
     ws0.append(["Матрица", ""])
     ws = wb.create_sheet("Лист1")
     ws.append(HEAD + ["Итоговый балл приоритета", "Оборудование по основному ОКВЭД",
-                      "Выручка, руб. (расчет)", "Приоритет × выручка / 10000"])
-    ws.append(ROW_A + ["50", "Промышленные компрессоры от 200 000 ₽", "295200000", "1476000"])
-    ws.append(ROW_B + ["28", "Промышленные компрессоры от 200 000 ₽", "130500000", "365400"])
+                      "Выручка, руб. (расчет)", "Приоритет × выручка / 10000",
+                      "Макс. балл по одной связке"])
+    ws.append(ROW_A + ["50", "Промышленные компрессоры от 200 000 ₽", "295200000", "1476000", "5"])
+    ws.append(ROW_B + ["28", "Промышленные компрессоры от 200 000 ₽", "130500000", "365400", "3"])
     buf = io.BytesIO()
     wb.save(buf)
 
     rows = callbase.parse_upload("prio.xlsx", buf.getvalue())
     assert len(rows) == 2
-    assert rows[0]["priority"] == 50
+    assert rows[0]["priority"] == 50 and rows[0]["max_hit"] == 5
     assert rows[0]["rank_metric"] == pytest.approx(1476000)
     callbase.import_rows(db, "kc", rows)
 
@@ -88,10 +106,24 @@ def test_parse_xlsx_finds_company_sheet_and_priorities(db):
     assert first.inn == "3827013097"
     nxt, _ = callbase.pick(db, "kc", skip=1)
     assert nxt.inn == "6657004027"
+    # балл связки «встретился хотя бы раз»: от/до
+    _, n5 = callbase.pick(db, "kc", hit_from=5)
+    assert n5 == 1
+    _, n35 = callbase.pick(db, "kc", hit_from=3, hit_to=4)
+    assert n35 == 1  # только СТУМЗ (3)
+    # общий приоритет от/до
+    _, nr = callbase.pick(db, "kc", rank_from=1000000)
+    assert nr == 1
+    _, nr2 = callbase.pick(db, "kc", rank_from=100000, rank_to=500000)
+    assert nr2 == 1
+    # категории оборудования для выпадающего списка
+    eqs = callbase.equipments(db, "kc")
+    assert eqs and eqs[0][0].startswith("Промышленные компрессоры") and eqs[0][1] == 2
 
 
 def test_queue_filters_and_revenue_order_without_priorities(db):
     rows = callbase.parse_upload("b.tsv", _tsv([HEAD, ROW_A, ROW_B, ROW_NOPHONE]))
+    assert rows[0]["region"] == "Иркутская область"  # регион распарсен при импорте
     callbase.import_rows(db, "kc", rows)
     # без колонок приоритета очередь = по выручке; only_phone режет безтелефонных
     first, total = callbase.pick(db, "kc", only_phone=True)
@@ -100,11 +132,18 @@ def test_queue_filters_and_revenue_order_without_priorities(db):
     assert total_all == 3  # ТЕХЭКСПОРТ (2,2 млрд) без телефона
     first_all, _ = callbase.pick(db, "kc", only_phone=False)
     assert first_all.inn == "7705488260"
-    # фильтр по региону и мин. выручке
-    _, n_irk = callbase.pick(db, "kc", region="Иркутск")
+    # выпадающие списки значений
+    assert ("Иркутская область", 1) in callbase.regions(db, "kc")
+    assert any("24.10" in o for o, _n in callbase.okveds(db, "kc")) or callbase.okveds(db, "kc") == []
+    # фильтры: регион (точное значение из списка), выручка от/до, сотовые
+    _, n_irk = callbase.pick(db, "kc", region="Иркутская область")
     assert n_irk == 1
-    _, n_rich = callbase.pick(db, "kc", only_phone=False, min_revenue_mln=1000)
+    _, n_rich = callbase.pick(db, "kc", only_phone=False, rev_from=1000)
     assert n_rich == 1
+    _, n_mid = callbase.pick(db, "kc", only_phone=False, rev_from=100, rev_to=500)
+    assert n_mid == 2  # 295,2 и 130,5 млн
+    mob, n_mob = callbase.pick(db, "kc", mobile_only=True)
+    assert n_mob == 1 and mob.inn == "6657004027"  # +7 908 … — сотовый
 
 
 def test_delete_logs_and_removes(db, tmp_path, monkeypatch):
@@ -124,6 +163,16 @@ def test_delete_logs_and_removes(db, tmp_path, monkeypatch):
     assert not callbase.delete_company(db, "kc", first.id)
 
 
+def test_ensure_schema_backfills_region(db):
+    from app.db.models import CallCompany
+    db.add(CallCompany(base="kc", inn="1", name_short="X",
+                       address="664043, Иркутская область, г. Иркутск", region=None))
+    db.commit()
+    callbase.ensure_schema(db)  # на живой схеме — no-op по колонкам + backfill региона
+    row = db.query(CallCompany).filter_by(inn="1").one()
+    assert row.region == "Иркутская область"
+
+
 def test_obzvon_endpoints(db, tmp_path, monkeypatch):
     monkeypatch.setattr(callbase, "DATA_DIR", str(tmp_path))
     from app.obzvon import app as obz_app
@@ -135,8 +184,11 @@ def test_obzvon_endpoints(db, tmp_path, monkeypatch):
     assert client.get("/obzvon/kc", auth=("test", "wrong")).status_code == 401
     r = client.get("/obzvon/kc", auth=auth)
     assert r.status_code == 200
-    assert "База пуста" in r.text
+    # каркас мгновенный: карточка не в нём, а во фрагменте /card
+    assert 'id="card"' in r.text and "Загружаю карточку" in r.text
     assert client.get("/obzvon/nope", auth=auth).status_code == 404
+    r = client.get("/obzvon/kc/card", auth=auth)
+    assert r.status_code == 200 and "База пуста" in r.text
     # корень ведёт на первую базу
     r = client.get("/obzvon/", auth=auth, follow_redirects=False)
     assert r.status_code == 307 and r.headers["location"] == "/obzvon/kc"
@@ -150,26 +202,37 @@ def test_obzvon_endpoints(db, tmp_path, monkeypatch):
                     follow_redirects=True)
     assert r.status_code == 200
     assert "Импортировано 2" in r.text
-    assert "ИМК" in r.text and "tel:+73952986170" in r.text
-    # ссылок/навигации основного сервиса на странице нет
+    card = client.get("/obzvon/kc/card", auth=auth).text
+    assert "ИМК" in card and "tel:+73952986170" in card
+    # выпадающие списки приходят JSON'ом внутри фрагмента
+    assert 'id="filters-data"' in card and "Иркутская область" in card
+    # ссылок/навигации основного сервиса нет ни в каркасе, ни во фрагменте
     assert "Дашборд" not in r.text and "SEO Статистика" not in r.text
+    assert "Дашборд" not in card
 
-    # продажник: страницу видит, загрузку/очистку — нет (ни кнопок, ни эндпоинтов)
+    # продажник: карточку видит, загрузку/очистку — нет (ни кнопок, ни эндпоинтов)
     seller = ("seller", "sell")
-    r = client.get("/obzvon/kc", auth=seller)
-    assert r.status_code == 200 and "ИМК" in r.text
-    assert "Импортировать" not in r.text and "Очистить базу" not in r.text
+    card = client.get("/obzvon/kc/card", auth=seller).text
+    assert "ИМК" in card
+    assert "Импортировать" not in card and "Очистить базу" not in card
     assert client.post("/obzvon/kc/upload", auth=seller,
                        files={"file": ("b.tsv", _tsv([HEAD, ROW_A]), "text/plain")}).status_code == 403
     assert client.post("/obzvon/kc/clear", auth=seller).status_code == 403
+    # админ кнопки загрузки видит
+    assert "Импортировать" in client.get("/obzvon/kc/card", auth=auth).text
 
-    # удалить текущую («обзвонили») может и продажник -> следующая
+    # удалить текущую («обзвонили») может и продажник -> во фрагменте следующая
     company, _ = callbase.pick(db, "kc")
     r = client.post("/obzvon/kc/delete", auth=seller,
                     data={"company_id": company.id, "only_phone": 1, "active_only": 1},
                     follow_redirects=True)
     assert r.status_code == 200
-    assert "СТУМЗ" in r.text and "ИМК" not in r.text
+    card = client.get("/obzvon/kc/card", auth=seller).text
+    assert "СТУМЗ" in card and "ИМК" not in card
+
+    # пропуск дальше конца очереди -> фрагмент начинает сначала (с пометкой)
+    card = client.get("/obzvon/kc/card?skip=99", auth=auth).text
+    assert "показываю сначала" in card and "СТУМЗ" in card
 
     # очистить базу (админ)
     r = client.post("/obzvon/kc/clear", auth=auth, follow_redirects=True)
