@@ -365,14 +365,30 @@ def regions(db: Session, base: str) -> list[tuple[str, int]]:
     return _cached_agg(base, "regions", _q)
 
 
+def okved_sort_key(okved: str) -> list[int]:
+    """Ключ числового порядка кода ОКВЭД: «06.10»→[6,10], «24.1»→[24,1],
+    «24.10.3»→[24,10,3] (чтобы 6.10 < 24.1 < 24.10 < 25.11, а не по строке)."""
+    m = re.match(r"\s*([\d.]+)", str(okved or ""))
+    parts = []
+    for seg in (m.group(1).strip(".").split(".") if m else []):
+        try:
+            parts.append(int(seg))
+        except ValueError:
+            parts.append(0)
+    return parts
+
+
 def okveds(db: Session, base: str) -> list[tuple[str, int]]:
-    """Основные ОКВЭД базы (код с расшифровкой) с количеством, по убыванию."""
+    """Основные ОКВЭД базы (код с расшифровкой) с количеством — в числовом
+    порядке кода (06.10, 24.1, 25.11, 43.11…), а не по количеству."""
     def _q():
         C = CallCompany
         rows = db.execute(select(C.okved_main, func.count())
                           .where(C.base == base, C.okved_main != "")
-                          .group_by(C.okved_main).order_by(func.count().desc(), C.okved_main)).all()
-        return [(o, n) for o, n in rows if o]
+                          .group_by(C.okved_main)).all()
+        out = [(o, n) for o, n in rows if o]
+        out.sort(key=lambda on: okved_sort_key(on[0]))
+        return out
     return _cached_agg(base, "okveds", _q)
 
 

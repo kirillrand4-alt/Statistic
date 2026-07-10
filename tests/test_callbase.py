@@ -83,7 +83,17 @@ def test_parse_site_contacts_separate_columns(db):
     assert rows[0]["site_emails"] == "hello@x.ru | dup@x.ru"
 
 
-def test_region_case_merged(db):
+def test_okveds_sorted_by_code_number(db):
+    # ОКВЭД в выпадающем списке — по числовому порядку кода, не по количеству
+    head = ["ИНН", "Краткое", "Статус", "Адрес", "ОсновнойОКВЭД", "Выручка"]
+    rows = [head]
+    # 25.11 встречается чаще (3), но должен идти после 6.10/24.1 по коду
+    for i, ok in enumerate(["25.11 A", "25.11 A", "25.11 A", "6.10 B", "24.1 C", "24.10 D"]):
+        rows.append([str(i), f"K{i}", "Действующая компания", "117545, г. Москва", ok, "1 млн руб."])
+    callbase.import_rows(db, "kc", callbase.parse_upload("b.tsv", _tsv(rows)))
+    codes = [o.split()[0] for o, _n in callbase.okveds(db, "kc")]
+    assert codes == ["6.10", "24.1", "24.10", "25.11"]
+    assert callbase.okved_sort_key("24.10.3") == [24, 10, 3]
     # «москва» и «Москва» — один регион (регистр нормализуется при импорте)
     head = ["ИНН", "Краткое", "Статус", "Адрес", "Телефоны", "Выручка"]
     rows = callbase.parse_upload("b.tsv", _tsv([
