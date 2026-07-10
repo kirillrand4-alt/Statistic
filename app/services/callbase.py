@@ -55,6 +55,42 @@ _JUNK_SITE = re.compile(
 
 _MULT = {"млрд": 1e9, "млн": 1e6, "тыс": 1e3}
 
+# «Уникальные контакты с сайта компании» — колонки, где Checko кладёт телефоны/почту,
+# найденные прямо на сайте фирмы (отдельно от реестровых «Телефоны»/«Emails»).
+# Заголовок таких колонок не из HEADERS и содержит «сайт» + признак контакта.
+_SITE_CONTACT_HINT = ("контакт", "тел", "e-mail", "email", "почт", "мейл", "мэйл", "@")
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+_PHONE_RE = re.compile(r"\+?\d[\d\s\-()]{8,}\d")
+
+
+def _norm_phone(raw: str) -> str:
+    """RU-номер → канон «+7XXXXXXXXXX» (11 цифр). Иначе '' (мусор/не РФ)."""
+    d = re.sub(r"\D", "", raw)
+    if len(d) == 11 and d[0] == "8":
+        d = "7" + d[1:]
+    elif len(d) == 10:
+        d = "7" + d
+    return "+" + d if len(d) == 11 and d[0] == "7" else ""
+
+
+def extract_site_contacts(text) -> tuple[list[str], list[str]]:
+    """Из свободного текста «контакты с сайта» вынуть УНИКАЛЬНЫЕ телефоны
+    (канон +7…) и email (нижний регистр), сохраняя порядок появления."""
+    s = str(text or "")
+    emails, seen_e = [], set()
+    for m in _EMAIL_RE.findall(s):
+        e = m.lower().strip(".")
+        if e not in seen_e:
+            seen_e.add(e)
+            emails.append(e)
+    phones, seen_p = [], set()
+    for m in _PHONE_RE.findall(_EMAIL_RE.sub(" ", s)):  # email вырезаем — их цифры не телефоны
+        p = _norm_phone(m)
+        if p and p not in seen_p:
+            seen_p.add(p)
+            phones.append(p)
+    return phones, emails
+
 
 def parse_money(text) -> float | None:
     """«55,3 млрд руб.» → 55.3e9; «424 тыс. руб.» → 424000; «0 руб.» → 0; '' → None."""
@@ -133,6 +169,11 @@ def _rows_from_matrix(matrix) -> list[dict]:
     if head is None:
         return []
     idx = {j: HEADERS[h] for j, h in enumerate(head) if h in HEADERS}
+    # колонки «контакты с сайта компании»: заголовок не из HEADERS, содержит «сайт»
+    # + признак контакта (плоскую колонку URL «Сайты» не трогаем — она в idx)
+    site_cols = [j for j, h in enumerate(head)
+                 if j not in idx and h and "сайт" in h.casefold()
+                 and any(w in h.casefold() for w in _SITE_CONTACT_HINT)]
     out = []
     for row in matrix[head_i + 1:]:
         rec: dict = {}
@@ -148,6 +189,11 @@ def _rows_from_matrix(matrix) -> list[dict]:
             continue  # пустая строка
         rec["sites"] = clean_sites(rec.get("sites"))
         rec["region"] = region_from_address(rec.get("address"))
+        if site_cols:
+            blob = " | ".join(_clean_cell(row[j]) for j in site_cols if j < len(row))
+            sp, se = extract_site_contacts(blob)
+            rec["site_phones"] = " | ".join(sp)
+            rec["site_emails"] = " | ".join(se)
         if rec.get("revenue_num") is None:
             rec["revenue_num"] = parse_money(rec.get("revenue"))
         if rec.get("rank_metric") is None:
@@ -315,6 +361,10 @@ def ensure_schema(db: Session) -> None:
         db.execute(text("ALTER TABLE call_company ADD COLUMN region VARCHAR(96)"))
     if "max_hit" not in cols:
         db.execute(text("ALTER TABLE call_company ADD COLUMN max_hit INTEGER DEFAULT 0"))
+    if "site_phones" not in cols:
+        db.execute(text("ALTER TABLE call_company ADD COLUMN site_phones TEXT"))
+    if "site_emails" not in cols:
+        db.execute(text("ALTER TABLE call_company ADD COLUMN site_emails TEXT"))
     db.commit()
     rows = db.execute(select(CallCompany.id, CallCompany.address)
                       .where(CallCompany.region.is_(None))).all()
@@ -354,6 +404,7 @@ def delete_company(db: Session, base: str, company_id: int) -> bool:
     fields = ["inn", "ogrn", "kpp", "okpo", "name_short", "name_full", "status",
               "reg_date", "address", "opf", "capital", "director", "director_inn",
               "founders", "okved_main", "okved_all", "phones", "emails", "sites",
+              "site_phones", "site_emails",
               "fin_year", "revenue", "profit", "equity", "staff", "priority",
               "equipment", "equipment_all", "okved_hits", "calc_comment",
               "revenue_num", "rank_metric"]

@@ -549,6 +549,8 @@ class CallCompany(Base):
     phones: Mapped[str | None] = mapped_column(Text, nullable=True)   # " | "-separated
     emails: Mapped[str | None] = mapped_column(Text, nullable=True)   # " | "-separated
     sites: Mapped[str | None] = mapped_column(Text, nullable=True)    # " | "-separated, junk removed
+    site_phones: Mapped[str | None] = mapped_column(Text, nullable=True)  # уникальные тел. с сайта компании
+    site_emails: Mapped[str | None] = mapped_column(Text, nullable=True)  # уникальные email с сайта компании
     fin_year: Mapped[str | None] = mapped_column(String(16), nullable=True)
     revenue: Mapped[str | None] = mapped_column(Text, nullable=True)      # как в выгрузке: «55,3 млрд руб.»
     profit: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -44,6 +44,52 @@ def test_region_and_mobile_helpers():
     assert not callbase.has_mobile("")
 
 
+def test_extract_site_contacts_unique():
+    ph, em = callbase.extract_site_contacts(
+        "+7 (495) 785-94-60, 8 800 511-41-35 | info@Zavod.ru; INFO@zavod.ru, +7 495 785-94-60")
+    assert ph == ["+74957859460", "+78005114135"]   # канон, дубль схлопнут
+    assert em == ["info@zavod.ru"]                    # нижний регистр, дубль убран
+    assert callbase.extract_site_contacts("") == ([], [])
+    assert callbase.extract_site_contacts(None) == ([], [])
+    # цифры внутри email не считаем телефоном
+    assert callbase.extract_site_contacts("a1234567890@x.ru")[0] == []
+
+
+def test_parse_site_contacts_column(db):
+    head = ["ИНН", "Краткое", "Полное", "Статус", "Адрес", "Телефоны", "Emails", "Сайты",
+            "Выручка", "Уникальные контакты с сайта компании"]
+    row = ["7705488260", 'ООО "Т"', "ООО ТЕХ", "Действующая компания", "117545, г. Москва",
+           "+7 495 111-22-33", "reg@t.ru", "https://t.ru", "2,2 млрд руб.",
+           "+7 (499) 700-10-20 site@t.ru | 8-916-000-11-22"]
+    rows = callbase.parse_upload("b.tsv", _tsv([head, row]))
+    r = rows[0]
+    assert r["site_phones"] == "+74997001020 | +79160001122"
+    assert r["site_emails"] == "site@t.ru"
+    # реестровые «Телефоны/Emails/Сайты» не затронуты, URL-колонку не приняли за контакты
+    assert r["phones"] == "+7 495 111-22-33" and r["emails"] == "reg@t.ru"
+    assert r["sites"] == "https://t.ru"
+    callbase.import_rows(db, "kc", rows)
+    c, _ = callbase.pick(db, "kc")
+    assert c.site_phones == "+74997001020 | +79160001122"
+
+
+def test_parse_site_contacts_separate_columns(db):
+    head = ["ИНН", "Краткое", "Статус", "Адрес", "Телефоны", "Выручка",
+            "Телефоны с сайта", "E-mail с сайта"]
+    row = ["1", "X", "Действующая компания", "117545, г. Москва", "+7 495 111-22-33",
+           "1 млн руб.", "8 916 000 11 22", "hello@x.ru | dup@x.ru | HELLO@x.ru"]
+    rows = callbase.parse_upload("b.tsv", _tsv([head, row]))
+    assert rows[0]["site_phones"] == "+79160001122"
+    assert rows[0]["site_emails"] == "hello@x.ru | dup@x.ru"
+
+
+def test_ensure_schema_adds_site_contact_columns(db):
+    from sqlalchemy import inspect
+    callbase.ensure_schema(db)  # на актуальной схеме — no-op, но идемпотентно
+    cols = {c["name"] for c in inspect(db.get_bind()).get_columns("call_company")}
+    assert {"site_phones", "site_emails", "region", "max_hit"} <= cols
+
+
 def test_parse_money():
     assert callbase.parse_money("55,3 млрд руб.") == pytest.approx(55.3e9)
     assert callbase.parse_money("295,2 млн руб.") == pytest.approx(295.2e6)
