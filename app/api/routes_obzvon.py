@@ -86,11 +86,14 @@ def _flt(**raw) -> dict:
     out = {}
     for name, (typ, default) in _FILTER_FIELDS.items():
         v = raw.get(name)
-        if typ is bool:
-            out[name] = bool(int(v)) if v is not None else default
+        if typ is bool:  # None/"" -> дефолт; 0/1/"0"/"1" -> bool
+            try:
+                out[name] = default if v in (None, "") else bool(int(v))
+            except (TypeError, ValueError):
+                out[name] = default
         elif typ is str:
             out[name] = (v or "").strip()
-        else:
+        else:  # int/float: ""/None -> дефолт (пустые поля формы не должны падать в 422)
             try:
                 out[name] = typ(v) if v else default
             except (TypeError, ValueError):
@@ -154,12 +157,14 @@ def obzvon_page(request: Request, base: str, q: str = "", region: str = "",
 @router.get("/{base}/card")
 def obzvon_card(request: Request, base: str, q: str = "", region: str = "",
                 okved: str = "", equipment: str = "",
-                hit_from: int = 0, hit_to: int = 0,
-                rank_from: float = 0, rank_to: float = 0,
-                rev_from: float = 0, rev_to: float = 0,
-                only_phone: int = 1, active_only: int = 1, mobile_only: int = 0,
+                hit_from: str = "", hit_to: str = "",
+                rank_from: str = "", rank_to: str = "",
+                rev_from: str = "", rev_to: str = "",
+                only_phone: str = "1", active_only: str = "1", mobile_only: str = "0",
                 skip: int = 0, db: Session = Depends(get_db)):
-    """HTML-фрагмент с карточкой очереди — всё, что требует БД."""
+    """HTML-фрагмент с карточкой очереди — всё, что требует БД. Числовые/булевы
+    фильтры принимаем строками (как и /{base}) — пустые значения _flt приводит к
+    дефолтам, а не роняет в 422 (паритет с эндпоинтом-каркасом)."""
     base = _check_base(base)
     flt = _flt(q=q, region=region, okved=okved, equipment=equipment,
                hit_from=hit_from, hit_to=hit_to, rank_from=rank_from, rank_to=rank_to,

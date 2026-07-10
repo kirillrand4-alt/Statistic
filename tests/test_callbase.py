@@ -305,6 +305,9 @@ def test_page_endpoint_tolerates_empty_number_filters(db):
     # дробное значение тоже принимается
     assert client.get("/obzvon/kc", params={**empty, "rev_from": "2.5"},
                       auth=auth).status_code == 200
+    # /card тоже терпит пустые числовые/булевы параметры (паритет, не 422)
+    for p in ("hit_from", "rank_from", "rev_to", "only_phone", "active_only", "mobile_only"):
+        assert client.get("/obzvon/kc/card", params={p: ""}, auth=auth).status_code == 200, p
 
 
 def test_basic_auth_non_ascii_password():
