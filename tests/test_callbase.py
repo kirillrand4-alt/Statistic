@@ -83,6 +83,32 @@ def test_parse_site_contacts_separate_columns(db):
     assert rows[0]["site_emails"] == "hello@x.ru | dup@x.ru"
 
 
+def test_region_case_merged(db):
+    # «москва» и «Москва» — один регион (регистр нормализуется при импорте)
+    head = ["ИНН", "Краткое", "Статус", "Адрес", "Телефоны", "Выручка"]
+    rows = callbase.parse_upload("b.tsv", _tsv([
+        head,
+        ["1", "A", "Действующая компания", "117545, г. москва, ул. 1", "+7 495 1", "1 млн руб."],
+        ["2", "B", "Действующая компания", "117545, г. Москва, ул. 2", "+7 495 2", "1 млн руб."],
+        ["3", "C", "Действующая компания", "620000, Свердловская Область, ", "+7 343 3", "1 млн руб."],
+    ]))
+    assert rows[0]["region"] == "Москва" and rows[1]["region"] == "Москва"
+    assert rows[2]["region"] == "Свердловская область"
+    callbase.import_rows(db, "kc", rows)
+    regs = dict(callbase.regions(db, "kc"))
+    assert regs.get("Москва") == 2 and "москва" not in regs      # слиты в один
+    _, n = callbase.pick(db, "kc", region="Москва")
+    assert n == 2                                                 # фильтр ловит обе
+
+
+def test_ensure_schema_normalizes_existing_region(db):
+    from app.db.models import CallCompany
+    db.add(CallCompany(base="kc", inn="1", name_short="X", region="москва"))
+    db.commit()
+    callbase.ensure_schema(db)  # приводит регистр уже загруженных строк
+    assert db.query(CallCompany).filter_by(inn="1").one().region == "Москва"
+
+
 def test_ensure_schema_adds_site_contact_columns(db):
     from sqlalchemy import inspect
     callbase.ensure_schema(db)  # на актуальной схеме — no-op, но идемпотентно
@@ -232,6 +258,8 @@ def test_obzvon_endpoints(db, tmp_path, monkeypatch):
     assert r.status_code == 200
     # каркас мгновенный: карточка не в нём, а во фрагменте /card
     assert 'id="card"' in r.text and "Загружаю карточку" in r.text
+    # фильтры сворачиваемые
+    assert 'id="flt-box"' in r.text and "🔎 Фильтры" in r.text
     assert client.get("/obzvon/nope", auth=auth).status_code == 404
     r = client.get("/obzvon/kc/card", auth=auth)
     assert r.status_code == 200 and "База пуста" in r.text

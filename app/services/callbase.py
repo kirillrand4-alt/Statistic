@@ -127,17 +127,37 @@ def clean_sites(raw) -> str:
 
 
 _POSTCODE = re.compile(r"^\d{5,6}$")
+# служебные слова региона — со строчной (кроме первого слова), остальные — с заглавной
+_REGION_LOWER = {"область", "обл", "край", "округ", "автономный", "автономная",
+                 "автономное", "район", "г", "го", "имени", "и"}
+
+
+def norm_region(s) -> str:
+    """Единый регистр региона, чтобы «москва»/«Москва»/«МОСКВА» не плодили дубли:
+    «москва»→«Москва», «Московская Область»→«Московская область»,
+    «санкт-петербург»→«Санкт-Петербург», «республика татарстан»→«Республика Татарстан»."""
+    s = re.sub(r"\s+", " ", str(s or "").strip())
+    if not s:
+        return ""
+    out = []
+    for i, w in enumerate(s.split(" ")):
+        if i > 0 and w.casefold() in _REGION_LOWER:
+            out.append(w.casefold())
+        else:  # капитализация с учётом дефиса: санкт-петербург → Санкт-Петербург
+            out.append("-".join((p[:1].upper() + p[1:].casefold()) if p else p
+                                for p in w.split("-")))
+    return " ".join(out)
 
 
 def region_from_address(addr) -> str:
     """Регион из адреса Checko: «664043, Иркутская область, г. Иркутск…» →
-    «Иркутская область»; «117545, г. Москва, …» → «Москва»."""
+    «Иркутская область»; «117545, г. Москва, …» → «Москва». Регистр нормализуется."""
     for part in str(addr or "").split(","):
         p = part.strip()
         if not p or _POSTCODE.match(p):
             continue
         p = re.sub(r"^(г\.\s*о\.|г\.|город)\s+", "", p).strip()
-        return p
+        return norm_region(p)
     return ""
 
 
@@ -385,12 +405,17 @@ def ensure_schema(db: Session) -> None:
     if "site_emails" not in cols:
         db.execute(text("ALTER TABLE call_company ADD COLUMN site_emails TEXT"))
     db.commit()
-    rows = db.execute(select(CallCompany.id, CallCompany.address)
-                      .where(CallCompany.region.is_(None))).all()
-    for cid, addr in rows:
-        db.execute(CallCompany.__table__.update().where(CallCompany.id == cid)
-                   .values(region=region_from_address(addr)))
-    if rows:
+    # заполнить/нормализовать регион у всех строк: NULL → из адреса, иначе привести
+    # регистр (чтобы «москва»/«Москва» слиплись). Обновляем только отличающиеся.
+    rows = db.execute(select(CallCompany.id, CallCompany.address, CallCompany.region)).all()
+    changed = 0
+    for cid, addr, reg in rows:
+        want = norm_region(reg) if reg else region_from_address(addr)
+        if want != (reg or ""):
+            db.execute(CallCompany.__table__.update().where(CallCompany.id == cid)
+                       .values(region=want))
+            changed += 1
+    if changed:
         db.commit()
         _bump_version()
 
