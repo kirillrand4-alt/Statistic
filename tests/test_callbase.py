@@ -310,6 +310,25 @@ def test_page_endpoint_tolerates_empty_number_filters(db):
         assert client.get("/obzvon/kc/card", params={p: ""}, auth=auth).status_code == 200, p
 
 
+def test_shell_card_url_not_html_escaped(db, tmp_path, monkeypatch):
+    # регресс: card_qs в JS-строке не должен экранироваться (&amp;), иначе браузер
+    # шлёт "amp;skip" и пропуск/фильтры (кроме первого) не работают
+    import re
+    monkeypatch.setattr(callbase, "DATA_DIR", str(tmp_path))
+    from app.obzvon import app as obz_app
+    client = TestClient(obz_app)
+    auth = ("test", "test")
+    client.post("/obzvon/kc/upload", auth=auth,
+                files={"file": ("b.tsv", _tsv([HEAD, ROW_A, ROW_B]), "text/plain")})
+    shell = client.get("/obzvon/kc", params={"skip": 1}, auth=auth).text
+    url = re.search(r'var url = "([^"]*)"', shell).group(1)
+    assert "&amp;" not in url and "amp;skip" not in url
+    assert "&skip=1" in url
+    # и функционально: этот url отдаёт ВТОРУЮ компанию (пропуск сработал)
+    card = client.get(url, auth=auth).text
+    assert "СТУМЗ" in card and "ИМК" not in card
+
+
 def test_basic_auth_non_ascii_password():
     # регресс бага 500: кириллический пароль не должен ронять compare_digest
     import base64

@@ -60,7 +60,7 @@
   <div class="grid">
     <fieldset>
       <label><input type="checkbox" name="only_phone" value="1" {% if flt.only_phone %}checked{% endif %}> только с телефоном</label>
-      <label><input type="checkbox" name="mobile_only" value="1" {% if flt.mobile_only %}checked{% endif %}> имеют сотовые номера <small>(+79… / 89…)</small></label>
+      <label><input type="checkbox" name="mobile_only" value="1" {% if flt.mobile_only %}checked{% endif %}> имеют сотовый номер <small>(+79…&nbsp;/&nbsp;89…)</small></label>
       <label><input type="checkbox" name="active_only" value="1" {% if flt.active_only %}checked{% endif %}> только действующие</label>
     </fieldset>
   </div>
@@ -75,7 +75,10 @@
     var form = document.getElementById("filters");
     if (form) form.addEventListener("change", function () { form.submit(); });
 
-    var url = "{{ base_path }}/{{ base }}/card{% if card_qs %}?{{ card_qs }}{% endif %}";
+    // card_qs — уже url-энкоденная строка; |safe, иначе Jinja экранирует & в &amp;
+    // и браузер шлёт в fetch буквальные "&amp;" — сервер видит параметр "amp;skip"
+    // вместо "skip" (ломало пропуск и все фильтры, кроме первого).
+    var url = "{{ base_path }}/{{ base }}/card{% if card_qs %}?{{ card_qs|safe }}{% endif %}";
 
     function fillSelect(id, items) {
       var sel = document.getElementById(id);
