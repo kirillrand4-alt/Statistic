@@ -7,7 +7,7 @@
 {# ---------- Фильтры очереди (сворачиваемые: чтобы карточка была на весь экран;
      список значений регион/ОКВЭД/оборудование заполняется скриптом из карточки) ---------- #}
 <details id="flt-box" open style="margin-bottom:.6rem">
-  <summary style="cursor:pointer;font-weight:600">🔎 Фильтры</summary>
+  <summary style="cursor:pointer;font-weight:600">🔎 Фильтры{% if filters_active %} · <mark>активны</mark>{% endif %}</summary>
 <form method="get" action="{{ base_path }}/{{ base }}" id="filters">
   <input type="hidden" name="f" value="1">{# признак отправки формы: снятый чекбокс = 0 #}
   <div class="grid">
@@ -78,6 +78,7 @@
     // пропуск/фильтр — иначе блок разворачивался бы заново)
     var box = document.getElementById("flt-box");
     if (box) {
+      // по умолчанию развёрнуто; если раньше свернул — остаётся свёрнутым
       try { box.open = localStorage.getItem("obzvonFilters") !== "closed"; } catch (e) {}
       box.addEventListener("toggle", function () {
         try { localStorage.setItem("obzvonFilters", box.open ? "open" : "closed"); } catch (e) {}

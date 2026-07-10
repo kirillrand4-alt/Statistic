@@ -146,9 +146,10 @@ def obzvon_page(request: Request, base: str, q: str = "", region: str = "",
                only_phone=only_phone if only_phone is not None else dflt,
                active_only=active_only if active_only is not None else dflt,
                mobile_only=mobile_only if mobile_only is not None else dflt)
+    active = any(flt[name] != default for name, (typ, default) in _FILTER_FIELDS.items())
     return templates.TemplateResponse(request, "obzvon.html", {
         "base": base, "label": callbase.BASES[base], "bases": callbase.BASES,
-        "flt": flt, "skip": skip, "msg": msg,
+        "flt": flt, "skip": skip, "msg": msg, "filters_active": active,
         "card_qs": _qs(flt, skip),
         "base_path": OBZ,  # контекст перекрывает общий Jinja-глобал основного приложения
     })
