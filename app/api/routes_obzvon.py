@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
@@ -53,6 +53,22 @@ def _check_base(base: str) -> str:
     if base not in callbase.BASES:
         raise HTTPException(404, f"Неизвестная база обзвона: {base}")
     return base
+
+
+def _same_origin(request: Request) -> None:
+    """CSRF-защита для разрушающих POST: Basic-auth браузер сам дошлёт креды на
+    межсайтовую форму, поэтому отклоняем cross-site запросы. Основной сигнал —
+    Sec-Fetch-Site (шлют все актуальные браузеры); для древних — Origin/Referer.
+    Не-браузерные клиенты (без всех этих заголовков) пропускаем — у них нет
+    жертвы-браузера, а значит и CSRF-вектора."""
+    sfs = request.headers.get("sec-fetch-site")
+    if sfs is not None:
+        if sfs not in ("same-origin", "same-site", "none"):
+            raise HTTPException(403, "Cross-site запрос отклонён.")
+        return
+    ref = request.headers.get("origin") or request.headers.get("referer")
+    if ref and urlparse(ref).netloc != request.headers.get("host", ""):
+        raise HTTPException(403, "Cross-site запрос отклонён.")
 
 
 # Поля-фильтры очереди: имя -> (тип, значение по умолчанию). Диапазоны — «от/до».
@@ -106,12 +122,15 @@ def obzvon_root():
 @router.get("/{base}")
 def obzvon_page(request: Request, base: str, q: str = "", region: str = "",
                 okved: str = "", equipment: str = "",
-                hit_from: int = 0, hit_to: int = 0,
-                rank_from: float = 0, rank_to: float = 0,
-                rev_from: float = 0, rev_to: float = 0,
+                hit_from: str = "", hit_to: str = "",
+                rank_from: str = "", rank_to: str = "",
+                rev_from: str = "", rev_to: str = "",
                 only_phone: int | None = None, active_only: int | None = None,
                 mobile_only: int | None = None, f: int = 0,
                 skip: int = 0, msg: str = ""):
+    # Числовые фильтры принимаем как строки: форма-фильтр авто-сабмитится и шлёт
+    # пустые поля как "" — FastAPI отверг бы "" для float/int (422). _flt приводит
+    # "" -> дефолт, "5" -> 5. (У /card и /delete таких пустых значений не бывает.)
     """Каркас страницы: БД не трогаем вовсе — отдаётся мгновенно (фильтры из URL),
     карточка компании и списки значений догружаются фрагментом /{base}/card.
     ``f=1`` — признак отправки формы фильтров: тогда отсутствующий чекбокс
@@ -172,7 +191,7 @@ def obzvon_card(request: Request, base: str, q: str = "", region: str = "",
     })
 
 
-@router.post("/{base}/upload")
+@router.post("/{base}/upload", dependencies=[Depends(_same_origin)])
 async def obzvon_upload(request: Request, base: str, file: UploadFile = File(...),
                         db: Session = Depends(get_db)):
     base = _check_base(base)
@@ -193,7 +212,7 @@ async def obzvon_upload(request: Request, base: str, file: UploadFile = File(...
     return RedirectResponse(url=f"{OBZ}/{base}?msg={quote(msg)}", status_code=303)
 
 
-@router.post("/{base}/delete")
+@router.post("/{base}/delete", dependencies=[Depends(_same_origin)])
 def obzvon_delete(base: str, company_id: int = Form(...), q: str = Form(""),
                   region: str = Form(""), okved: str = Form(""), equipment: str = Form(""),
                   hit_from: int = Form(0), hit_to: int = Form(0),
@@ -213,7 +232,7 @@ def obzvon_delete(base: str, company_id: int = Form(...), q: str = Form(""),
     return RedirectResponse(url=f"{OBZ}/{base}?{_qs(flt, skip, msg)}", status_code=303)
 
 
-@router.post("/{base}/clear")
+@router.post("/{base}/clear", dependencies=[Depends(_same_origin)])
 def obzvon_clear(request: Request, base: str, db: Session = Depends(get_db)):
     base = _check_base(base)
     if not _is_admin(request):

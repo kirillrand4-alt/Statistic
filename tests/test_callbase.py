@@ -291,3 +291,88 @@ def test_obzvon_parse_users():
         "vasya": "p1", "petya": "p2", "dima": "p:3"}
     assert parse_users("") == {}
     assert parse_users("bad") == {}
+
+
+def test_page_endpoint_tolerates_empty_number_filters(db):
+    # регресс бага 422: авто-сабмит формы шлёт пустые числовые поля как "" —
+    # эндпоинт-каркас должен отдавать 200, а не падать на float("").
+    from app.obzvon import app as obz_app
+    client = TestClient(obz_app)
+    auth = ("test", "test")
+    empty = {"f": 1, "hit_from": "", "hit_to": "", "rank_from": "", "rank_to": "",
+             "rev_from": "", "rev_to": "", "only_phone": 1, "active_only": 1}
+    assert client.get("/obzvon/kc", params=empty, auth=auth).status_code == 200
+    # дробное значение тоже принимается
+    assert client.get("/obzvon/kc", params={**empty, "rev_from": "2.5"},
+                      auth=auth).status_code == 200
+
+
+def test_basic_auth_non_ascii_password():
+    # регресс бага 500: кириллический пароль не должен ронять compare_digest
+    import base64
+    from app.obzvon import BasicAuthASGI
+
+    m = BasicAuthASGI(None, {"vasya": "секрет"})
+
+    def hdr(u, p):
+        return b"Basic " + base64.b64encode(f"{u}:{p}".encode("utf-8"))
+
+    assert m._ok(hdr("vasya", "секрет")) is True     # верный кирилл-пароль пускает
+    assert m._ok(hdr("vasya", "wrong")) is False
+    assert m._ok(hdr("ghost", "секрет")) is False    # неизвестный логин — без краша
+
+
+def test_delete_confirm_js_escaped(db, tmp_path, monkeypatch):
+    # регресс бага 5: апостроф в названии не должен ломать confirm() (JS-escape)
+    monkeypatch.setattr(callbase, "DATA_DIR", str(tmp_path))
+    from app.obzvon import app as obz_app
+    client = TestClient(obz_app)
+    auth = ("test", "test")
+    head = ["ИНН", "Краткое", "Статус", "Адрес", "Телефоны", "Выручка"]
+    row = ["1", "О'КЕЙ", "Действующая компания", "117545, г. Москва", "+7 495 111-22-33", "1 млн руб."]
+    client.post("/obzvon/kc/upload", auth=auth,
+                files={"file": ("b.tsv", _tsv([head, row]), "text/plain")})
+    card = client.get("/obzvon/kc/card", auth=auth).text
+    assert 'confirm("Удалить «"' in card                 # новый безопасный формат
+    assert "confirm('Удалить «О'КЕЙ" not in card         # старый ломающийся — нет
+
+
+def test_csrf_guard_on_destructive_posts(db, tmp_path, monkeypatch):
+    # регресс бага 6: cross-site POST на разрушающие роуты отклоняется
+    monkeypatch.setattr(callbase, "DATA_DIR", str(tmp_path))
+    from app.obzvon import app as obz_app
+    client = TestClient(obz_app)
+    auth = ("test", "test")
+    assert client.post("/obzvon/kc/clear", auth=auth,
+                       headers={"sec-fetch-site": "cross-site"}).status_code == 403
+    assert client.post("/obzvon/kc/clear", auth=auth,
+                       headers={"origin": "http://evil.example"}).status_code == 403
+    # свой origin — проходит (303 редирект)
+    r = client.post("/obzvon/kc/clear", auth=auth,
+                    headers={"sec-fetch-site": "same-origin"}, follow_redirects=False)
+    assert r.status_code == 303
+
+
+def test_delete_backup_has_region_and_maxhit(db, tmp_path, monkeypatch):
+    # регресс бага 8: бэкап удалённой строки не должен терять region/max_hit
+    monkeypatch.setattr(callbase, "DATA_DIR", str(tmp_path))
+    from app.db.models import CallCompany
+    c = CallCompany(base="kc", inn="1", name_short="X", region="Москва",
+                    max_hit=5, address="117545, г. Москва")
+    db.add(c)
+    db.commit()
+    assert callbase.delete_company(db, "kc", c.id)
+    header = (tmp_path / "deleted_kc.tsv").read_text(encoding="utf-8").splitlines()[0]
+    assert "region" in header and "max_hit" in header
+
+
+def test_aggregation_cache_invalidates_on_import(db):
+    # регресс: списки регионов/оборудования кешируются, но обновляются при импорте
+    head = ["ИНН", "Краткое", "Статус", "Адрес", "Выручка"]
+    callbase.import_rows(db, "kc", callbase.parse_upload(
+        "a.tsv", _tsv([head, ["1", "A", "Действующая компания", "117545, г. Москва", "1 млн руб."]])))
+    assert [r for r, _ in callbase.regions(db, "kc")] == ["Москва"]
+    callbase.import_rows(db, "kc", callbase.parse_upload(
+        "b.tsv", _tsv([head, ["2", "B", "Действующая компания", "664043, Иркутская область, г. Иркутск", "1 млн руб."]])))
+    regs = {r for r, _ in callbase.regions(db, "kc")}
+    assert regs == {"Москва", "Иркутская область"}  # кеш сбросился, новый регион виден

@@ -46,14 +46,14 @@
     </label>
     <label>Общий приоритет <small>(балл по всем ОКВЭД × выручка)</small>
       <div class="grid">
-        <input type="number" name="rank_from" value="{{ flt.rank_from|int if flt.rank_from else '' }}" min="0" placeholder="от">
-        <input type="number" name="rank_to" value="{{ flt.rank_to|int if flt.rank_to else '' }}" min="0" placeholder="до">
+        <input type="number" name="rank_from" value="{{ '%g'|format(flt.rank_from) if flt.rank_from else '' }}" min="0" step="any" placeholder="от">
+        <input type="number" name="rank_to" value="{{ '%g'|format(flt.rank_to) if flt.rank_to else '' }}" min="0" step="any" placeholder="до">
       </div>
     </label>
     <label>Выручка, млн ₽
       <div class="grid">
-        <input type="number" name="rev_from" value="{{ flt.rev_from|int if flt.rev_from else '' }}" min="0" placeholder="от">
-        <input type="number" name="rev_to" value="{{ flt.rev_to|int if flt.rev_to else '' }}" min="0" placeholder="до">
+        <input type="number" name="rev_from" value="{{ '%g'|format(flt.rev_from) if flt.rev_from else '' }}" min="0" step="any" placeholder="от">
+        <input type="number" name="rev_to" value="{{ '%g'|format(flt.rev_to) if flt.rev_to else '' }}" min="0" step="any" placeholder="до">
       </div>
     </label>
   </div>

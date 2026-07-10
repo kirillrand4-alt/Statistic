@@ -98,7 +98,7 @@
   <footer>
     <div class="grid">
       <form method="post" action="{{ base_path }}/{{ base }}/delete"
-            onsubmit="return confirm('Удалить «{{ (company.name_short or '')|e }}» из базы и показать следующую?');">
+            onsubmit='return confirm("Удалить «" + {{ (company.name_short or "")|tojson }} + "» из базы и показать следующую?");'>
         <input type="hidden" name="company_id" value="{{ company.id }}">
         <input type="hidden" name="q" value="{{ flt.q }}">
         <input type="hidden" name="region" value="{{ flt.region }}">

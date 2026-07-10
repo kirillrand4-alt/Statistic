@@ -75,8 +75,11 @@ class BasicAuthASGI:
         except (UnicodeDecodeError, binascii.Error, ValueError):
             return False
         expected = self.users.get(login)
-        # compare_digest по паролю; сравнение с "" для неизвестного логина
-        return secrets.compare_digest(pwd, expected or "") and expected is not None
+        # Сравниваем БАЙТЫ: secrets.compare_digest на не-ASCII str кидает TypeError
+        # (кириллический пароль → 500 и никто не войдёт). Проверка None — первой,
+        # чтобы не звать .encode() у неизвестного логина.
+        return expected is not None and secrets.compare_digest(
+            pwd.encode("utf-8"), expected.encode("utf-8"))
 
     async def _deny(self, scope, receive, send, status: int, text: str):
         body = text.encode("utf-8")

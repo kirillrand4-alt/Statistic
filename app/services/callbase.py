@@ -249,13 +249,26 @@ def import_rows(db: Session, base: str, rows: list[dict]) -> tuple[int, int]:
     return added, skipped
 
 
-# Кэш очереди (id в порядке обзвона) на процесс: ключ — (base, фильтры).
-# Любое изменение данных (импорт/удаление/очистка) сбрасывает кэш целиком.
+# Кэши на процесс: очередь (id по фильтрам) и агрегаты для выпадающих списков
+# (регионы/ОКВЭД/оборудование). Списки считаются по всей базе — на большой базе
+# (7000+ компаний) это дорого, поэтому кешируем и пересчитываем только при
+# изменении данных (импорт/удаление/очистка) через _bump_version.
 _queue_cache: dict[tuple, list[int]] = {}
+_agg_cache: dict[tuple, list] = {}
 
 
 def _bump_version() -> None:
     _queue_cache.clear()
+    _agg_cache.clear()
+
+
+def _cached_agg(base: str, kind: str, fn):
+    key = (base, kind)
+    v = _agg_cache.get(key)
+    if v is None:
+        v = fn()
+        _agg_cache[key] = v
+    return v
 
 
 def _has(hay, needle: str) -> bool:
@@ -324,32 +337,38 @@ def _queue_ids(db: Session, base: str, q="", region="", okved="", equipment="",
 
 def regions(db: Session, base: str) -> list[tuple[str, int]]:
     """Регионы базы с количеством компаний (для выпадающего списка), по убыванию."""
-    C = CallCompany
-    rows = db.execute(select(C.region, func.count()).where(C.base == base, C.region != "")
-                      .group_by(C.region).order_by(func.count().desc(), C.region)).all()
-    return [(r, n) for r, n in rows if r]
+    def _q():
+        C = CallCompany
+        rows = db.execute(select(C.region, func.count()).where(C.base == base, C.region != "")
+                          .group_by(C.region).order_by(func.count().desc(), C.region)).all()
+        return [(r, n) for r, n in rows if r]
+    return _cached_agg(base, "regions", _q)
 
 
 def okveds(db: Session, base: str) -> list[tuple[str, int]]:
     """Основные ОКВЭД базы (код с расшифровкой) с количеством, по убыванию."""
-    C = CallCompany
-    rows = db.execute(select(C.okved_main, func.count()).where(C.base == base, C.okved_main != "")
-                      .group_by(C.okved_main).order_by(func.count().desc(), C.okved_main)).all()
-    return [(o, n) for o, n in rows if o]
+    def _q():
+        C = CallCompany
+        rows = db.execute(select(C.okved_main, func.count())
+                          .where(C.base == base, C.okved_main != "")
+                          .group_by(C.okved_main).order_by(func.count().desc(), C.okved_main)).all()
+        return [(o, n) for o, n in rows if o]
+    return _cached_agg(base, "okveds", _q)
 
 
 def equipments(db: Session, base: str) -> list[tuple[str, int]]:
     """Категории оборудования базы (из расчёта: основная + все найденные)
     с количеством компаний, по убыванию."""
-    from collections import Counter
-    C = CallCompany
-    cnt: Counter = Counter()
-    for eq, eq_all in db.execute(
-            select(C.equipment, C.equipment_all).where(C.base == base)).all():
-        cats = set(split_list(eq)) | set(split_list(eq_all))
-        for cat in cats:
-            cnt[cat] += 1
-    return sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))
+    def _q():
+        from collections import Counter
+        C = CallCompany
+        cnt: Counter = Counter()
+        for eq, eq_all in db.execute(
+                select(C.equipment, C.equipment_all).where(C.base == base)).all():
+            for cat in set(split_list(eq)) | set(split_list(eq_all)):
+                cnt[cat] += 1
+        return sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))
+    return _cached_agg(base, "equipments", _q)
 
 
 def ensure_schema(db: Session) -> None:
@@ -402,12 +421,12 @@ def delete_company(db: Session, base: str, company_id: int) -> bool:
     os.makedirs(DATA_DIR, exist_ok=True)
     path = os.path.join(DATA_DIR, f"deleted_{base}.tsv")
     fields = ["inn", "ogrn", "kpp", "okpo", "name_short", "name_full", "status",
-              "reg_date", "address", "opf", "capital", "director", "director_inn",
-              "founders", "okved_main", "okved_all", "phones", "emails", "sites",
-              "site_phones", "site_emails",
-              "fin_year", "revenue", "profit", "equity", "staff", "priority",
-              "equipment", "equipment_all", "okved_hits", "calc_comment",
-              "revenue_num", "rank_metric"]
+              "reg_date", "address", "region", "opf", "capital", "director",
+              "director_inn", "founders", "okved_main", "okved_all",
+              "phones", "emails", "sites", "site_phones", "site_emails",
+              "fin_year", "revenue", "profit", "equity", "staff",
+              "priority", "max_hit", "equipment", "equipment_all", "okved_hits",
+              "calc_comment", "revenue_num", "rank_metric"]
     new = not os.path.exists(path)
     with open(path, "a", encoding="utf-8", newline="") as fh:
         w = csv.writer(fh, delimiter="\t")
