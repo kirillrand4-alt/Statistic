@@ -8,6 +8,23 @@
   <title>{% block title %}Обзвон{% endblock %}</title>
   <link rel="stylesheet" href="{{ base_path }}/static/vendor/pico.min.css">
   <link rel="stylesheet" href="{{ base_path }}/static/css/app.css">
+  <style>
+    /* раскрывашки карточки («Все ОКВЭД», «Приоритет как посчитан») — заметный
+       кликабельный «золотой» чип со стрелкой, поворачивающейся при открытии */
+    #card details > summary {
+      cursor: pointer; width: fit-content; list-style: none; user-select: none;
+      display: inline-flex; align-items: center; gap: .4rem;
+      margin: .3rem 0; padding: .2rem .6rem;
+      color: #8a6a1c; font-weight: 600;
+      border: 1px solid rgba(184,144,47,.45); border-radius: .5rem;
+      background: rgba(184,144,47,.10); transition: background .15s;
+    }
+    #card details > summary::-webkit-details-marker { display: none; }
+    #card details > summary::before { content: "▸"; transition: transform .15s; }
+    #card details[open] > summary::before { transform: rotate(90deg); }
+    #card details > summary:hover { background: rgba(184,144,47,.20); }
+    #card details[open] > summary { background: rgba(184,144,47,.16); }
+  </style>
 </head>
 <body>
   <main class="container">
