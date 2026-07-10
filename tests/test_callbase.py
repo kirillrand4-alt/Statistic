@@ -94,6 +94,9 @@ def test_okveds_sorted_by_code_number(db):
     codes = [o.split()[0] for o, _n in callbase.okveds(db, "kc")]
     assert codes == ["6.10", "24.1", "24.10", "25.11"]
     assert callbase.okved_sort_key("24.10.3") == [24, 10, 3]
+
+
+def test_region_case_merged(db):
     # «москва» и «Москва» — один регион (регистр нормализуется при импорте)
     head = ["ИНН", "Краткое", "Статус", "Адрес", "Телефоны", "Выручка"]
     rows = callbase.parse_upload("b.tsv", _tsv([
