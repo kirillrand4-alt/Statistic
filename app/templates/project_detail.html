@@ -203,11 +203,15 @@
     type: 'line',
     data: {labels: pd.map(d => d.date), datasets: [
       {label: 'Клики', data: pd.map(d => d.clicks), borderColor: '#1095c1', yAxisID: 'y', tension: 0},
-      {label: 'Показы', data: pd.map(d => d.impressions), borderColor: '#d93526', yAxisID: 'y1', tension: 0}
+      {label: 'Показы', data: pd.map(d => d.impressions), borderColor: '#d93526', yAxisID: 'y1', tension: 0},
+      {label: 'Ср. позиция', data: pd.map(d => d.position || null), borderColor: '#7a5cff',
+       yAxisID: 'yPos', tension: 0, borderWidth: 2, borderDash: [3, 2], spanGaps: true}
     ]},
     options: {interaction: {mode: 'index', intersect: false},
               scales: {y: {position: 'left', title: {display: true, text: 'Клики'}},
-                       y1: {position: 'right', grid: {drawOnChartArea: false}, title: {display: true, text: 'Показы'}}}}
+                       y1: {position: 'right', grid: {drawOnChartArea: false}, title: {display: true, text: 'Показы'}},
+                       yPos: {position: 'right', reverse: true, grid: {drawOnChartArea: false},
+                              title: {display: true, text: 'Позиция'}, suggestedMin: 1}}}
   });
 </script>
 {% endif %}
