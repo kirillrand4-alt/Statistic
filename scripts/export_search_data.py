@@ -46,13 +46,23 @@ def main() -> None:
     ap.add_argument("--days", type=int, default=30, help="сколько последних дней (по умолч. 30)")
     ap.add_argument("--start", help="начало периода ГГГГ-ММ-ДД (перекрывает --days)")
     ap.add_argument("--end", help="конец периода ГГГГ-ММ-ДД (по умолч. вчера)")
+    ap.add_argument("--end-of-week", dest="end_of_week", action="store_true",
+                    help="конец периода = воскресенье прошедшей недели (конец предыдущей "
+                         "полной недели). Для ровно 4 недель добавь --days 28")
     ap.add_argument("--levels", default="query,page,device,totals",
                     help="уровни через запятую: query,page,device,totals")
     ap.add_argument("--per-host", dest="per_host", action="store_true",
                     help="отдельный файл на каждый хост (иначе один файл на уровень со всеми хостами)")
     a = ap.parse_args()
 
-    end = datetime.date.fromisoformat(a.end) if a.end else datetime.date.today() - datetime.timedelta(days=1)
+    today = datetime.date.today()
+    if a.end:
+        end = datetime.date.fromisoformat(a.end)
+    elif a.end_of_week:
+        # воскресенье прошедшей недели (Пн=0…Вс=6): today - (weekday+1)
+        end = today - datetime.timedelta(days=today.weekday() + 1)
+    else:
+        end = today - datetime.timedelta(days=1)
     start = datetime.date.fromisoformat(a.start) if a.start else end - datetime.timedelta(days=a.days - 1)
     dr = DateRange(start=start, end=end)
     levels = [x.strip() for x in a.levels.split(",") if x.strip() in LEVELS]
