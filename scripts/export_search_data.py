@@ -53,6 +53,9 @@ def main() -> None:
                     help="уровни через запятую: query,page,device,totals")
     ap.add_argument("--per-host", dest="per_host", action="store_true",
                     help="отдельный файл на каждый хост (иначе один файл на уровень со всеми хостами)")
+    ap.add_argument("--daily", action="store_true",
+                    help="строки по дням (url×дата, запрос×url×дата, url×устройство×дата) "
+                         "вместо агрегатов за период — файлы кратно больше")
     a = ap.parse_args()
 
     today = datetime.date.today()
@@ -70,14 +73,14 @@ def main() -> None:
         sys.exit(f"Нет валидных уровней. Доступны: {', '.join(LEVELS)}")
     if not os.path.isdir(a.out):  # папку не создаём — она должна существовать
         sys.exit(f"Папка не найдена: {a.out}")
-    tag = f"{start.isoformat()}_{end.isoformat()}"
+    tag = f"{start.isoformat()}_{end.isoformat()}" + ("_daily" if a.daily else "")
 
     init_db()
     db = SessionLocal()
     try:
         print(f"Период {start}…{end}, уровни: {', '.join(levels)}\nПапка: {a.out}\n")
         for level in levels:
-            df = _prettify(bulk_dataframe(db, dr, level))
+            df = _prettify(bulk_dataframe(db, dr, level, daily=a.daily))
             if df is None or df.empty:
                 print(f"  {level:7} — данных нет, пропуск")
                 continue

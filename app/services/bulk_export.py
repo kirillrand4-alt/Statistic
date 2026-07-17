@@ -36,7 +36,9 @@ def overall_range(db: Session) -> DateRange:
     return DateRange(start=lo, end=hi)
 
 
-def _site_frame(db, site, dr: DateRange, level: str) -> pd.DataFrame:
+def _site_frame(db, site, dr: DateRange, level: str, daily: bool = False) -> pd.DataFrame:
+    """``daily=True`` — строки по дням (url×date, url×query×date, url×device×date)
+    вместо агрегатов за период; totals и так суточные."""
     if level == "totals":
         df = load_site_totals_df(db, site.id, dr)
         if df.empty:
@@ -44,20 +46,21 @@ def _site_frame(db, site, dr: DateRange, level: str) -> pd.DataFrame:
         df = df.sort_values("date")
         df["ctr"] = (df["clicks"] / df["impressions"].replace(0, pd.NA)).fillna(0.0)
         return df[["date", "clicks", "impressions", "ctr", "position"]]
+    day = ["date"] if daily else []
     if level == "page":
-        return agg_metrics(load_page_metrics_df(db, site.id, dr), ["url"])
+        return agg_metrics(load_page_metrics_df(db, site.id, dr), ["url"] + day)
     if level == "query":
-        return agg_metrics(load_query_metrics_df(db, site.id, dr), ["url", "query"])
+        return agg_metrics(load_query_metrics_df(db, site.id, dr), ["url", "query"] + day)
     if level == "device":  # страница × устройство (desktop/mobile)
-        return agg_metrics(load_device_metrics_df(db, site.id, dr), ["url", "device"])
+        return agg_metrics(load_device_metrics_df(db, site.id, dr), ["url", "device"] + day)
     return pd.DataFrame()
 
 
-def bulk_dataframe(db, dr: DateRange, level: str) -> pd.DataFrame:
+def bulk_dataframe(db, dr: DateRange, level: str, daily: bool = False) -> pd.DataFrame:
     sites = db.execute(select(Site).where(Site.enabled.is_(True)).order_by(Site.id)).scalars().all()
     frames = []
     for s in sites:
-        df = _site_frame(db, s, dr, level)
+        df = _site_frame(db, s, dr, level, daily=daily)
         if df is None or df.empty:
             continue
         df = df.copy()
