@@ -50,25 +50,32 @@ def _sites(db):
 
 
 # ---------- уровни ----------
-def lvl_visits(db, d1, d2, sites) -> pd.DataFrame:
+def _day(d, daily):
+    return {"Дата": d.isoformat()} if daily else {}
+
+
+def lvl_visits(db, d1, d2, sites, daily=False) -> pd.DataFrame:
+    gcols = [Visit.site_id, Visit.start_url] + ([Visit.date] if daily else []) + [Visit.traffic_source]
     rows = db.execute(
-        select(Visit.site_id, Visit.start_url, Visit.traffic_source,
-               func.count().label("v"), func.sum(Visit.duration).label("dur"),
+        select(*gcols, func.count().label("v"), func.sum(Visit.duration).label("dur"),
                func.sum(Visit.bounce).label("bnc"))
         .where(Visit.date >= d1, Visit.date <= d2, Visit.start_url.isnot(None))
-        .group_by(Visit.site_id, Visit.start_url, Visit.traffic_source)).all()
+        .group_by(*gcols)).all()
     acc: dict = {}
-    for sid, url, ts, v, dur, bnc in rows:
-        a = acc.setdefault((sid, url), {"v": 0, "dur": 0, "bnc": 0,
-                                        "Поиск": 0, "Реклама": 0, "Прямые": 0, "Прочее": 0})
+    for r in rows:
+        sid, url = r[0], r[1]
+        d = r[2] if daily else None
+        ts, v, dur, bnc = r[-4], r[-3], r[-2], r[-1]
+        a = acc.setdefault((sid, url, d), {"v": 0, "dur": 0, "bnc": 0,
+                                           "Поиск": 0, "Реклама": 0, "Прямые": 0, "Прочее": 0})
         a["v"] += v
         a["dur"] += int(dur or 0)
         a["bnc"] += int(bnc or 0)
         a[_channel(ts)] += v
     out = []
-    for (sid, url), a in acc.items():
+    for (sid, url, d), a in acc.items():
         v = a["v"]
-        out.append({"Сайт": sites.get(sid, sid), "URL входа": url, "Визиты": v,
+        out.append({"Сайт": sites.get(sid, sid), "URL входа": url, **_day(d, daily), "Визиты": v,
                     "Ср. время (сек)": round(a["dur"] / v, 1) if v else 0,
                     "Отказы %": round(a["bnc"] / v * 100, 1) if v else 0,
                     "Поиск": a["Поиск"], "Реклама": a["Реклама"],
@@ -77,69 +84,85 @@ def lvl_visits(db, d1, d2, sites) -> pd.DataFrame:
     return df.sort_values("Визиты", ascending=False) if not df.empty else df
 
 
-def lvl_goals(db, d1, d2, sites) -> pd.DataFrame:
+def lvl_goals(db, d1, d2, sites, daily=False) -> pd.DataFrame:
     rows = db.execute(
-        select(Visit.site_id, Visit.start_url, Visit.extra).where(
+        select(Visit.site_id, Visit.start_url, Visit.date, Visit.extra).where(
             Visit.date >= d1, Visit.date <= d2, Visit.start_url.isnot(None),
             Visit.extra.isnot(None), Visit.extra.like("%goalsID%"))).all()
-    names = goal_names(db, list({sid for sid, _u, _e in rows})) if rows else {}
+    names = goal_names(db, list({r[0] for r in rows})) if rows else {}
     acc: dict = {}
-    for sid, url, extra in rows:
+    for sid, url, d, extra in rows:
+        key_d = d if daily else None
         for g in parse_goal_ids(extra):
-            acc[(sid, url, g)] = acc.get((sid, url, g), 0) + 1
-    out = [{"Сайт": sites.get(sid, sid), "URL входа": url, "ID цели": g,
+            acc[(sid, url, key_d, g)] = acc.get((sid, url, key_d, g), 0) + 1
+    out = [{"Сайт": sites.get(sid, sid), "URL входа": url, **_day(d, daily), "ID цели": g,
             "Название цели": names.get(g, f"Цель {g}"), "Достижений": c}
-           for (sid, url, g), c in acc.items()]
+           for (sid, url, d, g), c in acc.items()]
     df = pd.DataFrame(out)
     return df.sort_values("Достижений", ascending=False) if not df.empty else df
 
 
-def lvl_index(db, d1, d2, sites) -> pd.DataFrame:
-    # последний снимок индекса по каждому сайту
-    latest = dict(db.execute(select(IndexedUrlSnapshot.site_id,
-                                     func.max(IndexedUrlSnapshot.captured_on))
-                             .group_by(IndexedUrlSnapshot.site_id)).all())
-    out = []
-    for sid, cap in latest.items():
-        for u, title in db.execute(
-                select(IndexedUrlSnapshot.url, IndexedUrlSnapshot.title)
-                .where(IndexedUrlSnapshot.site_id == sid,
-                       IndexedUrlSnapshot.captured_on == cap)).all():
-            out.append({"Сайт": sites.get(sid, sid), "URL": u,
-                        "Заголовок": title or "", "Дата снимка": cap.isoformat()})
+def lvl_index(db, d1, d2, sites, daily=False) -> pd.DataFrame:
+    # по умолчанию — последний снимок по сайту; --daily = все снимки в периоде
+    if daily:
+        rows = db.execute(select(IndexedUrlSnapshot.site_id, IndexedUrlSnapshot.captured_on,
+                                 IndexedUrlSnapshot.url, IndexedUrlSnapshot.title)
+                          .where(IndexedUrlSnapshot.captured_on >= d1,
+                                 IndexedUrlSnapshot.captured_on <= d2)).all()
+    else:
+        latest = dict(db.execute(select(IndexedUrlSnapshot.site_id,
+                                        func.max(IndexedUrlSnapshot.captured_on))
+                                 .group_by(IndexedUrlSnapshot.site_id)).all())
+        rows = []
+        for sid, cap in latest.items():
+            for u, t in db.execute(select(IndexedUrlSnapshot.url, IndexedUrlSnapshot.title)
+                                   .where(IndexedUrlSnapshot.site_id == sid,
+                                          IndexedUrlSnapshot.captured_on == cap)).all():
+                rows.append((sid, cap, u, t))
+    out = [{"Сайт": sites.get(sid, sid), "URL": u, "Заголовок": t or "",
+            "Дата снимка": cap.isoformat()} for sid, cap, u, t in rows]
     return pd.DataFrame(out)
 
 
-def lvl_notfound(db, d1, d2, sites, markers) -> pd.DataFrame:
+def lvl_notfound(db, d1, d2, sites, markers, daily=False) -> pd.DataFrame:
     cond = or_(*[Hit.title.ilike(f"%{m}%") for m in markers])
-    rows = db.execute(
-        select(Hit.site_id, Hit.url, Hit.traffic_source, func.count().label("n"))
-        .where(Hit.date >= d1, Hit.date <= d2, Hit.title.isnot(None), cond)
-        .group_by(Hit.site_id, Hit.url, Hit.traffic_source)).all()
+    gcols = [Hit.site_id, Hit.url] + ([Hit.date] if daily else []) + [Hit.traffic_source]
+    rows = db.execute(select(*gcols, func.count().label("n"))
+                      .where(Hit.date >= d1, Hit.date <= d2, Hit.title.isnot(None), cond)
+                      .group_by(*gcols)).all()
     acc: dict = {}
-    for sid, url, ts, n in rows:
-        a = acc.setdefault((sid, url), {"n": 0, "Поиск": 0, "Реклама": 0, "Прямые": 0, "Прочее": 0})
+    for r in rows:
+        sid, url = r[0], r[1]
+        d = r[2] if daily else None
+        ts, n = r[-2], r[-1]
+        a = acc.setdefault((sid, url, d), {"n": 0, "Поиск": 0, "Реклама": 0, "Прямые": 0, "Прочее": 0})
         a["n"] += n
         a[_channel(ts)] += n
-    out = [{"Сайт": sites.get(sid, sid), "URL (битый)": url, "Просмотры": a["n"],
+    out = [{"Сайт": sites.get(sid, sid), "URL (битый)": url, **_day(d, daily), "Просмотры": a["n"],
             "Поиск": a["Поиск"], "Реклама": a["Реклама"],
             "Прямые": a["Прямые"], "Прочее": a["Прочее"]}
-           for (sid, url), a in acc.items()]
+           for (sid, url, d), a in acc.items()]
     df = pd.DataFrame(out)
     return df.sort_values("Просмотры", ascending=False) if not df.empty else df
 
 
-def lvl_serp(db, d1, d2, sites) -> pd.DataFrame:
-    # последний срез в периоде (иначе — самый свежий вообще)
-    cap = db.execute(select(func.max(SerpResult.captured_on))
-                     .where(SerpResult.captured_on <= d2)).scalar()
-    if cap is None:
-        return pd.DataFrame()
-    rows = db.execute(select(SerpResult).where(SerpResult.captured_on == cap)
-                      .order_by(SerpResult.keyword, SerpResult.se, SerpResult.position)).scalars().all()
+def lvl_serp(db, d1, d2, sites, daily=False) -> pd.DataFrame:
+    # по умолчанию — последний срез в периоде; --daily = все срезы периода
+    if daily:
+        rows = db.execute(select(SerpResult).where(SerpResult.captured_on >= d1,
+                                                    SerpResult.captured_on <= d2)
+                          .order_by(SerpResult.captured_on, SerpResult.keyword,
+                                    SerpResult.se, SerpResult.position)).scalars().all()
+    else:
+        cap = db.execute(select(func.max(SerpResult.captured_on))
+                         .where(SerpResult.captured_on <= d2)).scalar()
+        if cap is None:
+            return pd.DataFrame()
+        rows = db.execute(select(SerpResult).where(SerpResult.captured_on == cap)
+                          .order_by(SerpResult.keyword, SerpResult.se, SerpResult.position)).scalars().all()
     out = [{"Запрос": r.keyword, "ПС": SE_LABELS.get(r.se, r.se), "Регион": r.region,
             "Позиция": r.position, "URL": r.url or "", "Домен": r.url_domain or "",
-            "Заголовок": r.title or "", "Дата": cap.isoformat()} for r in rows]
+            "Заголовок": r.title or "", "Дата": r.captured_on.isoformat()} for r in rows]
     return pd.DataFrame(out)
 
 
@@ -153,6 +176,9 @@ def main() -> None:
     ap.add_argument("--levels", default="visits,goals,index,notfound,serp")
     ap.add_argument("--per-host", dest="per_host", action="store_true")
     ap.add_argument("--markers", default=None, help="маркеры заголовка 404 через запятую")
+    ap.add_argument("--daily", action="store_true",
+                    help="по дням (визиты/цели/404 с колонкой «Дата»; индекс/SERP — все "
+                         "срезы периода вместо последнего) — файлы кратно больше")
     a = ap.parse_args()
 
     today = datetime.date.today()
@@ -169,7 +195,7 @@ def main() -> None:
     if not os.path.isdir(a.out):
         sys.exit(f"Папка не найдена: {a.out}")
     markers = parse_markers(a.markers) if a.markers else list(DEFAULT_MARKERS)
-    tag = f"{start.isoformat()}_{end.isoformat()}"
+    tag = f"{start.isoformat()}_{end.isoformat()}" + ("_daily" if a.daily else "")
 
     init_db()
     db = SessionLocal()
@@ -178,15 +204,15 @@ def main() -> None:
         print(f"Период {start}…{end}, уровни: {', '.join(levels)}\nПапка: {a.out}\n")
         for level in levels:
             if level == "visits":
-                df = lvl_visits(db, start, end, sites)
+                df = lvl_visits(db, start, end, sites, a.daily)
             elif level == "goals":
-                df = lvl_goals(db, start, end, sites)
+                df = lvl_goals(db, start, end, sites, a.daily)
             elif level == "index":
-                df = lvl_index(db, start, end, sites)
+                df = lvl_index(db, start, end, sites, a.daily)
             elif level == "notfound":
-                df = lvl_notfound(db, start, end, sites, markers)
+                df = lvl_notfound(db, start, end, sites, markers, a.daily)
             else:
-                df = lvl_serp(db, start, end, sites)
+                df = lvl_serp(db, start, end, sites, a.daily)
             if df is None or df.empty:
                 print(f"  {level:8} — данных нет, пропуск")
                 continue
