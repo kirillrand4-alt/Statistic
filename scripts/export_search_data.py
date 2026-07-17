@@ -58,7 +58,8 @@ def main() -> None:
     levels = [x.strip() for x in a.levels.split(",") if x.strip() in LEVELS]
     if not levels:
         sys.exit(f"Нет валидных уровней. Доступны: {', '.join(LEVELS)}")
-    os.makedirs(a.out, exist_ok=True)
+    if not os.path.isdir(a.out):  # папку не создаём — она должна существовать
+        sys.exit(f"Папка не найдена: {a.out}")
     tag = f"{start.isoformat()}_{end.isoformat()}"
 
     init_db()
