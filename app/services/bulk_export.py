@@ -13,13 +13,14 @@ from app.services.export import _prettify
 from app.services.exporting import to_download
 from app.services.loaders import (
     agg_metrics,
+    load_device_metrics_df,
     load_page_metrics_df,
     load_query_metrics_df,
     load_site_totals_df,
 )
 
 SRC_LABELS = {"gsc": "Google", "yandex_webmaster": "Яндекс", "yandex_metrika": "Метрика"}
-LEVELS = ("totals", "page", "query")
+LEVELS = ("totals", "page", "query", "device")
 
 
 def overall_range(db: Session) -> DateRange:
@@ -47,6 +48,8 @@ def _site_frame(db, site, dr: DateRange, level: str) -> pd.DataFrame:
         return agg_metrics(load_page_metrics_df(db, site.id, dr), ["url"])
     if level == "query":
         return agg_metrics(load_query_metrics_df(db, site.id, dr), ["url", "query"])
+    if level == "device":  # страница × устройство (desktop/mobile)
+        return agg_metrics(load_device_metrics_df(db, site.id, dr), ["url", "device"])
     return pd.DataFrame()
 
 
