@@ -1,108 +1,105 @@
-# Рабочая база «Центробежные»
+# Объединённая база «Центробежные»
 
-## Архитектура
+## Назначение
 
-Интерфейс `/obzvon/centro` объединяет строки `centro1` и `centro2` по
-нормализованному ИНН. Источник `centrifugal.db` остаётся заменяемым снимком.
-Рабочие данные продажников хранятся отдельно в `data/centro_sales.db`, поэтому
-обновление исходной базы не удаляет назначения, результаты звонков и
-комментарии.
+Приложение `/obzvon/centro` — персональная очередь двух продавцов по предприятиям с центробежным компрессорным оборудованием.
 
-Старые адреса `/obzvon/centro1` и `/obzvon/centro2` перенаправляются в единую
-очередь. Базы `kc` и `meyer` продолжают использовать HTTP Basic. Centro имеет
-собственных пользователей `admin`/`sales` и подписанную HttpOnly cookie
-(SameSite=Lax, Secure при HTTPS, срок восемь часов).
+Данные разделены на два файла:
+
+- `centrifugal.db` — заменяемый снимок исходных данных, собранный из CSV;
+- `centro_sales.db` — пользователи, назначения, результаты звонков, комментарии и журнал действий.
+
+Замена исходного снимка не удаляет работу продавцов.
+
+## CSV — источник истины
+
+Снимок собирается из трёх файлов:
+
+1. `SVOD375OBEDINENNYY.csv` — одна сводная строка на предприятие;
+2. `POLNYY375vsyainformaciya.csv` — подробные факты, новости, люди, номера и карточки;
+3. `BAZA-CENTROBEZHNIKI-OBSHCHAYA.csv` — дополнительная база людей и контактов.
+
+Сборщик записывает в `import_info` имена файлов, SHA-256, время сборки и количество загруженных сущностей. Администратор видит эти сведения внизу карточки и может проверить, какая именно база подключена.
 
 ## Что хранится в `centro_sales.db`
 
 - `users` — логин, bcrypt-хеш, роль и активность;
-- `company_assignment` — постоянное назначение компании, score и признаки
-  качества контактов;
+- `company_assignment` — постоянное назначение компании, score и признаки качества контактов;
 - `company_state` — результат звонка, последний и следующий контакт;
 - `company_comment` — комментарии до 5000 символов с авторством;
 - `activity_log` — журнал сохранений, правок и переназначений.
 
-Схема создаётся и обновляется идемпотентно. При переходе со старой версией
-недостающие поля распределения добавляются автоматически.
+## Сборка тестовой базы
+
+```powershell
+Set-Location C:\seostat-centro-review
+
+C:\seostat\.venv\Scripts\python.exe -m app.tools.build_centro_db `
+  --summary "C:\seostat-centro-review\input\SVOD375OBEDINENNYY.csv" `
+  --details "C:\seostat-centro-review\input\POLNYY375vsyainformaciya.csv" `
+  --contacts "C:\seostat-centro-review\input\BAZA-CENTROBEZHNIKI-OBSHCHAYA.csv" `
+  --output "C:\seostat-centro-review\data\centrifugal-test.db"
+```
+
+Ожидаемые показатели для версии от 31.07.2026:
+
+- 375 компаний;
+- 25 861 факт;
+- 28 новостей;
+- 370 строк людей;
+- контакты формируются из сводной базы, полной детализации и дополнительного CSV.
+
+## Переменные тестового запуска
+
+```powershell
+$env:PYTHONPATH = "C:\seostat-centro-review"
+$env:CENTRIFUGAL_DB = "C:\seostat-centro-review\data\centrifugal-test.db"
+$env:CENTRO_SALES_DB = "C:\seostat-centro-review\data\centro_sales-test.db"
+$env:CENTRO_SESSION_SECRET = C:\seostat\.venv\Scripts\python.exe -c `
+  "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+## Проверка происхождения базы
+
+```powershell
+C:\seostat\.venv\Scripts\python.exe -c `
+  "from app.services import centro_catalog as c; print(c.database_info())"
+```
+
+В выводе должны быть `summary_file`, `details_file`, `contacts_file`, их SHA-256 и `source_kind: csv-import-v2`.
+
+## Интерфейс
+
+В карточке показываются:
+
+- контакты с установленными ролями — сразу;
+- контакты без роли или без установленного владельца — в свёрнутом блоке;
+- люди и технические ЛПР;
+- реквизиты, руководство, деньги и ОКВЭД;
+- оборудование по ОКВЭД;
+- причина звонка;
+- новости с датой и ссылкой;
+- подробные факты по оборудованию: модель, тип, среда, состояние, дата, доказательство, цитата и первоисточник;
+- источники проверки компании;
+- результаты звонков, комментарии и личная очередь.
+
+Расширенные фильтры прокручиваются и включают регион, ОКВЭД, статус ЕГРЮЛ, тип оборудования, модель/марку, рабочую среду, состояние, выручку, приоритет, наличие телефонов, закупщиков, технических ЛПР, новостей и моделей.
 
 ## Распределение
 
-Новые ИНН распределяются только между активными пользователями роли `sales`.
-Уже назначенные компании не перераспределяются автоматически. Алгоритм
-учитывает количество компаний, сумму score, наличие телефона, закупщика,
-технического ЛПР и новостного повода. Ручное переназначение доступно admin;
-текущий результат звонка переносится новому ответственному.
+Новые ИНН распределяются только между активными пользователями роли `sales`. Уже назначенные компании не перераспределяются автоматически. Ручное переназначение доступно администратору; текущий результат звонка сохраняется.
 
-## Очередь и фильтры
-
-После сохранения обработанная компания уходит ниже новых компаний, поэтому
-кнопка «Сохранить и следующая» открывает следующую приоритетную карточку.
-Доступны:
-
-- полнотекстовый поиск, регион и ответственный сотрудник;
-- результат звонка;
-- наличие телефона, закупщика, технического ЛПР и новостного повода;
-- ОКВЭД, тип оборудования, марка и статус ЕГРЮЛ;
-- диапазон выручки и минимальный приоритет.
-
-Фильтры сохраняются при переходе между карточками и страницами очереди.
-
-## Первичная настройка Windows-сервера
-
-Установить зависимости:
+## Проверки перед запуском
 
 ```powershell
-C:\seostat\.venv\Scripts\python.exe -m pip install -r C:\seostat\requirements.txt
+C:\seostat\.venv\Scripts\python.exe -m compileall `
+  C:\seostat-centro-review\app `
+  C:\seostat-centro-review\tests
+
+C:\seostat\.venv\Scripts\python.exe -m pytest `
+  C:\seostat-centro-review\tests\test_centro_sales.py `
+  C:\seostat-centro-review\tests\test_centro_import.py `
+  -q
 ```
 
-Добавить в `C:\seostat\.env`:
-
-```dotenv
-CENTRIFUGAL_DB=C:\seostat\data\centrifugal.db
-CENTRO_SALES_DB=C:\seostat\data\centro_sales.db
-CENTRO_SESSION_SECRET=<случайная строка минимум 32 байта>
-```
-
-Создать секрет локально:
-
-```powershell
-C:\seostat\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(48))"
-```
-
-Без корректного `CENTRO_SESSION_SECRET` вход блокируется ответом 503 — это
-намеренный fail-closed режим.
-
-Создать пользователей; пароль вводится через `getpass` и не попадает в историю
-PowerShell:
-
-```powershell
-cd C:\seostat
-C:\seostat\.venv\Scripts\python.exe -m app.tools.centro_users create --username admin --role admin
-C:\seostat\.venv\Scripts\python.exe -m app.tools.centro_users create --username user1 --role sales
-C:\seostat\.venv\Scripts\python.exe -m app.tools.centro_users create --username user2 --role sales
-```
-
-Смена пароля:
-
-```powershell
-C:\seostat\.venv\Scripts\python.exe -m app.tools.centro_users set-password --username user1
-```
-
-## Проверка перед развёртыванием
-
-В отдельной копии проекта:
-
-```powershell
-cd C:\seostat-centro-review
-C:\seostat\.venv\Scripts\python.exe -m pip install -r requirements.txt
-C:\seostat\.venv\Scripts\python.exe -m pytest tests\test_centro_sales.py -q
-C:\seostat\.venv\Scripts\python.exe -m compileall app
-```
-
-После успешной проверки рабочий проект обновляется отдельно. Служба остаётся:
-
-```text
-python -m uvicorn app.obzvon:app --host 127.0.0.1 --port 8012
-```
-
-Caddy менять не требуется.
+После этого приложение запускается на отдельном тестовом порту, например `8014`. Производственный сервис и файл `C:\seostat\data\centrifugal.db` до отдельного согласования не менять.
