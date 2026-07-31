@@ -1,9 +1,8 @@
-"""Persistent, user-scoped working state for the centrifugal sales queue.
+"""Persistent, user-scoped working state for the unified Centro sales queue.
 
-The source ``centrifugal.db`` remains read-only.  This module owns the small
-``centro_sales.db`` database and deliberately stores assignments, call state,
-comments and audit events separately so rebuilding the source cannot erase
-sales work.
+The source ``centrifugal.db`` is treated as a replaceable read-only snapshot.
+Assignments, call state, comments and the audit log live in a separate SQLite
+file so replacing the source cannot erase sales work.
 """
 from __future__ import annotations
 
@@ -13,9 +12,9 @@ import os
 import random
 import re
 import sqlite3
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
 import bcrypt
 
@@ -23,8 +22,29 @@ ROOT = Path(__file__).resolve().parents[2]
 SALES_DB_ENV = "CENTRO_SALES_DB"
 DEFAULT_SALES_DB = ROOT / "data" / "centro_sales.db"
 ROLES = {"admin", "sales"}
-CALL_RESULTS = {"new", "no_answer", "callback", "contacted", "interested",
-                "proposal", "not_target", "wrong_number", "completed"}
+CALL_RESULTS = {
+    "new",
+    "no_answer",
+    "callback",
+    "contacted",
+    "interested",
+    "proposal",
+    "not_target",
+    "wrong_number",
+    "completed",
+}
+
+CALL_RESULT_LABELS = {
+    "new": "Новый",
+    "no_answer": "Нет ответа",
+    "callback": "Перезвонить",
+    "contacted": "Связались",
+    "interested": "Заинтересован",
+    "proposal": "Предложение отправлено",
+    "not_target": "Не целевой",
+    "wrong_number": "Неверный номер",
+    "completed": "Завершено",
+}
 
 
 def utcnow() -> str:
@@ -32,6 +52,7 @@ def utcnow() -> str:
 
 
 def normalize_inn(value: object) -> str:
+    """Return a digits-only INN key without allowing unbounded garbage."""
     return re.sub(r"\D", "", str(value or ""))[:12]
 
 
@@ -45,8 +66,9 @@ def normalize_phone(value: object) -> str:
 
 
 def split_values(value: object) -> list[str]:
-    seen, result = set(), []
-    for item in re.split(r"[|\r\n]+", str(value or "")):
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in re.split(r"[|;\r\n]+", str(value or "")):
         item = item.strip()
         key = item.casefold()
         if item and key not in seen:
@@ -71,178 +93,435 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
- id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE,
- password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','sales')),
+ id INTEGER PRIMARY KEY,
+ username TEXT NOT NULL UNIQUE,
+ password_hash TEXT NOT NULL,
+ role TEXT NOT NULL CHECK(role IN ('admin','sales')),
  is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+ created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS company_assignment (
- inn TEXT PRIMARY KEY, username TEXT NOT NULL,
- assignment_score REAL NOT NULL DEFAULT 0, assigned_at TEXT NOT NULL,
- source_version TEXT NOT NULL DEFAULT '', assigned_by TEXT NOT NULL DEFAULT 'system',
+ inn TEXT PRIMARY KEY,
+ username TEXT NOT NULL,
+ assignment_score REAL NOT NULL DEFAULT 0,
+ has_phone INTEGER NOT NULL DEFAULT 0,
+ has_purchaser INTEGER NOT NULL DEFAULT 0,
+ has_tech INTEGER NOT NULL DEFAULT 0,
+ has_signal INTEGER NOT NULL DEFAULT 0,
+ assigned_at TEXT NOT NULL,
+ source_version TEXT NOT NULL DEFAULT '',
+ assigned_by TEXT NOT NULL DEFAULT 'system',
  FOREIGN KEY(username) REFERENCES users(username) ON UPDATE CASCADE
 );
 CREATE TABLE IF NOT EXISTS company_state (
- inn TEXT NOT NULL, username TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'new',
- last_contact_at TEXT, next_contact_at TEXT, call_result TEXT NOT NULL DEFAULT 'new',
- updated_at TEXT NOT NULL, PRIMARY KEY(inn, username),
+ inn TEXT NOT NULL,
+ username TEXT NOT NULL,
+ status TEXT NOT NULL DEFAULT 'new',
+ last_contact_at TEXT,
+ next_contact_at TEXT,
+ call_result TEXT NOT NULL DEFAULT 'new',
+ updated_at TEXT NOT NULL,
+ PRIMARY KEY(inn, username),
  FOREIGN KEY(username) REFERENCES users(username) ON UPDATE CASCADE
 );
 CREATE TABLE IF NOT EXISTS company_comment (
- id INTEGER PRIMARY KEY, inn TEXT NOT NULL, username TEXT NOT NULL,
+ id INTEGER PRIMARY KEY,
+ inn TEXT NOT NULL,
+ username TEXT NOT NULL,
  body TEXT NOT NULL CHECK(length(body) BETWEEN 1 AND 5000),
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL,
  FOREIGN KEY(username) REFERENCES users(username) ON UPDATE CASCADE
 );
 CREATE TABLE IF NOT EXISTS activity_log (
- id INTEGER PRIMARY KEY, inn TEXT, username TEXT NOT NULL, action TEXT NOT NULL,
- payload_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+ id INTEGER PRIMARY KEY,
+ inn TEXT,
+ username TEXT NOT NULL,
+ action TEXT NOT NULL,
+ payload_json TEXT NOT NULL DEFAULT '{}',
+ created_at TEXT NOT NULL,
  FOREIGN KEY(username) REFERENCES users(username) ON UPDATE CASCADE
 );
-CREATE INDEX IF NOT EXISTS ix_assignment_username ON company_assignment(username, assignment_score DESC);
-CREATE INDEX IF NOT EXISTS ix_state_user_status ON company_state(username,status);
-CREATE INDEX IF NOT EXISTS ix_state_next ON company_state(username,next_contact_at);
-CREATE INDEX IF NOT EXISTS ix_comment_company ON company_comment(inn,username,created_at DESC);
-CREATE INDEX IF NOT EXISTS ix_activity_company ON activity_log(inn,created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_assignment_username
+ ON company_assignment(username, assignment_score DESC);
+CREATE INDEX IF NOT EXISTS ix_state_user_status
+ ON company_state(username, status);
+CREATE INDEX IF NOT EXISTS ix_state_next
+ ON company_state(username, next_contact_at);
+CREATE INDEX IF NOT EXISTS ix_comment_company
+ ON company_comment(inn, username, created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_activity_company
+ ON activity_log(inn, created_at DESC);
 """
+
+_ASSIGNMENT_COLUMNS = {
+    "has_phone": "INTEGER NOT NULL DEFAULT 0",
+    "has_purchaser": "INTEGER NOT NULL DEFAULT 0",
+    "has_tech": "INTEGER NOT NULL DEFAULT 0",
+    "has_signal": "INTEGER NOT NULL DEFAULT 0",
+}
+
+
+def _ensure_assignment_columns(conn: sqlite3.Connection) -> None:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(company_assignment)")}
+    for name, definition in _ASSIGNMENT_COLUMNS.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE company_assignment ADD COLUMN {name} {definition}")
 
 
 def init_schema(path: str | Path | None = None) -> None:
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        _ensure_assignment_columns(conn)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.Error:
+            pass
 
 
 def password_hash(password: str) -> str:
     if len(password) < 10:
         raise ValueError("Пароль должен содержать не менее 10 символов")
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
 
 
 def verify_password(password: str, encoded: str) -> bool:
     try:
-        return bcrypt.checkpw(password.encode(), encoded.encode())
-    except (ValueError, TypeError):
+        return bcrypt.checkpw(password.encode("utf-8"), encoded.encode("ascii"))
+    except (ValueError, TypeError, UnicodeError):
         return False
 
 
-def upsert_user(username: str, password: str, role: str = "sales", *, path=None) -> None:
+def upsert_user(
+    username: str,
+    password: str,
+    role: str = "sales",
+    *,
+    path: str | Path | None = None,
+) -> None:
     username = username.strip()
     if not re.fullmatch(r"[A-Za-z0-9_.-]{3,64}", username) or role not in ROLES:
         raise ValueError("Недопустимое имя пользователя или роль")
     now = utcnow()
     with connect(path) as conn:
-        conn.execute("INSERT INTO users(username,password_hash,role,created_at,updated_at) VALUES(?,?,?,?,?) "
-                     "ON CONFLICT(username) DO UPDATE SET password_hash=excluded.password_hash,"
-                     "role=excluded.role,is_active=1,updated_at=excluded.updated_at",
-                     (username, password_hash(password), role, now, now))
+        conn.execute(
+            "INSERT INTO users(username,password_hash,role,created_at,updated_at) "
+            "VALUES(?,?,?,?,?) "
+            "ON CONFLICT(username) DO UPDATE SET "
+            "password_hash=excluded.password_hash, role=excluded.role, "
+            "is_active=1, updated_at=excluded.updated_at",
+            (username, password_hash(password), role, now, now),
+        )
 
 
-def authenticate(username: str, password: str, *, path=None) -> dict | None:
+def authenticate(
+    username: str,
+    password: str,
+    *,
+    path: str | Path | None = None,
+) -> dict | None:
     with connect(path) as conn:
-        row = conn.execute("SELECT * FROM users WHERE username=? AND is_active=1", (username,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM users WHERE username=? AND is_active=1",
+            (username,),
+        ).fetchone()
     return dict(row) if row and verify_password(password, row["password_hash"]) else None
 
 
-def company_score(c: dict) -> float:
-    def num(name, default=0.0):
-        try: return float(c.get(name) or default)
-        except (TypeError, ValueError): return default
+def company_score(company: dict) -> float:
+    def num(name: str, default: float = 0.0) -> float:
+        try:
+            raw = company.get(name)
+            if raw in (None, ""):
+                return default
+            return float(str(raw).replace(" ", "").replace(",", "."))
+        except (TypeError, ValueError):
+            return default
+
     score = num("moy_prioritet", num("rank_metric"))
-    score += .30 * num("vazhnost_pokupki") + .20 * num("dostupnost_kontakta")
-    score += 2 * bool(c.get("has_phone") or num("n_phones"))
-    score += 2 * bool(c.get("has_purchaser") or num("n_purchaser"))
-    score += 2 * bool(c.get("has_tech") or num("n_tech"))
-    score += 2 * bool(c.get("has_signal") or num("n_signals"))
-    score += min(5, num("faktov_centrobezhnyh", num("n_facts"))) * .2
-    status = str(c.get("status_egrul") or c.get("status") or "").casefold()
-    if any(x in status for x in ("ликвид", "банкрот", "прекрат")):
+    score += 0.30 * num("vazhnost_pokupki")
+    score += 0.20 * num("dostupnost_kontakta")
+    score += 2 * bool(company.get("has_phone") or num("n_phones"))
+    score += 2 * bool(company.get("has_purchaser") or num("n_purchaser"))
+    score += 2 * bool(company.get("has_tech") or num("n_tech"))
+    score += 2 * bool(company.get("has_signal") or num("n_signals"))
+    score += min(5, num("faktov_centrobezhnyh", num("n_facts"))) * 0.2
+    status = str(company.get("status_egrul") or company.get("status") or "").casefold()
+    if any(marker in status for marker in ("ликвид", "банкрот", "прекрат")):
         score -= 1000
     return round(score, 4)
 
 
-def assign_new(companies: list[dict], users=("user1", "user2"), *, path=None,
-               source_version="", seed=375) -> dict[str, str]:
-    """Persist only previously unseen INNs using deterministic score bands.
+def _feature_tuple(company: dict) -> tuple[int, int, int, int]:
+    return tuple(
+        int(bool(company.get(name)))
+        for name in ("has_phone", "has_purchaser", "has_tech", "has_signal")
+    )
 
-    Existing rows are never updated.  Each candidate is greedily given to the
-    user with the smallest (count, score, feature counts) balance vector.
-    """
+
+def _balance_vector(values: list[float], feature_flags: tuple[int, ...]) -> tuple:
+    return (
+        values[0] + 1,
+        values[1],
+        *(values[index + 2] + feature_flags[index] for index in range(4)),
+    )
+
+
+def assign_new(
+    companies: list[dict],
+    users: Iterable[str] = ("user1", "user2"),
+    *,
+    path: str | Path | None = None,
+    source_version: str = "",
+    seed: int = 375,
+) -> dict[str, str]:
+    """Persist assignments only for previously unseen INNs."""
+    user_names = tuple(sorted({name for name in users if name}))
+    if not user_names:
+        return {}
+
     with connect(path) as conn:
-        existing = {r[0] for r in conn.execute("SELECT inn FROM company_assignment")}
-        totals = {u: [0, 0.0, 0, 0, 0, 0] for u in users}
-        for r in conn.execute("SELECT username,COUNT(*),SUM(assignment_score) FROM company_assignment GROUP BY username"):
-            if r[0] in totals: totals[r[0]][:2] = [r[1], float(r[2] or 0)]
-        unique = {}
-        for c in companies:
-            inn = normalize_inn(c.get("inn"))
-            if inn and inn not in existing: unique.setdefault(inn, c)
-        bands: dict[int, list] = {}
-        for inn, c in unique.items():
-            s = company_score(c)
-            bands.setdefault(int(s // 10), []).append((inn, c, s))
+        _ensure_assignment_columns(conn)
+        active = {
+            row[0]
+            for row in conn.execute(
+                "SELECT username FROM users WHERE role='sales' AND is_active=1"
+            )
+        }
+        user_names = tuple(name for name in user_names if name in active)
+        if not user_names:
+            return {}
+
+        existing = {row[0] for row in conn.execute("SELECT inn FROM company_assignment")}
+        totals: dict[str, list[float]] = {
+            name: [0, 0.0, 0, 0, 0, 0] for name in user_names
+        }
+        for row in conn.execute(
+            "SELECT username, COUNT(*), COALESCE(SUM(assignment_score),0), "
+            "COALESCE(SUM(has_phone),0), COALESCE(SUM(has_purchaser),0), "
+            "COALESCE(SUM(has_tech),0), COALESCE(SUM(has_signal),0) "
+            "FROM company_assignment GROUP BY username"
+        ):
+            if row[0] in totals:
+                totals[row[0]] = [float(value or 0) for value in row[1:]]
+
+        unique: dict[str, dict] = {}
+        for company in companies:
+            inn = normalize_inn(company.get("inn"))
+            if inn and inn not in existing:
+                unique.setdefault(inn, company)
+
+        bands: dict[int, list[tuple[str, dict, float]]] = {}
+        for inn, company in unique.items():
+            score = company_score(company)
+            bands.setdefault(int(score // 10), []).append((inn, company, score))
+
         rng = random.Random(seed)
-        ordered = []
+        ordered: list[tuple[str, dict, float]] = []
         for band in sorted(bands, reverse=True):
-            chunk = sorted(bands[band], key=lambda x: hashlib.sha256(f"{seed}:{x[0]}".encode()).hexdigest())
+            chunk = sorted(
+                bands[band],
+                key=lambda item: hashlib.sha256(
+                    f"{seed}:{item[0]}".encode("utf-8")
+                ).hexdigest(),
+            )
             rng.shuffle(chunk)
             ordered.extend(chunk)
-        result, now = {}, utcnow()
-        for inn, c, score in ordered:
-            features = [int(bool(c.get(k))) for k in ("has_phone", "has_purchaser", "has_tech", "has_signal")]
-            user = min(users, key=lambda u: (totals[u][0], totals[u][1], *totals[u][2:], u))
-            conn.execute("INSERT INTO company_assignment VALUES(?,?,?,?,?,?)",
-                         (inn, user, score, now, source_version, "system"))
-            totals[user][0] += 1; totals[user][1] += score
-            for i, flag in enumerate(features, 2): totals[user][i] += flag
-            result[inn] = user
+
+        result: dict[str, str] = {}
+        now = utcnow()
+        for inn, company, score in ordered:
+            flags = _feature_tuple(company)
+            username = min(
+                user_names,
+                key=lambda name: (
+                    _balance_vector(totals[name], flags),
+                    totals[name][1],
+                    name,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO company_assignment("
+                "inn,username,assignment_score,has_phone,has_purchaser,has_tech,has_signal,"
+                "assigned_at,source_version,assigned_by) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (inn, username, score, *flags, now, source_version, "system"),
+            )
+            totals[username][0] += 1
+            totals[username][1] += score
+            for index, flag in enumerate(flags, 2):
+                totals[username][index] += flag
+            result[inn] = username
         return result
 
 
+def assignment_owner(conn: sqlite3.Connection, inn: str) -> str:
+    row = conn.execute(
+        "SELECT username FROM company_assignment WHERE inn=?",
+        (normalize_inn(inn),),
+    ).fetchone()
+    return str(row[0]) if row else ""
+
+
 def allowed(conn: sqlite3.Connection, user: dict, inn: str) -> bool:
-    if user["role"] == "admin": return True
-    return bool(conn.execute("SELECT 1 FROM company_assignment WHERE inn=? AND username=?",
-                             (normalize_inn(inn), user["username"])).fetchone())
+    if user["role"] == "admin":
+        return True
+    return assignment_owner(conn, inn) == user["username"]
 
 
-def save_call(user: dict, inn: str, result: str, next_contact: str = "", comment: str = "", *, path=None) -> None:
-    inn, comment = normalize_inn(inn), comment.strip()
-    if result not in CALL_RESULTS or len(comment) > 5000 or (comment == "" and result == "new"):
-        raise ValueError("Некорректный результат или комментарий")
+def save_call(
+    user: dict,
+    inn: str,
+    result: str,
+    next_contact: str = "",
+    comment: str = "",
+    *,
+    path: str | Path | None = None,
+) -> None:
+    inn = normalize_inn(inn)
+    comment = comment.strip()
+    if not inn:
+        raise ValueError("ИНН не указан")
+    if result not in CALL_RESULTS:
+        raise ValueError("Некорректный результат звонка")
+    if len(comment) > 5000:
+        raise ValueError("Комментарий длиннее 5000 символов")
+    if result == "new" and not comment:
+        raise ValueError("Укажите результат или комментарий")
+
     now = utcnow()
     with connect(path) as conn:
-        if not allowed(conn, user, inn): raise PermissionError(inn)
+        owner = assignment_owner(conn, inn)
+        if not allowed(conn, user, inn) or not owner:
+            raise PermissionError(inn)
+        state_user = owner if user["role"] == "admin" else user["username"]
         status = "completed" if result in {"completed", "not_target"} else "processed"
-        conn.execute("INSERT INTO company_state VALUES(?,?,?,?,?,?,?) ON CONFLICT(inn,username) DO UPDATE SET "
-                     "status=excluded.status,last_contact_at=excluded.last_contact_at,next_contact_at=excluded.next_contact_at,"
-                     "call_result=excluded.call_result,updated_at=excluded.updated_at",
-                     (inn,user["username"],status,now,next_contact or None,result,now))
+        conn.execute(
+            "INSERT INTO company_state("
+            "inn,username,status,last_contact_at,next_contact_at,call_result,updated_at) "
+            "VALUES(?,?,?,?,?,?,?) "
+            "ON CONFLICT(inn,username) DO UPDATE SET "
+            "status=excluded.status,last_contact_at=excluded.last_contact_at,"
+            "next_contact_at=excluded.next_contact_at,call_result=excluded.call_result,"
+            "updated_at=excluded.updated_at",
+            (inn, state_user, status, now, next_contact or None, result, now),
+        )
         if comment:
-            conn.execute("INSERT INTO company_comment(inn,username,body,created_at,updated_at) VALUES(?,?,?,?,?)",
-                         (inn,user["username"],comment,now,now))
-        conn.execute("INSERT INTO activity_log(inn,username,action,payload_json,created_at) VALUES(?,?,?,?,?)",
-                     (inn,user["username"],"call_saved",json.dumps({"result":result,"next_contact":next_contact},ensure_ascii=False),now))
+            conn.execute(
+                "INSERT INTO company_comment("
+                "inn,username,body,created_at,updated_at) VALUES(?,?,?,?,?)",
+                (inn, user["username"], comment, now, now),
+            )
+        conn.execute(
+            "INSERT INTO activity_log("
+            "inn,username,action,payload_json,created_at) VALUES(?,?,?,?,?)",
+            (
+                inn,
+                user["username"],
+                "call_saved",
+                json.dumps(
+                    {
+                        "result": result,
+                        "next_contact": next_contact,
+                        "state_user": state_user,
+                    },
+                    ensure_ascii=False,
+                ),
+                now,
+            ),
+        )
 
 
-def edit_comment(user: dict, comment_id: int, body: str, *, path=None) -> None:
+def edit_comment(
+    user: dict,
+    comment_id: int,
+    body: str,
+    *,
+    path: str | Path | None = None,
+) -> None:
     body = body.strip()
-    if not body or len(body) > 5000: raise ValueError("Комментарий должен содержать 1–5000 символов")
+    if not body or len(body) > 5000:
+        raise ValueError("Комментарий должен содержать 1–5000 символов")
     with connect(path) as conn:
-        row = conn.execute("SELECT * FROM company_comment WHERE id=?", (comment_id,)).fetchone()
-        # Even administrators may inspect both histories, but authorship stays
-        # immutable: only the author can edit their own text.
+        row = conn.execute(
+            "SELECT * FROM company_comment WHERE id=?", (comment_id,)
+        ).fetchone()
         if not row or row["username"] != user["username"]:
             raise PermissionError(comment_id)
-        conn.execute("UPDATE company_comment SET body=?,updated_at=? WHERE id=?", (body,utcnow(),comment_id))
-        conn.execute("INSERT INTO activity_log(inn,username,action,payload_json,created_at) VALUES(?,?,?,?,?)",
-                     (row["inn"],user["username"],"comment_edited",json.dumps({"id":comment_id}),utcnow()))
+        conn.execute(
+            "UPDATE company_comment SET body=?,updated_at=? WHERE id=?",
+            (body, utcnow(), comment_id),
+        )
+        conn.execute(
+            "INSERT INTO activity_log("
+            "inn,username,action,payload_json,created_at) VALUES(?,?,?,?,?)",
+            (
+                row["inn"],
+                user["username"],
+                "comment_edited",
+                json.dumps({"id": comment_id}),
+                utcnow(),
+            ),
+        )
 
 
-def reassign(admin: dict, inn: str, username: str, *, path=None) -> None:
-    if admin["role"] != "admin": raise PermissionError("admin")
+def reassign(
+    admin: dict,
+    inn: str,
+    username: str,
+    *,
+    path: str | Path | None = None,
+) -> None:
+    if admin["role"] != "admin":
+        raise PermissionError("admin")
+    inn = normalize_inn(inn)
+    username = username.strip()
     with connect(path) as conn:
-        if not conn.execute("SELECT 1 FROM users WHERE username=? AND role='sales'",(username,)).fetchone():
-            raise ValueError("Неизвестный sales-пользователь")
-        conn.execute("UPDATE company_assignment SET username=?,assigned_at=?,assigned_by=? WHERE inn=?",
-                     (username,utcnow(),admin["username"],normalize_inn(inn)))
-        conn.execute("INSERT INTO activity_log(inn,username,action,payload_json,created_at) VALUES(?,?,?,?,?)",
-                     (normalize_inn(inn),admin["username"],"reassigned",json.dumps({"to":username}),utcnow()))
+        target = conn.execute(
+            "SELECT 1 FROM users WHERE username=? AND role='sales' AND is_active=1",
+            (username,),
+        ).fetchone()
+        if not target:
+            raise ValueError("Неизвестный или отключённый sales-пользователь")
+        assignment = conn.execute(
+            "SELECT username FROM company_assignment WHERE inn=?", (inn,)
+        ).fetchone()
+        if not assignment:
+            raise ValueError("Компания не найдена в распределении")
+        old_username = str(assignment[0])
+        now = utcnow()
+        if old_username != username:
+            old_state = conn.execute(
+                "SELECT status,last_contact_at,next_contact_at,call_result,updated_at "
+                "FROM company_state WHERE inn=? AND username=?",
+                (inn, old_username),
+            ).fetchone()
+            if old_state:
+                conn.execute(
+                    "INSERT INTO company_state("
+                    "inn,username,status,last_contact_at,next_contact_at,call_result,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?) "
+                    "ON CONFLICT(inn,username) DO UPDATE SET "
+                    "status=excluded.status,last_contact_at=excluded.last_contact_at,"
+                    "next_contact_at=excluded.next_contact_at,"
+                    "call_result=excluded.call_result,updated_at=excluded.updated_at",
+                    (inn, username, *old_state),
+                )
+            conn.execute(
+                "UPDATE company_assignment SET username=?,assigned_at=?,assigned_by=? "
+                "WHERE inn=?",
+                (username, now, admin["username"], inn),
+            )
+        conn.execute(
+            "INSERT INTO activity_log("
+            "inn,username,action,payload_json,created_at) VALUES(?,?,?,?,?)",
+            (
+                inn,
+                admin["username"],
+                "reassigned",
+                json.dumps(
+                    {"from": old_username, "to": username}, ensure_ascii=False
+                ),
+                now,
+            ),
+        )
