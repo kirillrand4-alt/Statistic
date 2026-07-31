@@ -90,7 +90,17 @@ def list_companies() -> list[dict]:
     with connect() as conn:
         if not table_exists(conn, "company"):
             raise CentroDbUnavailable("В базе нет таблицы company")
-        return _rows(conn, "SELECT * FROM company")
+        rows = _rows(conn, "SELECT * FROM company")
+
+    # Некоторые исторические снимки содержат search_blob без ИНН. Из-за этого
+    # точный поиск по ИНН возвращал «Компании не найдены», хотя строка company
+    # существовала. Добавляем нормализованный ИНН в поисковый текст при чтении,
+    # не изменяя read-only файл и не требуя повторной сборки базы.
+    for row in rows:
+        inn = re.sub(r"\D", "", str(row.get("inn") or ""))[:12]
+        blob = str(row.get("search_blob") or "").strip()
+        row["search_blob"] = f"{inn} {blob}".strip()
+    return rows
 
 
 _URL_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
