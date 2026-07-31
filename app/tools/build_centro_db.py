@@ -11,6 +11,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.services import centro_medium
+
 TECH_RE = re.compile(r"тех|инжен|механ|энерг|эксплуатац|ремонт|компресс", re.I)
 BUY_RE = re.compile(r"закуп|снабж|тендер|мто|мтс|материал", re.I)
 EMAIL_RE = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.I)
@@ -235,6 +237,7 @@ def build(summary: Path, details: Path, contacts: Path, output: Path) -> None:
     temporary.unlink(missing_ok=True)
     conn = sqlite3.connect(temporary)
     seen: set[tuple] = set()
+    excluded_facts = 0
     try:
         create_schema(conn, company_fields)
         quoted = ",".join(f'"{field}"' for field in company_fields)
@@ -298,18 +301,30 @@ def build(summary: Path, details: Path, contacts: Path, output: Path) -> None:
                 continue
             section = clean(row.get("razdel")).upper()
             if section == "ФАКТ":
+                fact = {
+                    "status": clean(row.get("chto")),
+                    "model": clean(row.get("kto_ili_marka")),
+                    "equipment_type": clean(row.get("dolzhnost_ili_tip")),
+                    "medium": clean(row.get("rol")),
+                    "event_date": clean(row.get("data")),
+                    "evidence": clean(row.get("chem_dokazano")),
+                    "quote": clean(row.get("citata")),
+                    "source_url": url(row.get("ssylka")),
+                    "source": clean(row.get("istochnik")),
+                }
+                if not centro_medium.keep_fact(fact):
+                    excluded_facts += 1
+                    continue
                 conn.execute(
                     """INSERT INTO fact(
                     inn,status,model,equipment_type,medium,event_date,evidence,quote,source_url,source
                     ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
                     (
-                        company_inn, clean(row.get("chto")) or None,
-                        clean(row.get("kto_ili_marka")) or None,
-                        clean(row.get("dolzhnost_ili_tip")) or None,
-                        clean(row.get("rol")) or None, clean(row.get("data")) or None,
-                        clean(row.get("chem_dokazano")) or None,
-                        clean(row.get("citata")) or None, url(row.get("ssylka")) or None,
-                        clean(row.get("istochnik")) or None,
+                        company_inn, fact["status"] or None, fact["model"] or None,
+                        fact["equipment_type"] or None, fact["medium"] or None,
+                        fact["event_date"] or None, fact["evidence"] or None,
+                        fact["quote"] or None, fact["source_url"] or None,
+                        fact["source"] or None,
                     ),
                 )
             elif section == "НОВОСТЬ":
@@ -413,7 +428,8 @@ def build(summary: Path, details: Path, contacts: Path, output: Path) -> None:
                 "SELECT group_concat(model,' ') FROM fact WHERE inn=?", (company_inn,)
             ).fetchone()[0]
             blob = " ".join(
-                clean(value) for value in (*values, contact_text, model_text) if clean(value)
+                clean(value) for value in (company_inn, *values, contact_text, model_text)
+                if clean(value)
             ).casefold()
             conn.execute("UPDATE company SET search_blob=? WHERE inn=?", (blob, company_inn))
 
@@ -422,12 +438,13 @@ def build(summary: Path, details: Path, contacts: Path, output: Path) -> None:
             "company_count": str(conn.execute("SELECT COUNT(*) FROM company").fetchone()[0]),
             "contact_count": str(conn.execute("SELECT COUNT(*) FROM contact").fetchone()[0]),
             "fact_count": str(conn.execute("SELECT COUNT(*) FROM fact").fetchone()[0]),
+            "excluded_fact_count": str(excluded_facts),
             "news_count": str(conn.execute("SELECT COUNT(*) FROM signal").fetchone()[0]),
             "person_count": str(conn.execute("SELECT COUNT(*) FROM person").fetchone()[0]),
             "summary_file": summary.name, "summary_sha256": digest(summary),
             "details_file": details.name, "details_sha256": digest(details),
             "contacts_file": contacts.name, "contacts_sha256": digest(contacts),
-            "source_kind": "csv-import-v2",
+            "source_kind": "csv-import-v3-air-compressors",
         }
         conn.executemany("INSERT INTO import_info(key,value) VALUES(?,?)", info.items())
         conn.execute("ANALYZE")
@@ -442,7 +459,7 @@ def build(summary: Path, details: Path, contacts: Path, output: Path) -> None:
     print(f"Готово: {output}")
     print(
         f"Компаний: {len(company_rows)}; полных строк: {len(detail_rows)}; "
-        f"контактных строк: {len(contact_rows)}"
+        f"контактных строк: {len(contact_rows)}; исключено фактов: {excluded_facts}"
     )
 
 
