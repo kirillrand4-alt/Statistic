@@ -1,7 +1,10 @@
 # Secrets & local data
 .env
+.env.*
+!.env.example
 secrets/
 data/
+data/*.db
 *.db
 *.sqlite
 *.sqlite3
@@ -26,3 +29,9 @@ exports/
 *.xlsx
 *.csv
 !tests/fixtures/**/*.csv
+keys.txt
+*.log
+*.bak*
+_bak-*/
+drop/
+Parser2/

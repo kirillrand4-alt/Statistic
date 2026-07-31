@@ -53,6 +53,12 @@ class BasicAuthASGI:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
+        # /centro has its own role-based cookie authentication.  Keeping Basic
+        # auth in front of it would require two logins and would expose the old
+        # shared password model to sales users.
+        path = scope.get("path", "").rstrip("/")
+        if path.endswith("/centro") or "/centro/" in path or path.endswith(("/centro1", "/centro2")):
+            return await self.app(scope, receive, send)
         if not self.users:
             return await self._deny(scope, receive, send, 503,
                                     "Обзвон не настроен: задайте OBZVON_USERS в .env "
@@ -101,6 +107,8 @@ async def lifespan(app: FastAPI):
         callbase.ensure_schema(db)
     finally:
         db.close()
+    from app.services import centro_sales
+    centro_sales.init_schema()
     yield
 
 
@@ -114,9 +122,11 @@ def create_app() -> FastAPI:
     # base_path в шаблонах обзвона приходит через контекст запроса (routes_obzvon),
     # а не через templates.env.globals — тот общий с основным приложением.
     app.mount(f"{obz}/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    # Specific Centro routes must precede routes_obzvon's /{base} catch-all.
+    from app.api import routes_centro_sales
+    app.include_router(routes_centro_sales.router, prefix=obz)
     app.include_router(routes_obzvon.router, prefix=obz)
-    from app.api import routes_centro  # Центробежные 1/2
-    routes_centro.include_centro(app, prefix=obz)
+    # Legacy /centro1 and /centro2 redirects are provided by the unified router.
 
     if obz:  # корень процесса -> на страницу обзвона (удобно при заходе на порт)
         @app.get("/", include_in_schema=False)

@@ -28,6 +28,7 @@ tenacity>=8.2
 # Config / secrets
 python-dotenv>=1.0
 cryptography>=42.0
+bcrypt>=4.1
 
 # Dev / test
 pytest>=8.0
