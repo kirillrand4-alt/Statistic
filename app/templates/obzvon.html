@@ -4,12 +4,26 @@
 <h2>{{ label }} <small id="qhead"></small></h2>
 {% if msg %}<article><strong>{{ msg }}</strong></article>{% endif %}
 
+{# ---------- Режим: карточка по одной компании или постраничный список.
+     Фильтры сохраняются в обеих ссылках — переключение не сбрасывает отбор. ---------- #}
+<nav style="margin-bottom:.4rem">
+  <a href="{{ card_url }}" role="button"
+     class="{% if view != 'list' %}contrast{% else %}secondary outline{% endif %}">🎯 Карточка</a>
+  <a href="{{ list_url }}" role="button"
+     class="{% if view == 'list' %}contrast{% else %}secondary outline{% endif %}">📋 Список</a>
+</nav>
+
 {# ---------- Фильтры очереди (сворачиваемые: чтобы карточка была на весь экран;
      список значений регион/ОКВЭД/оборудование заполняется скриптом из карточки) ---------- #}
 <details id="flt-box" open style="margin-bottom:.6rem">
   <summary style="cursor:pointer;font-weight:600">🔎 Фильтры{% if filters_active %} · <mark>активны</mark>{% endif %}</summary>
 <form method="get" action="{{ base_path }}/{{ base }}" id="filters">
   <input type="hidden" name="f" value="1">{# признак отправки формы: снятый чекбокс = 0 #}
+  {# режим и размер страницы переживают смену фильтра (иначе правка фильтра
+     выбрасывала бы из «Списка» обратно в «Карточку»). Номер страницы намеренно
+     НЕ тащим: после смены отбора корректно начать с первой. #}
+  <input type="hidden" name="view" value="{{ view }}">
+  <input type="hidden" name="size" value="{{ size }}">
   <div class="grid">
     <label>Поиск <small>(название / ИНН / адрес / директор)</small>
       <input type="text" name="q" value="{{ flt.q }}" placeholder="например: Иркутск или 3827013097">
@@ -69,8 +83,8 @@
 </form>
 </details>
 
-{# карточка догружается отдельным запросом — страница и форма пароля мгновенные #}
-<div id="card"><article aria-busy="true">Загружаю карточку…</article></div>
+{# карточка/список догружаются отдельным запросом — страница и форма пароля мгновенные #}
+<div id="card"><article aria-busy="true">Загружаю {% if view == 'list' %}список{% else %}карточку{% endif %}…</article></div>
 
 <script>
   (function () {
@@ -88,10 +102,10 @@
     var form = document.getElementById("filters");
     if (form) form.addEventListener("change", function () { form.submit(); });
 
-    // card_qs — уже url-энкоденная строка; |safe, иначе Jinja экранирует & в &amp;
+    // frag_qs — уже url-энкоденная строка; |safe, иначе Jinja экранирует & в &amp;
     // и браузер шлёт в fetch буквальные "&amp;" — сервер видит параметр "amp;skip"
     // вместо "skip" (ломало пропуск и все фильтры, кроме первого).
-    var url = "{{ base_path }}/{{ base }}/card{% if card_qs %}?{{ card_qs|safe }}{% endif %}";
+    var url = "{{ frag_url }}{% if frag_qs %}?{{ frag_qs|safe }}{% endif %}";
 
     function fillSelect(id, items) {
       var sel = document.getElementById(id);
@@ -110,25 +124,47 @@
       });
     }
 
-    fetch(url, {credentials: "same-origin"})
-      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.text(); })
-      .then(function (html) {
-        var card = document.getElementById("card");
-        card.innerHTML = html;
-        var n = card.querySelector("[data-dbtotal]"), h = document.getElementById("qhead");
-        if (h && n) h.textContent = "— " + n.getAttribute("data-dbtotal") + " компаний в базе";
-        try {
-          var data = JSON.parse((card.querySelector("#filters-data") || {}).textContent || "{}");
-          fillSelect("f-region", data.regions);
-          fillSelect("f-okved", data.okveds);
-          fillSelect("f-equipment", data.equipments);
-        } catch (e) {}
-      })
-      .catch(function (e) {
-        document.getElementById("card").innerHTML =
-          '<article><strong>Не удалось загрузить карточку (' + e.message +
-          ').</strong> <a href="javascript:location.reload()">Повторить</a></article>';
-      });
+    var cardBox = document.getElementById("card");
+
+    function load(fragUrl, pageUrl) {
+      cardBox.setAttribute("aria-busy", "true");
+      return fetch(fragUrl, {credentials: "same-origin"})
+        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.text(); })
+        .then(function (html) {
+          cardBox.removeAttribute("aria-busy");
+          cardBox.innerHTML = html;
+          var n = cardBox.querySelector("[data-dbtotal]"), h = document.getElementById("qhead");
+          if (h && n) h.textContent = "— " + n.getAttribute("data-dbtotal") + " компаний в базе";
+          try {
+            var data = JSON.parse((cardBox.querySelector("#filters-data") || {}).textContent || "{}");
+            fillSelect("f-region", data.regions);
+            fillSelect("f-okved", data.okveds);
+            fillSelect("f-equipment", data.equipments);
+          } catch (e) {}
+          // адресная строка догоняет показанную страницу: F5 и «поделиться
+          // ссылкой» отдают ровно то, что на экране
+          if (pageUrl) { try { history.replaceState(null, "", pageUrl); } catch (e) {} }
+        })
+        .catch(function (e) {
+          cardBox.removeAttribute("aria-busy");
+          cardBox.innerHTML =
+            '<article><strong>Не удалось загрузить (' + e.message +
+            ').</strong> <a href="javascript:location.reload()">Повторить</a></article>';
+        });
+    }
+
+    // Переход по страницам списка подменяет только таблицу: полная перезагрузка
+    // страницы на каждый «дальше» — лишний круг и потеря развёрнутых фильтров.
+    // Ссылки при этом настоящие (href на полную страницу), поэтому без JS
+    // навигация тоже работает.
+    cardBox.addEventListener("click", function (ev) {
+      var a = ev.target.closest ? ev.target.closest("a[data-frag]") : null;
+      if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button) return;
+      ev.preventDefault();
+      load(a.getAttribute("data-frag"), a.getAttribute("href"));
+    });
+
+    load(url, null);
   })();
 </script>
 {% endblock %}

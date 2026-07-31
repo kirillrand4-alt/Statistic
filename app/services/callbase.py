@@ -7,18 +7,30 @@
 
 «Удалить и следующая» — жёсткое удаление строки; на всякий случай полная копия
 дописывается в data/callbase/deleted_<base>.tsv (страховка от случайного клика).
+
+ПОСТРАНИЧНАЯ ВЫДАЧА (161k строк в объединённой базе). До этого очередь строилась
+так: SELECT всех строк базы -> фильтрация в Python -> список id целиком в памяти
+(кэш на каждую комбинацию фильтров). На 7000 компаний это терпимо, на 161k —
+секунды на запрос и десятки мегабайт на каждую комбинацию фильтров, причём кэш
+сбрасывался при каждом «Удалить и следующая». Теперь фильтры целиком в SQL
+(см. ``derived``), а страница берётся LIMIT/OFFSET по индексу, повторяющему
+ORDER BY, — см. ``page`` и ``_queue_stmt``.
 """
 from __future__ import annotations
 
 import csv
 import io
+import logging
 import os
 import re
+from dataclasses import dataclass
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text as sql_text
 from sqlalchemy.orm import Session
 
 from app.db.models import CallCompany
+
+log = logging.getLogger(__name__)
 
 # slug базы -> название страницы
 BASES = {"kc": "Компрессор Центр", "meyer": "Meyer"}
@@ -262,24 +274,37 @@ def import_rows(db: Session, base: str, rows: list[dict]) -> tuple[int, int]:
             existing_inn.add(inn)
         if rec.get("name_short"):
             existing_name.add(rec["name_short"])
-        db.add(CallCompany(base=base, **rec))
+        # производные поля считаем здесь: на чтении (161k строк, постранично)
+        # пересчитывать их в Python уже нельзя — фильтры должны идти в SQL
+        db.add(CallCompany(base=base, **rec, **derived(rec)))
         added += 1
     db.commit()
     _bump_version()
     return added, skipped
 
 
-# Кэши на процесс: очередь (id по фильтрам) и агрегаты для выпадающих списков
-# (регионы/ОКВЭД/оборудование). Списки считаются по всей базе — на большой базе
-# (7000+ компаний) это дорого, поэтому кешируем и пересчитываем только при
-# изменении данных (импорт/удаление/очистка) через _bump_version.
-_queue_cache: dict[tuple, list[int]] = {}
+# Кэши на процесс: количество строк под фильтрами и агрегаты для выпадающих
+# списков (регионы/ОКВЭД/оборудование). Агрегаты считаются по всей базе — на
+# 161k строк это дорого, поэтому кешируем и пересчитываем только при изменении
+# данных (импорт/очистка) через _bump_version.
+#
+# Кэша СПИСКА id больше нет: он держал в памяти список из всех подходящих id на
+# КАЖДУЮ комбинацию фильтров (161k int ≈ 6 МБ на комбинацию, словарь без
+# ограничения размера) и обнулялся на каждом удалении строки — то есть первый же
+# клик «Удалить и следующая» заставлял пересканировать базу заново.
+_count_cache: dict[tuple, int] = {}
 _agg_cache: dict[tuple, list] = {}
+_COUNT_CACHE_MAX = 256  # комбинаций фильтров; больше — просто чистим целиком
 
 
-def _bump_version() -> None:
-    _queue_cache.clear()
-    _agg_cache.clear()
+def _bump_version(aggregates: bool = True) -> None:
+    """Данные изменились. ``aggregates=False`` — удалена одна строка: количество
+    в очереди пересчитать надо, а списки регионов/ОКВЭД/оборудования (полный скан
+    базы) из-за минус одной компании пересчитывать незачем — их счётчики в
+    выпадающих списках справочные."""
+    _count_cache.clear()
+    if aggregates:
+        _agg_cache.clear()
 
 
 def _cached_agg(base: str, kind: str, fn):
@@ -291,12 +316,6 @@ def _cached_agg(base: str, kind: str, fn):
     return v
 
 
-def _has(hay, needle: str) -> bool:
-    # casefold — корректная нечувствительность к регистру для кириллицы
-    # (SQLite lower()/ilike умеет только ASCII, поэтому текст фильтруем в Python)
-    return needle.casefold() in (hay or "").casefold()
-
-
 def has_mobile(phones) -> bool:
     """Есть ли сотовый: номер с девятки (+79…/89…)."""
     for tok in str(phones or "").split("|"):
@@ -306,17 +325,51 @@ def has_mobile(phones) -> bool:
     return False
 
 
-def _queue_ids(db: Session, base: str, q="", region="", okved="", equipment="",
-               hit_from=0, hit_to=0, rank_from=0.0, rank_to=0.0,
-               rev_from=0.0, rev_to=0.0, only_phone=True, active_only=True,
-               mobile_only=False) -> list[int]:
-    """id компаний базы под фильтры, в порядке очереди обзвона. Точные условия
-    (регион/ОКВЭД из выпадающих списков, диапазоны чисел) — в SQL; текстовый
-    поиск и сотовые — в Python (SQLite не умеет кириллицу без регистра)."""
+def derived(rec) -> dict:
+    """Производные поля строки — всё, что SQLite не умеет считать на кириллице
+    быстро и индексируемо. Считаются ОДИН раз при записи (импорт/миграция), а на
+    чтении дают обычные SQL-условия вместо фильтрации 161k строк в Python.
+
+    ``rec`` — словарь записи из выгрузки или ORM-объект CallCompany.
+    Блобы склеиваются через \\n и приводятся casefold(): побайтовый LIKE по такой
+    строке с так же приведённой подстрокой = регистронезависимый поиск, который
+    в SQLite иначе для кириллицы недоступен. Разделитель \\n гарантирует, что
+    подстрока не «склеится» через границу полей (в поле формы \\n не ввести)."""
+    get = rec.get if isinstance(rec, dict) else (lambda k: getattr(rec, k, None))
+    parts = (get("name_short"), get("name_full"), get("inn"),
+             get("address"), get("director"))
+    equip = (get("equipment"), get("equipment_all"))
+    phones = str(get("phones") or "")
+    return {
+        "search_blob": "\n".join(str(p) for p in parts if p).casefold(),
+        "equipment_blob": "\n".join(str(p) for p in equip if p).casefold(),
+        "is_active": 1 if "действующ" in str(get("status") or "").casefold() else 0,
+        # раньше условие было «phones != ''»; strip() дополнительно отсекает
+        # строки из одних пробелов — телефоном они всё равно не были
+        "has_phone": 1 if phones.strip() else 0,
+        "has_mobile": 1 if has_mobile(phones) else 0,
+    }
+
+
+# Порядок очереди обзвона. Повторён колонка-в-колонку в индексах ix_cc_queue /
+# ix_cc_queue_active — только тогда LIMIT/OFFSET идёт по индексу без сортировки
+# всей базы. Менять порядок здесь = менять индексы в models.py и ensure_schema.
+def _order_by():
     C = CallCompany
-    stmt = (select(C.id, C.name_short, C.name_full, C.inn, C.address, C.director,
-                   C.equipment, C.equipment_all, C.status, C.phones)
-            .where(C.base == base))
+    # nulls_last не пишем: в SQLite NULL меньше всего, значит при DESC он и так
+    # оказывается в конце, а явное «NULLS LAST» мешает планировщику взять индекс.
+    return (C.rank_metric.desc(), C.priority.desc(), C.revenue_num.desc(), C.id)
+
+
+def _filtered(stmt, base: str, q="", region="", okved="", equipment="",
+              hit_from=0, hit_to=0, rank_from=0.0, rank_to=0.0,
+              rev_from=0.0, rev_to=0.0, only_phone=True, active_only=True,
+              mobile_only=False):
+    """Навесить фильтры очереди на любой запрос (страница / COUNT). Все условия
+    идут в SQL — ничего не фильтруется в Python, иначе постраничность бессмысленна
+    (пришлось бы вычитать всю базу, чтобы узнать, что попало на страницу)."""
+    C = CallCompany
+    stmt = stmt.where(C.base == base)
     if region:
         stmt = stmt.where(C.region == region)
     if okved:
@@ -334,25 +387,24 @@ def _queue_ids(db: Session, base: str, q="", region="", okved="", equipment="",
     if rev_to:
         stmt = stmt.where(C.revenue_num <= rev_to * 1e6)
     if only_phone:
-        stmt = stmt.where(C.phones.is_not(None), C.phones != "")
-    stmt = stmt.order_by(C.rank_metric.desc().nulls_last(),
-                         C.priority.desc(),
-                         C.revenue_num.desc().nulls_last(),
-                         C.id)
-    q, equipment = (q or "").strip(), (equipment or "").strip()
-    ids = []
-    for r in db.execute(stmt).all():
-        if active_only and "действующ" not in (r.status or "").casefold():
-            continue
-        if mobile_only and not has_mobile(r.phones):
-            continue
-        if q and not any(_has(v, q) for v in
-                         (r.name_short, r.name_full, r.inn, r.address, r.director)):
-            continue
-        if equipment and not (_has(r.equipment, equipment) or _has(r.equipment_all, equipment)):
-            continue
-        ids.append(r.id)
-    return ids
+        stmt = stmt.where(C.has_phone == 1)
+    if active_only:
+        stmt = stmt.where(C.is_active == 1)
+    if mobile_only:
+        stmt = stmt.where(C.has_mobile == 1)
+    # autoescape — % и _ из строки поиска не должны стать джокерами LIKE
+    q = (q or "").strip()
+    if q:
+        stmt = stmt.where(C.search_blob.contains(q.casefold(), autoescape=True))
+    equipment = (equipment or "").strip()
+    if equipment:
+        stmt = stmt.where(C.equipment_blob.contains(equipment.casefold(), autoescape=True))
+    return stmt
+
+
+def _queue_stmt(base: str, **flt):
+    """Запрос строк базы под фильтры, в порядке очереди обзвона."""
+    return _filtered(select(CallCompany), base, **flt).order_by(*_order_by())
 
 
 def regions(db: Session, base: str) -> list[tuple[str, int]]:
@@ -394,59 +446,290 @@ def okveds(db: Session, base: str) -> list[tuple[str, int]]:
 
 def equipments(db: Session, base: str) -> list[tuple[str, int]]:
     """Категории оборудования базы (из расчёта: основная + все найденные)
-    с количеством компаний, по убыванию."""
+    с количеством компаний, по убыванию.
+
+    Считаем по ГРУППАМ, а не по строкам: различных сочетаний
+    (equipment, equipment_all) в базе пара сотен, поэтому SQL схлопывает 161k
+    строк до ~250 групп, а Python разбирает « | »-списки только у них. Раньше
+    разбор шёл по каждой строке — 1,2 с на первый показ страницы после старта
+    сервиса (список категорий нужен выпадающему фильтру)."""
     def _q():
         from collections import Counter
         C = CallCompany
         cnt: Counter = Counter()
-        for eq, eq_all in db.execute(
-                select(C.equipment, C.equipment_all).where(C.base == base)).all():
+        for eq, eq_all, n in db.execute(
+                select(C.equipment, C.equipment_all, func.count())
+                .where(C.base == base)
+                .group_by(C.equipment, C.equipment_all)).all():
             for cat in set(split_list(eq)) | set(split_list(eq_all)):
-                cnt[cat] += 1
+                cnt[cat] += n
         return sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))
     return _cached_agg(base, "equipments", _q)
 
 
+# Колонки, дозаводимые на живой базе (имя -> тип). Порядок важен: производные
+# добавляем последними, их бэкофилл идёт отдельным проходом.
+_ADD_COLUMNS = (
+    ("region", "VARCHAR(96)"),
+    ("max_hit", "INTEGER DEFAULT 0"),
+    ("site_phones", "TEXT"),
+    ("site_emails", "TEXT"),
+    ("search_blob", "TEXT"),
+    ("equipment_blob", "TEXT"),
+    ("is_active", "INTEGER DEFAULT 0"),
+    ("has_phone", "INTEGER DEFAULT 0"),
+    ("has_mobile", "INTEGER DEFAULT 0"),
+)
+
+# Индексы под фактические фильтры и порядок постраничного списка. Создаются
+# здесь, а не только через create_all: create_all трогает лишь НОВЫЕ таблицы,
+# а боевая call_company давно существует. Определения обязаны совпадать с
+# __table_args__ в app/db/models.py — иначе новая база и мигрированная разъедутся.
+#
+# Устройство и замеры на 161 799 строках — в комментарии к CallCompany.
+_ORDER_COLS = "rank_metric DESC, priority DESC, revenue_num DESC, id"
+_CREATE_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS ix_call_company_base_inn"
+    " ON call_company (base, inn)",
+    f"CREATE INDEX IF NOT EXISTS ix_cc_queue ON call_company"
+    f" (base, {_ORDER_COLS}, has_phone, has_mobile, is_active, max_hit)",
+    f"CREATE INDEX IF NOT EXISTS ix_cc_queue_active ON call_company"
+    f" (base, is_active, {_ORDER_COLS}, has_phone, has_mobile, max_hit)",
+    f"CREATE INDEX IF NOT EXISTS ix_cc_base_region ON call_company"
+    f" (base, region, {_ORDER_COLS}, has_phone, has_mobile, is_active, max_hit)",
+    f"CREATE INDEX IF NOT EXISTS ix_cc_base_okved ON call_company"
+    f" (base, okved_main, {_ORDER_COLS}, has_phone, has_mobile, is_active, max_hit)",
+    # покрывающий индекс под GROUP BY в equipments(): список категорий для
+    # выпадающего фильтра собирается по нему, не читая строки таблицы
+    "CREATE INDEX IF NOT EXISTS ix_cc_base_equipment"
+    " ON call_company (base, equipment, equipment_all)",
+    # частичный индекс-«хвостик» недомигрированных строк: после миграции он пуст,
+    # поэтому проверка «всё ли посчитано» на старте сервиса ничего не стоит
+    "CREATE INDEX IF NOT EXISTS ix_cc_needs_backfill ON call_company (id)"
+    " WHERE search_blob IS NULL",
+)
+
+# Старый индекс очереди: (base, rank_metric) по возрастанию. Порядок выдачи он не
+# закрывает (три колонки из четырёх отсутствуют, направление противоположное),
+# поэтому только занимал место и путал планировщик. Имя переиспользовать нельзя —
+# CREATE INDEX IF NOT EXISTS оставил бы старое определение, поэтому новые зовутся
+# ix_cc_*, а этот сносим.
+_DROP_INDEXES = ("DROP INDEX IF EXISTS ix_call_company_queue",)
+
+_BACKFILL_CHUNK = 2000  # строк на один commit при миграции 161k строк
+
+
 def ensure_schema(db: Session) -> None:
     """Дозавести новые колонки call_company на живой базе (ALTER TABLE ADD COLUMN —
-    работает и в SQLite, и в Postgres) и заполнить region по адресу у старых строк."""
+    работает и в SQLite, и в Postgres), заполнить region по адресу и производные
+    поля у старых строк, создать индексы постраничного списка.
+
+    Порядок именно такой: сначала бэкофилл, потом индексы. Наоборот 161k UPDATE'ов
+    ещё и перестраивали бы четыре индекса построчно."""
     from sqlalchemy import inspect, text
     cols = {c["name"] for c in inspect(db.get_bind()).get_columns("call_company")}
-    if "region" not in cols:
-        db.execute(text("ALTER TABLE call_company ADD COLUMN region VARCHAR(96)"))
-    if "max_hit" not in cols:
-        db.execute(text("ALTER TABLE call_company ADD COLUMN max_hit INTEGER DEFAULT 0"))
-    if "site_phones" not in cols:
-        db.execute(text("ALTER TABLE call_company ADD COLUMN site_phones TEXT"))
-    if "site_emails" not in cols:
-        db.execute(text("ALTER TABLE call_company ADD COLUMN site_emails TEXT"))
+    added = [n for n, _d in _ADD_COLUMNS if n not in cols]
+    for name, decl in _ADD_COLUMNS:
+        if name not in cols:
+            db.execute(text(f"ALTER TABLE call_company ADD COLUMN {name} {decl}"))
     db.commit()
-    # заполнить/нормализовать регион у всех строк: NULL → из адреса, иначе привести
-    # регистр (чтобы «москва»/«Москва» слиплись). Обновляем только отличающиеся.
-    rows = db.execute(select(CallCompany.id, CallCompany.address, CallCompany.region)).all()
-    changed = 0
-    for cid, addr, reg in rows:
-        want = norm_region(reg) if reg else region_from_address(addr)
-        if want != (reg or ""):
-            db.execute(CallCompany.__table__.update().where(CallCompany.id == cid)
-                       .values(region=want))
-            changed += 1
-    if changed:
+    changed = _backfill(db, fresh="search_blob" in added)
+    for stmt in _DROP_INDEXES + _CREATE_INDEXES:
+        db.execute(text(stmt))
+    db.commit()
+    if added or changed:
+        # без статистики планировщик SQLite может взять не тот индекс и снова
+        # уйти в сортировку всей выборки; ANALYZE делаем только после миграции,
+        # на каждом старте он не нужен
+        db.execute(text("ANALYZE"))
         db.commit()
+        log.info("callbase: индексы очереди созданы, статистика обновлена")
+
+
+def _backfill(db: Session, fresh: bool) -> int:
+    """Заполнить/нормализовать регион и производные поля у строк, где их нет.
+    -> сколько строк тронуто. ``fresh`` — производные колонки только что заведены
+    (значит мигрировать надо всю таблицу, проверять нечего)."""
+    changed = _backfill_region(db)
+    if fresh or _needs_derived(db):
+        changed += _backfill_derived(db)
+    if changed:
+        log.info("callbase: мигрировано строк call_company: %d", changed)
         _bump_version()
+    return changed
+
+
+def _backfill_region(db: Session) -> int:
+    """Регион: NULL -> из адреса, иначе нормализовать регистр (чтобы «москва» и
+    «Москва» не расходились в фильтре). Проход по всей таблице на каждом старте —
+    как было и раньше, но UPDATE'ы теперь батчами, а не по одному на строку
+    (на 161k это были 161k отдельных запросов)."""
+    C = CallCompany
+    batch, changed = [], 0
+    for r in db.execute(select(C.id, C.address, C.region)):
+        want = norm_region(r.region) if r.region else region_from_address(r.address)
+        if want == (r.region or ""):
+            continue
+        batch.append({"cid": r.id, "region": want})
+        changed += 1
+        if len(batch) >= _BACKFILL_CHUNK:
+            _flush_backfill(db, batch)
+            batch = []
+    _flush_backfill(db, batch)
+    return changed
+
+
+def _needs_derived(db: Session) -> bool:
+    """Есть ли строки без производных полей. Дёшево благодаря частичному индексу
+    ix_cc_needs_backfill (он пуст, когда всё мигрировано), поэтому обычный старт
+    сервиса эту проверку не замечает. Нужна на случай, если прошлая миграция
+    оборвалась на середине (рестарт службы) — она резюмируется."""
+    return db.execute(select(CallCompany.id)
+                      .where(CallCompany.search_blob.is_(None)).limit(1)).first() is not None
+
+
+def _backfill_derived(db: Session) -> int:
+    """Производные поля (см. derived) у строк, где их ещё нет. Коммит на каждый
+    батч — прерванная миграция продолжается со следующего старта, а не начинается
+    заново."""
+    C = CallCompany
+    batch, changed = [], 0
+    for r in db.execute(select(C.id, C.name_short, C.name_full, C.inn, C.address,
+                               C.director, C.equipment, C.equipment_all, C.status,
+                               C.phones).where(C.search_blob.is_(None))):
+        batch.append({"cid": r.id, **derived(r)})
+        changed += 1
+        if len(batch) >= _BACKFILL_CHUNK:
+            _flush_backfill(db, batch)
+            batch = []
+    _flush_backfill(db, batch)
+    return changed
+
+
+def _flush_backfill(db: Session, batch: list[dict]) -> None:
+    """Один executemany на батч вместо UPDATE на каждую строку."""
+    if not batch:
+        return
+    cols = {k: sql_text(f":{k}") for k in batch[0] if k != "cid"}
+    db.execute(CallCompany.__table__.update()
+               .where(CallCompany.id == sql_text(":cid")).values(**cols), batch)
+    db.commit()
+
+
+# ---------------------------------------------------------------- постранично
+DEFAULT_PAGE_SIZE = 50
+PAGE_SIZES = (25, 50, 100, 200)  # выбор в интерфейсе; 200 строк — предел читаемости
+
+
+def to_int(v, default: int = 0) -> int:
+    """«12» -> 12, ""/None/мусор -> default. Номер страницы приходит из URL и
+    может быть чем угодно — 422 продажнику показывать нельзя."""
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def norm_page_size(v) -> int:
+    """Размер страницы из URL -> ближайший разрешённый (защита от ?size=100000)."""
+    n = to_int(v, DEFAULT_PAGE_SIZE)
+    return n if n in PAGE_SIZES else DEFAULT_PAGE_SIZE
+
+
+@dataclass(frozen=True)
+class PageResult:
+    """Одна страница очереди + всё, что нужно навигации в шаблоне."""
+
+    rows: list      # строки ЭТОЙ страницы (не всей выборки)
+    total: int      # всего строк под фильтрами
+    page: int       # текущая страница, 1-based, уже приведена в диапазон
+    size: int
+    pages: int      # всего страниц, минимум 1 (пустая выборка — тоже страница)
+
+    @property
+    def offset(self) -> int:
+        return (self.page - 1) * self.size
+
+    @property
+    def first_no(self) -> int:
+        """Номер первой строки страницы в общей нумерации (для «строки X-Y из N»)."""
+        return self.offset + 1 if self.total else 0
+
+    @property
+    def last_no(self) -> int:
+        return min(self.offset + self.size, self.total)
+
+    @property
+    def has_prev(self) -> bool:
+        return self.page > 1
+
+    @property
+    def has_next(self) -> bool:
+        return self.page < self.pages
+
+    def window(self, radius: int = 2) -> list[int]:
+        """Номера страниц вокруг текущей: на 3236 страницах показывать все нельзя."""
+        lo = max(1, self.page - radius)
+        hi = min(self.pages, self.page + radius)
+        return list(range(lo, hi + 1))
+
+
+def count_filtered(db: Session, base: str, **flt) -> int:
+    """Сколько строк в очереди под фильтрами. Отдельный дешёвый COUNT по тем же
+    условиям (по индексу, без чтения самих строк), результат кэшируется до
+    ближайшего изменения данных — иначе каждая перелистнутая страница считала бы
+    заново. Счёт точный: на 161k строк COUNT по индексу — единицы миллисекунд."""
+    key = (base,) + tuple(sorted(flt.items()))
+    n = _count_cache.get(key)
+    if n is None:
+        n = db.execute(_filtered(select(func.count()).select_from(CallCompany),
+                                 base, **flt)).scalar() or 0
+        if len(_count_cache) >= _COUNT_CACHE_MAX:
+            _count_cache.clear()
+        _count_cache[key] = n
+    return n
+
+
+def page(db: Session, base: str, page: int = 1, size: int = DEFAULT_PAGE_SIZE,
+         **flt) -> PageResult:
+    """Страница очереди: LIMIT size OFFSET (page-1)*size на стороне БД.
+
+    Почему LIMIT/OFFSET, а не keyset: интерфейсу нужен переход на произвольную
+    страницу («последняя», номер страницы), а keyset умеет только «следующая от
+    этой строки» — для прыжка всё равно понадобился бы OFFSET. Ключ сортировки
+    здесь составной из четырёх колонок с NULL'ами (rank_metric, priority,
+    revenue_num, id), keyset-условие по нему получается громоздким и легко
+    ломается. При этом OFFSET дёшев ровно потому, что индекс ix_cc_queue
+    повторяет ORDER BY целиком: СУБД проматывает записи индекса, не читая строки
+    таблицы и не сортируя. Keyset понадобится, если база вырастет до миллионов
+    строк или если появится сортировка не по индексу.
+
+    Номер страницы приводится в диапазон 1..pages — ?page=99999 показывает
+    последнюю страницу, а не пустоту и не 500.
+    """
+    size = norm_page_size(size)
+    total = count_filtered(db, base, **flt)
+    pages = max(1, -(-total // size))  # округление вверх
+    page = min(max(1, to_int(page, 1)), pages)
+    rows = []
+    if total:
+        rows = list(db.execute(_queue_stmt(base, **flt)
+                               .limit(size).offset((page - 1) * size)).scalars().all())
+    return PageResult(rows=rows, total=total, page=page, size=size, pages=pages)
 
 
 def pick(db: Session, base: str, skip: int = 0, **flt):
     """Текущая карточка очереди: (компания | None, всего_в_очереди).
-    Список id кэшируется на процесс — повторные показы/пропуски не сканируют базу."""
-    key = (base,) + tuple(sorted(flt.items()))
-    ids = _queue_cache.get(key)
-    if ids is None:
-        ids = _queue_ids(db, base, **flt)
-        _queue_cache[key] = ids
-    skip = max(0, skip)
-    company = db.get(CallCompany, ids[skip]) if skip < len(ids) else None
-    return company, len(ids)
+
+    Раньше строился полный список id очереди и брался элемент [skip]; теперь это
+    одна строка через LIMIT 1 OFFSET skip по тому же индексу — базу не читаем
+    целиком ни на показ карточки, ни на «Пропустить»."""
+    skip = max(0, to_int(skip, 0))
+    total = count_filtered(db, base, **flt)
+    if skip >= total:
+        return None, total
+    company = db.execute(_queue_stmt(base, **flt).limit(1).offset(skip)).scalars().first()
+    return company, total
 
 
 def count(db: Session, base: str) -> int:
@@ -476,7 +759,9 @@ def delete_company(db: Session, base: str, company_id: int) -> bool:
         w.writerow([getattr(c, f) if getattr(c, f) is not None else "" for f in fields])
     db.delete(c)
     db.commit()
-    _bump_version()
+    # aggregates=False: минус одна компания не стоит полного пересчёта списков
+    # регионов/ОКВЭД/оборудования (скан всей базы) на каждый клик продажника
+    _bump_version(aggregates=False)
     return True
 
 
@@ -498,3 +783,21 @@ def split_list(raw) -> list[str]:
 def tel_href(phone: str) -> str:
     """«+7 495 785-94-60» -> «tel:+74957859460»."""
     return "tel:" + re.sub(r"[^\d+]", "", phone)
+
+
+def fmt_mln(value) -> str:
+    """Выручка в рублях -> «1 234» / «0,4» млн для колонки списка; None -> «—».
+    Разряды разделяем узким пробелом, дробную часть — запятой (русская запись)."""
+    if value is None:
+        return "—"
+    mln = float(value) / 1e6
+    if mln and abs(mln) < 10:
+        return f"{mln:.1f}".replace(".", ",")
+    return f"{mln:,.0f}".replace(",", " ")
+
+
+def short_text(value, limit: int = 60) -> str:
+    """Обрезать длинное значение для ячейки таблицы (ОКВЭД с расшифровкой,
+    название) — иначе одна строка распирает всю страницу списка."""
+    s = str(value or "").strip()
+    return s if len(s) <= limit else s[:limit - 1].rstrip() + "…"

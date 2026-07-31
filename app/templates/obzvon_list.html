@@ -1,0 +1,133 @@
+{# Фрагмент «Список» — одна страница очереди обзвона.
+
+   Грузится отдельным запросом (как и obzvon_card.html) и подставляется в #card.
+   В шаблон приходит РОВНО одна страница строк (res.rows, 25-200 штук): рендерить
+   всю базу нельзя — 161k строк это десятки мегабайт HTML и мёртвый браузер.
+
+   Ссылки навигации ведут на полную страницу (href), а data-frag — адрес этого же
+   фрагмента; скрипт obzvon.html подменяет таблицу на месте, без JS работает
+   обычный переход. Фильтры зашиты в обе ссылки, поэтому отбор не теряется. #}
+
+{# служебные данные для формы фильтров наверху страницы (те же, что у карточки) #}
+<span data-dbtotal="{{ db_total }}" hidden></span>
+<script type="application/json" id="filters-data">{{ {"regions": regions, "okveds": okveds, "equipments": equipments}|tojson }}</script>
+
+{# «край достигнут»: ссылка остаётся на месте (кнопки не прыгают), но кликнуть
+   по ней нельзя — иначе «назад» с первой страницы перезагружал бы её же #}
+{% set off = 'aria-disabled="true" tabindex="-1" style="pointer-events:none;opacity:.45"' %}
+
+{% macro nav() %}
+  {# один и тот же блок навигации сверху и снизу таблицы: на 200 строках
+     прокручивать наверх ради «вперёд» неудобно. id внутри не используем —
+     блок выводится дважды. #}
+  <nav class="obz-pager" style="display:flex;gap:.3rem;align-items:center;flex-wrap:wrap;margin:.4rem 0">
+    <a href="{{ page_url(1) }}" data-frag="{{ frag_url(1) }}" role="button"
+       class="secondary outline" title="Первая страница"
+       {% if not res.has_prev %}{{ off|safe }}{% endif %}>«</a>
+    <a href="{{ page_url(res.page - 1 if res.has_prev else 1) }}"
+       data-frag="{{ frag_url(res.page - 1 if res.has_prev else 1) }}" role="button"
+       class="secondary outline" title="Предыдущая"
+       {% if not res.has_prev %}{{ off|safe }}{% endif %}>‹ Назад</a>
+
+    {% for n in res.window() %}
+      {% if n == res.page %}
+        <a href="{{ page_url(n) }}" data-frag="{{ frag_url(n) }}" role="button"
+           class="contrast" aria-current="page">{{ n }}</a>
+      {% else %}
+        <a href="{{ page_url(n) }}" data-frag="{{ frag_url(n) }}" role="button"
+           class="secondary outline">{{ n }}</a>
+      {% endif %}
+    {% endfor %}
+
+    <a href="{{ page_url(res.page + 1 if res.has_next else res.pages) }}"
+       data-frag="{{ frag_url(res.page + 1 if res.has_next else res.pages) }}" role="button"
+       class="secondary outline" title="Следующая"
+       {% if not res.has_next %}{{ off|safe }}{% endif %}>Вперёд ›</a>
+    <a href="{{ page_url(res.pages) }}" data-frag="{{ frag_url(res.pages) }}" role="button"
+       class="secondary outline" title="Последняя страница"
+       {% if not res.has_next %}{{ off|safe }}{% endif %}>»</a>
+
+    <small style="margin-left:.4rem">страница {{ res.page }} из {{ res.pages }}</small>
+  </nav>
+{% endmacro %}
+
+<article>
+  <header style="display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap">
+    <strong>
+      {% if res.total %}
+        Строки {{ res.first_no }}–{{ res.last_no }} из {{ res.total }}
+      {% else %}
+        Под фильтры не попала ни одна компания
+      {% endif %}
+    </strong>
+    <small>
+      по
+      {% for n in page_sizes %}
+        {%- if n == res.size -%}
+          <strong>{{ n }}</strong>
+        {%- else -%}
+          <a href="{{ size_url(n) }}" data-frag="{{ size_frag_url(n) }}">{{ n }}</a>
+        {%- endif -%}
+        {{ " · " if not loop.last }}
+      {% endfor %}
+      на странице
+    </small>
+  </header>
+
+  {{ nav() }}
+
+  {% if res.rows %}
+  <div style="overflow-x:auto">
+  <table role="grid">
+    <thead>
+      <tr>
+        <th style="width:4rem">№</th>
+        <th>Компания</th>
+        <th>Регион</th>
+        <th>Основной ОКВЭД</th>
+        <th>Телефон</th>
+        <th style="text-align:right" title="«Итоговый балл приоритета» из расчёта">Балл</th>
+        <th style="text-align:right">Выручка, млн ₽</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in res.rows %}
+        {% set row_no = res.offset + loop.index0 %}{# 0-based = skip карточки #}
+        {% set phones = split_list(c.phones) %}
+        <tr>
+          <td>{{ row_no + 1 }}</td>
+          <td>
+            <strong>{{ short_text(c.name_short or c.name_full, 70) }}</strong>
+            {% if c.inn %}<br><small>ИНН {{ c.inn }}</small>{% endif %}
+            {% if not c.is_active %} <small><mark>не действует</mark></small>{% endif %}
+          </td>
+          <td><small>{{ c.region or "—" }}</small></td>
+          <td><small>{{ short_text(c.okved_main, 44) }}</small></td>
+          <td>
+            {% if phones %}
+              <a href="{{ tel_href(phones[0]) }}">{{ phones[0] }}</a>
+              {% if phones|length > 1 %}<br><small>ещё {{ phones|length - 1 }}</small>{% endif %}
+            {% else %}—{% endif %}
+          </td>
+          <td style="text-align:right">{{ c.priority or 0 }}</td>
+          <td style="text-align:right">{{ fmt_mln(c.revenue_num) }}</td>
+          <td><a href="{{ card_url(row_no) }}" role="button" class="secondary outline"
+                 title="Открыть карточку этой компании">Открыть</a></td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  {{ nav() }}
+  {% else %}
+  <p><small>Ослабьте фильтры сверху — например, снимите «только с телефоном»
+     или «имеют сотовый номер».</small></p>
+  {% endif %}
+
+  <footer>
+    <small>Порядок тот же, что у карточки: общий приоритет (балл × выручка) ↓,
+      балл приоритета ↓, выручка ↓. Всего в базе «{{ label }}»: {{ db_total }}.</small>
+  </footer>
+</article>

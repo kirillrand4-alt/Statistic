@@ -6,9 +6,15 @@
 
 GET  /{base}          — каркас страницы (мгновенный, без БД)
 GET  /{base}/card     — HTML-фрагмент карточки очереди (всё, что требует БД)
+GET  /{base}/list     — HTML-фрагмент постраничного списка очереди
 POST /{base}/upload   — загрузка выгрузки Checko (xlsx/tsv/csv)
 POST /{base}/delete   — удалить текущую строку и показать следующую
 POST /{base}/clear    — очистить базу целиком (для перезаливки)
+
+У страницы два режима (``view`` в URL): «card» — карточка по одной компании
+(рабочий режим обзвона, как было) и «list» — постраничный список. Список нужен
+на объединённой базе в 161k строк: показывать её целиком нельзя ни базе, ни
+браузеру, поэтому строки берутся страницами на стороне БД (callbase.page).
 """
 from __future__ import annotations
 
@@ -101,7 +107,10 @@ def _flt(**raw) -> dict:
     return out
 
 
-def _qs(flt: dict, skip: int = 0, msg: str = "") -> str:
+def _qs(flt: dict, skip: int = 0, msg: str = "", **extra) -> str:
+    """Строка запроса со ВСЕМИ фильтрами — так состояние переживает и переход по
+    страницам, и переключение режима, и редирект после удаления. ``extra`` —
+    состояние списка (view/page/size); пустые значения не тащим в URL."""
     params = {}
     for name, (typ, _d) in _FILTER_FIELDS.items():
         v = flt[name]
@@ -111,9 +120,22 @@ def _qs(flt: dict, skip: int = 0, msg: str = "") -> str:
             params[name] = v
     if skip:
         params["skip"] = skip
+    for name, v in extra.items():
+        if v:
+            params[name] = v
     if msg:
         params["msg"] = msg
     return urlencode(params)
+
+
+# Режимы страницы. По умолчанию — карточка: это привычный рабочий режим обзвона,
+# список включается переключателем и запоминается в URL.
+_VIEWS = ("card", "list")
+DEFAULT_VIEW = "card"
+
+
+def _view(v: str) -> str:
+    return v if v in _VIEWS else DEFAULT_VIEW
 
 
 @router.get("/")
@@ -130,7 +152,8 @@ def obzvon_page(request: Request, base: str, q: str = "", region: str = "",
                 rev_from: str = "", rev_to: str = "",
                 only_phone: int | None = None, active_only: int | None = None,
                 mobile_only: int | None = None, f: int = 0,
-                skip: int = 0, msg: str = ""):
+                skip: int = 0, msg: str = "",
+                view: str = "", page: str = "", size: str = ""):
     # Числовые фильтры принимаем как строки: форма-фильтр авто-сабмитится и шлёт
     # пустые поля как "" — FastAPI отверг бы "" для float/int (422). _flt приводит
     # "" -> дефолт, "5" -> 5. (У /card и /delete таких пустых значений не бывает.)
@@ -147,10 +170,24 @@ def obzvon_page(request: Request, base: str, q: str = "", region: str = "",
                active_only=active_only if active_only is not None else dflt,
                mobile_only=mobile_only if mobile_only is not None else dflt)
     active = any(flt[name] != default for name, (typ, default) in _FILTER_FIELDS.items())
+    view = _view(view)
+    size = callbase.norm_page_size(size)
+    page_no = max(1, callbase.to_int(page, 1))
+    # фрагмент грузится отдельным запросом; какой именно — решает режим.
+    # В адрес фрагмента кладём только то, что нужно ЕМУ: карточке — skip,
+    # списку — номер страницы и размер (сам режим уже зашит в путь).
+    if view == "list":
+        frag, frag_qs = "list", _qs(flt, 0, page=page_no, size=size)
+    else:
+        frag, frag_qs = "card", _qs(flt, skip)
     return templates.TemplateResponse(request, "obzvon.html", {
         "base": base, "label": callbase.BASES[base], "bases": callbase.BASES,
         "flt": flt, "skip": skip, "msg": msg, "filters_active": active,
-        "card_qs": _qs(flt, skip),
+        "view": view, "page": page_no, "size": size,
+        "frag_url": f"{OBZ}/{base}/{frag}", "frag_qs": frag_qs,
+        # ссылки переключателя режимов: фильтры сохраняются, страница сбрасывается
+        "card_url": f"{OBZ}/{base}?{_qs(flt, skip, view='card')}",
+        "list_url": f"{OBZ}/{base}?{_qs(flt, 0, view='list', size=size)}",
         "base_path": OBZ,  # контекст перекрывает общий Jinja-глобал основного приложения
     })
 
@@ -193,6 +230,64 @@ def obzvon_card(request: Request, base: str, q: str = "", region: str = "",
         "tel_href": callbase.tel_href,
         "is_admin": _is_admin(request),
         "qs_next": _qs(flt, skip + 1),  # «Пропустить»
+        "base_path": OBZ,
+    })
+
+
+@router.get("/{base}/list")
+def obzvon_list(request: Request, base: str, q: str = "", region: str = "",
+                okved: str = "", equipment: str = "",
+                hit_from: str = "", hit_to: str = "",
+                rank_from: str = "", rank_to: str = "",
+                rev_from: str = "", rev_to: str = "",
+                only_phone: str = "1", active_only: str = "1", mobile_only: str = "0",
+                page: str = "1", size: str = "", db: Session = Depends(get_db)):
+    """HTML-фрагмент постраничного списка очереди.
+
+    В БД уходит ровно две вещи: COUNT под фильтрами (кэшируется) и одна страница
+    строк (LIMIT/OFFSET по индексу очереди). Всю базу не читаем ни здесь, ни в
+    шаблоне — на 161k строк это и был источник тормозов.
+
+    ``page``/``size`` принимаем строками: ссылки навигации и селект размера
+    страницы уходят в тот же авто-сабмитящийся URL, а 422 продажнику показывать
+    нельзя — callbase приводит мусор к дефолтам и загоняет номер в диапазон."""
+    base = _check_base(base)
+    flt = _flt(q=q, region=region, okved=okved, equipment=equipment,
+               hit_from=hit_from, hit_to=hit_to, rank_from=rank_from, rank_to=rank_to,
+               rev_from=rev_from, rev_to=rev_to, only_phone=only_phone,
+               active_only=active_only, mobile_only=mobile_only)
+    size_n = callbase.norm_page_size(size)
+    res = callbase.page(db, base, page=page, size=size_n, **flt)
+
+    def page_url(n: int) -> str:
+        """Ссылка на страницу n с сохранением фильтров и размера страницы.
+        Ведёт на полную страницу — навигация работает и без JS."""
+        return f"{OBZ}/{base}?{_qs(flt, 0, view='list', page=n, size=size_n)}"
+
+    def frag_url(n: int) -> str:
+        """Тот же переход, но адрес фрагмента: JS подменяет таблицу на месте,
+        не перезагружая страницу и не теряя развёрнутые фильтры."""
+        return f"{OBZ}/{base}/list?{_qs(flt, 0, page=n, size=size_n)}"
+
+    def card_url(row_no: int) -> str:
+        """Открыть карточку строки: её позиция в очереди = skip (порядок один
+        и тот же, поэтому номер строки списка прямо переводится в skip)."""
+        return f"{OBZ}/{base}?{_qs(flt, row_no, view='card')}"
+
+    return templates.TemplateResponse(request, "obzvon_list.html", {
+        "base": base, "label": callbase.BASES[base], "flt": flt, "res": res,
+        "regions": callbase.regions(db, base), "okveds": callbase.okveds(db, base),
+        "equipments": callbase.equipments(db, base),
+        "db_total": callbase.count(db, base),
+        "page_sizes": callbase.PAGE_SIZES,
+        "page_url": page_url, "frag_url": frag_url, "card_url": card_url,
+        # смена размера страницы всегда возвращает на первую страницу: иначе
+        # «страница 40 по 25» после переключения на 200 уехала бы за конец
+        "size_url": lambda n: f"{OBZ}/{base}?{_qs(flt, 0, view='list', size=n)}",
+        "size_frag_url": lambda n: f"{OBZ}/{base}/list?{_qs(flt, 0, size=n)}",
+        "split_list": callbase.split_list, "tel_href": callbase.tel_href,
+        "fmt_mln": callbase.fmt_mln, "short_text": callbase.short_text,
+        "is_admin": _is_admin(request),
         "base_path": OBZ,
     })
 

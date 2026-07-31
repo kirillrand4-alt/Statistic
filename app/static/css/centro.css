@@ -1,0 +1,901 @@
+/* ============================================================================
+   centro.css — оформление страниц «Центробежные 1 / 2» на панели обзвона.
+
+   КУДА КЛАСТЬ НА СЕРВЕРЕ:  C:\seostat\app\web\static\css\centro.css
+   (шаблон centro.html подключает её как {{ base_path }}/static/css/centro.css —
+   тем же способом, что боевые страницы подключают app.css).
+
+   Зачем отдельный файл, а не правка app.css: app.css общий для ВСЕХ страниц
+   обзвона (kc, meyer) и для сервиса статистики. Правки в нём поехали бы туда,
+   куда мы не смотрим. centro.css грузится ТОЛЬКО со страниц /centro1 и /centro2,
+   поэтому здесь можно смело переопределять и body, и шапку — за пределы этих
+   двух страниц ничего не утечёт.
+
+   Визуальный язык взят у панели рассылки (seo-texts/sender/web/src/tokens.css,
+   styles.css): нейтральный светло-серый фон, белые карточки со слабой тенью,
+   скругления 8/12 px, пилюли-бейджи с парой «мягкий фон + насыщенный текст»,
+   секции с ЗАГЛАВНЫМИ подписями. Тёмно-синяя шапка — как в панели.
+   React сюда не тащим: это обычный CSS поверх существующей разметки Pico.
+
+   Про специфичность. app.css красит элементы селекторами вида
+   [data-theme="light"] table (0,0,1,1) и даже
+   [data-theme="light"] button:not(.secondary):not(.outline):not(.contrast)
+   (0,0,4,1). Поэтому свои правила пишем не короче: где нужно перебить кнопки —
+   селектор с тем же числом классов плюс один; где хватает равного веса —
+   выигрывает порядок подключения (centro.css идёт после app.css). !important
+   не используем нигде: он мешал бы дальнейшим правкам темы.
+
+   Темы. В обзвоне тёмной темы Pico нет (data-theme="light" зашит в шаблоне
+   obzvon_base.html), зато есть ДВА скина, которые переключает кнопка в шапке:
+   «ivory & gold» по умолчанию и [data-skin="green"]. Оба продолжают работать:
+   ниже скин просто переопределяет токены --ct-*. На случай, если тёмная тема
+   Pico когда-нибудь включится, набор токенов для [data-theme="dark"] тоже есть.
+   ============================================================================ */
+
+/* ------------------------------------------------------------------ токены */
+:root {
+  /* поверхности и текст (панель рассылки: --bg/--surface/--ink/--muted) */
+  --ct-bg: #f6f7f9;
+  --ct-surface: #ffffff;
+  --ct-surface-2: #f9fafb;
+  --ct-surface-3: #f2f4f7;
+  --ct-inset: #eceff3;
+  --ct-ink: #101828;
+  --ct-ink-2: #344054;
+  --ct-muted: #667085;
+  --ct-line: #e4e7ec;
+  --ct-line-strong: #d0d5dd;
+
+  /* акцент */
+  --ct-brand: #4f46e5;
+  --ct-brand-hover: #4338ca;
+  --ct-brand-soft: #eef2ff;
+  --ct-brand-line: #c7d2fe;
+  --ct-brand-text: #3730a3;
+  --ct-brand-ink: #ffffff;
+
+  /* статусы */
+  --ct-ok: #067647;        --ct-ok-soft: #ecfdf3;      --ct-ok-line: #abefc6;
+  --ct-warn: #b54708;      --ct-warn-soft: #fffaeb;    --ct-warn-line: #fedf89;
+  --ct-danger: #b42318;    --ct-danger-soft: #fef3f2;  --ct-danger-line: #fecdca;
+  --ct-info: #175cd3;      --ct-info-soft: #eff8ff;    --ct-info-line: #b2ddff;
+  --ct-violet: #6941c6;    --ct-violet-soft: #f4f3ff;  --ct-violet-line: #d9d6fe;
+
+  /* тёмно-синяя шапка — как у панели рассылки */
+  --ct-head-bg: #1f3864;
+  --ct-head-bg-2: #16294a;
+  --ct-head-ink: #ffffff;
+  --ct-head-dim: #b9c4dc;
+  --ct-head-line: rgba(255, 255, 255, .16);
+
+  /* геометрия и типографика */
+  --ct-r-xs: 4px; --ct-r-sm: 6px; --ct-r-md: 8px; --ct-r-lg: 12px; --ct-r-pill: 999px;
+  --ct-sh-1: 0 1px 2px rgba(16, 24, 40, .04), 0 1px 3px rgba(16, 24, 40, .06);
+  --ct-sh-2: 0 4px 8px -2px rgba(16, 24, 40, .08), 0 2px 4px -2px rgba(16, 24, 40, .04);
+  --ct-sh-3: 0 12px 24px -6px rgba(16, 24, 40, .12), 0 4px 8px -4px rgba(16, 24, 40, .06);
+  --ct-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+             "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --ct-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", "SF Mono", Menlo,
+             Consolas, "Liberation Mono", monospace;
+  --ct-caps: .06em;
+}
+
+/* «нежно салатовый» скин из app.css — переключатель в шапке продолжает
+   работать: меняются только акценты и цвет шапки, разметка та же */
+[data-skin="green"] {
+  --ct-brand: #4f7d22;
+  --ct-brand-hover: #3e6519;
+  --ct-brand-soft: #eef6e2;
+  --ct-brand-line: #cfe6a8;
+  --ct-brand-text: #3a6118;
+  --ct-head-bg: #23452f;
+  --ct-head-bg-2: #17301f;
+  --ct-head-dim: #bcd3b8;
+  --ct-violet: #3f7a5a; --ct-violet-soft: #eaf5ee; --ct-violet-line: #bfe0cb;
+}
+
+/* тёмная тема Pico (сейчас в обзвоне не включается, но если включат —
+   страница не станет белым пятном) */
+[data-theme="dark"] {
+  --ct-bg: #0b0d12;
+  --ct-surface: #14171f;
+  --ct-surface-2: #1a1e28;
+  --ct-surface-3: #10131a;
+  --ct-inset: #0d1016;
+  --ct-ink: #e6e9ef;
+  --ct-ink-2: #c3c9d4;
+  --ct-muted: #8b93a3;
+  --ct-line: #262b36;
+  --ct-line-strong: #333a48;
+  --ct-brand: #7c8cff; --ct-brand-hover: #93a0ff; --ct-brand-soft: #1b2040;
+  --ct-brand-line: #313a6b; --ct-brand-text: #a9b4ff; --ct-brand-ink: #0b0d12;
+  --ct-ok: #5fd39b;     --ct-ok-soft: #0e2a1f;     --ct-ok-line: #1f5d43;
+  --ct-warn: #fac15c;   --ct-warn-soft: #2b1f08;   --ct-warn-line: #6b4a12;
+  --ct-danger: #ff8078; --ct-danger-soft: #2e1210; --ct-danger-line: #7a2a25;
+  --ct-info: #6cb6ff;   --ct-info-soft: #0d2135;   --ct-info-line: #1d4d7a;
+  --ct-violet: #a78bfa; --ct-violet-soft: #201a3d; --ct-violet-line: #3a2f6b;
+  --ct-head-bg: #0f1218; --ct-head-bg-2: #0b0d12;
+  --ct-head-dim: #a8b0be; --ct-head-line: rgba(255, 255, 255, .10);
+  --ct-sh-1: 0 1px 2px rgba(0, 0, 0, .4);
+  --ct-sh-2: 0 4px 10px -2px rgba(0, 0, 0, .5);
+  --ct-sh-3: 0 16px 32px -8px rgba(0, 0, 0, .6);
+}
+
+/* ------------------------------------------------------- фон и общая канва */
+/* перебиваем ивори-фон с бликами: панель рассылки — ровный светло-серый лист.
+   Селектор с [data-theme="light"] нужен, чтобы попасть в тот же вес, что и
+   правило app.css; выигрывает порядок подключения. */
+[data-theme="light"] body,
+[data-theme="dark"] body {
+  background-color: var(--ct-bg);
+  background-image: none;
+  color: var(--ct-ink);
+  font-family: var(--ct-font);
+  font-weight: 400;
+}
+/* тонкая лента у самого верха окна остаётся (примета сервиса), но в цветах
+   новой шапки, а не золотая */
+[data-theme="light"] body::before {
+  background: linear-gradient(90deg, var(--ct-head-bg), var(--ct-brand), var(--ct-head-bg));
+}
+
+/* ---------------------------------------------------------------- шапка */
+/* Шапку рисуем на СУЩЕСТВУЮЩЕЙ разметке obzvon_base.html: <nav> — первый
+   ребёнок main.container. Ни один боевой шаблон при этом не правится, а на
+   страницах kc/meyer шапка остаётся прежней (там centro.css не подключён). */
+main.container > nav:first-child {
+  background: linear-gradient(180deg, var(--ct-head-bg), var(--ct-head-bg-2));
+  border: 0;
+  border-radius: var(--ct-r-lg);
+  box-shadow: var(--ct-sh-2);
+  padding: .25rem .75rem;
+  margin: 0 0 1rem;
+  row-gap: 0;
+}
+main.container > nav:first-child strong,
+main.container > nav:first-child strong .orn {
+  color: var(--ct-head-ink);
+  font-family: var(--ct-font);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+main.container > nav:first-child a {
+  color: var(--ct-head-dim);
+  font-family: var(--ct-font);
+  font-size: .9rem;
+  border-radius: var(--ct-r-sm);
+  padding-inline: .6rem;
+}
+main.container > nav:first-child a:hover,
+main.container > nav:first-child a[aria-current="page"] {
+  color: var(--ct-head-ink);
+  background: rgba(255, 255, 255, .12);
+  text-decoration: none;
+}
+main.container > nav:first-child #skin-toggle {
+  background: rgba(255, 255, 255, .10);
+  border: 1px solid var(--ct-head-line);
+  color: var(--ct-head-ink);
+}
+
+/* подвал: без золотого орнамента, нейтральной строкой (как в панели) */
+main.container > footer {
+  border-top: 1px solid var(--ct-line);
+  color: var(--ct-muted);
+  font-family: var(--ct-font);
+}
+main.container > footer::before { content: none; }
+/* app.css рисует «❦ ✦ ❦» перед ЛЮБЫМ <footer> — внутри наших карточек этот
+   орнамент неуместен, гасим его селектором потяжелее исходного */
+.ct footer {
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+  text-align: left;
+  color: var(--ct-muted);
+  font-family: var(--ct-font);
+}
+[data-theme="light"] .ct footer::before,
+[data-theme="dark"] .ct footer::before { content: none; }
+
+/* ------------------------------------------------------------ корень страницы */
+.ct {
+  font-family: var(--ct-font);
+  color: var(--ct-ink);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.ct a { color: var(--ct-brand); text-underline-offset: 2px; }
+.ct a:hover { color: var(--ct-brand-hover); }
+.ct h2, .ct h3, .ct h4 {
+  font-family: var(--ct-font);
+  color: var(--ct-ink);
+  border: 0;
+  letter-spacing: -.01em;
+  margin: 0;
+}
+.ct h2 { font-size: 20px; font-weight: 600; padding: 0; }
+.ct h3 { font-size: 16px; font-weight: 600; }
+.ct h4 { font-size: 14px; font-weight: 600; }
+.ct p { font-family: var(--ct-font); margin: 0; }
+.ct small { font-size: 12px; }
+.ct hr { border: 0; border-top: 1px solid var(--ct-line); margin: 12px 0; }
+/* app.css делает <code> тёмной плашкой под золотую тему — на светлой карточке
+   панели уместнее спокойная вставка */
+.ct code, .ct-head code {
+  font-family: var(--ct-mono);
+  font-size: 12px;
+  background: var(--ct-inset);
+  color: var(--ct-ink-2);
+  padding: 1px 5px;
+  border-radius: var(--ct-r-xs);
+}
+
+/* заголовок раздела: маленькие ЗАГЛАВНЫЕ приглушённым — как .section-title */
+.ct-section-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: var(--ct-caps);
+  color: var(--ct-muted);
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+/* ------------------------------------------------------- заголовок страницы */
+.ct-head {
+  background: var(--ct-surface);
+  border: 1px solid var(--ct-line);
+  border-radius: var(--ct-r-lg);
+  box-shadow: var(--ct-sh-1);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.ct-head-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.ct-title { font-size: 20px; }
+.ct-sub { color: var(--ct-muted); font-size: 13px; margin-top: 2px; }
+
+/* Вкладки баз и пагинация — это <nav>, и по ним бьют ДВА чужих правила:
+   Pico  «nav { justify-content: space-between }» (чипы разъезжаются по всей
+   ширине строки) и app.css «[data-theme=light] nav» (золотая линия снизу,
+   padding-bottom и margin-bottom 1rem). Тег в селекторе плюс два класса
+   перебивают оба; проверено по pico.min.css v2 и app.css. */
+.ct nav.ct-tabs, .ct nav.ct-pager {
+  justify-content: flex-start;
+  border: 0;
+  padding-bottom: 0;
+}
+
+/* вкладки баз */
+.ct-tabs, .ct nav.ct-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+.ct-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--ct-line-strong);
+  border-radius: var(--ct-r-pill);
+  background: var(--ct-surface);
+  color: var(--ct-ink-2);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.ct-tab:hover { border-color: var(--ct-muted); color: var(--ct-ink); text-decoration: none; }
+.ct-tab.is-on {
+  background: var(--ct-brand-soft);
+  border-color: var(--ct-brand-line);
+  color: var(--ct-brand-text);
+  font-weight: 600;
+}
+.ct-tab--muted { color: var(--ct-muted); border-style: dashed; }
+
+/* app.css красит ЛЮБУЮ ссылку внутри <nav> — «[data-theme=light] nav a»
+   (свой цвет, радиус .4rem, padding-inline .55rem) и отдельно :hover в золото.
+   Вкладки баз и пагинация лежат именно в <nav>, поэтому свой вид возвращаем
+   селектором тяжелее исходного (тег + два класса). */
+.ct nav a.ct-tab {
+  color: var(--ct-ink-2);
+  border-radius: var(--ct-r-pill);
+  padding: 6px 12px;
+}
+.ct nav a.ct-tab:hover {
+  color: var(--ct-ink);
+  background: var(--ct-surface);
+  text-decoration: none;
+}
+.ct nav a.ct-tab.is-on { color: var(--ct-brand-text); background: var(--ct-brand-soft); }
+.ct nav a.ct-tab--muted { color: var(--ct-muted); }
+
+/* счётчики базы (заполняет скрипт из JSON фрагмента) */
+.ct-stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.ct-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--ct-surface-3);
+  border: 1px solid var(--ct-line);
+  border-radius: var(--ct-r-md);
+  font-size: 12px;
+  color: var(--ct-muted);
+  white-space: nowrap;
+}
+.ct-stat b {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ct-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------- карточки */
+/* именно <section class="ct-card">, а не <article>: у Pico + app.css article
+   получает золотую филигрань в углах и градиент — на «панельном» листе это
+   лишнее, а гасить чужие ::before/::after дороже, чем взять другой тег */
+.ct-card {
+  background: var(--ct-surface);
+  border: 1px solid var(--ct-line);
+  border-radius: var(--ct-r-lg);
+  box-shadow: var(--ct-sh-1);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.ct-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.ct-card-head .ct-title-wrap { min-width: 0; }
+.ct-note { color: var(--ct-muted); font-size: 13px; }
+.ct-none { color: var(--ct-muted); }
+
+/* сетка «две колонки» для реквизитов/финансов */
+.ct-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+/* ----------------------------------------------------------------- бейджи */
+.ct-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ct-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--ct-r-pill);
+  background: var(--ct-inset);
+  color: var(--ct-ink-2);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.ct-badge--new     { background: var(--ct-info-soft);   color: var(--ct-info);   border-color: var(--ct-info-line); }
+.ct-badge--buy     { background: var(--ct-ok-soft);     color: var(--ct-ok);     border-color: var(--ct-ok-line); font-weight: 600; }
+.ct-badge--hot     { background: var(--ct-danger-soft); color: var(--ct-danger); border-color: var(--ct-danger-line); font-weight: 600; }
+.ct-badge--warm    { background: var(--ct-warn-soft);   color: var(--ct-warn);   border-color: var(--ct-warn-line); }
+.ct-badge--brand   { background: var(--ct-brand-soft);  color: var(--ct-brand-text); border-color: var(--ct-brand-line); }
+.ct-badge--violet  { background: var(--ct-violet-soft); color: var(--ct-violet); border-color: var(--ct-violet-line); }
+.ct-badge--muted   { background: var(--ct-surface-3);   color: var(--ct-muted); }
+.ct-badge--danger  { background: var(--ct-danger-soft); color: var(--ct-danger); border-color: var(--ct-danger-line); }
+
+/* --------------------------------------------------------------- кнопки */
+/* app.css красит button/[role=button] селектором с четырьмя классами
+   (:not(.secondary):not(.outline):not(.contrast)) — чтобы перебить его,
+   свой селектор должен весить больше. Обычные <a class="ct-btn"> под то
+   правило не подпадают вовсе, поэтому им хватает одного класса. */
+.ct-btn,
+.ct button.ct-btn:not(.secondary):not(.outline):not(.contrast),
+.ct [role="button"].ct-btn:not(.secondary):not(.outline):not(.contrast) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--ct-line-strong);
+  background: var(--ct-surface);
+  color: var(--ct-ink);
+  padding: 7px 14px;
+  border-radius: var(--ct-r-sm);
+  cursor: pointer;
+  font-family: var(--ct-font);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: normal;
+  text-transform: none;
+  text-decoration: none;
+  white-space: nowrap;
+  box-shadow: none;
+  transition: background-color .12s, border-color .12s, color .12s;
+}
+.ct-btn:hover,
+.ct button.ct-btn:not(.secondary):not(.outline):not(.contrast):hover {
+  background: var(--ct-surface-2);
+  border-color: var(--ct-muted);
+  color: var(--ct-ink);
+  text-decoration: none;
+  transform: none;
+  filter: none;
+}
+.ct-btn.is-on,
+.ct-btn--primary,
+.ct button.ct-btn--primary:not(.secondary):not(.outline):not(.contrast) {
+  background: var(--ct-brand);
+  border-color: var(--ct-brand);
+  color: var(--ct-brand-ink);
+  font-weight: 600;
+}
+.ct-btn.is-on:hover,
+.ct-btn--primary:hover,
+.ct button.ct-btn--primary:not(.secondary):not(.outline):not(.contrast):hover {
+  background: var(--ct-brand-hover);
+  border-color: var(--ct-brand-hover);
+  color: var(--ct-brand-ink);
+}
+.ct-btn--sm { padding: 4px 10px; font-size: 12px; }
+.ct-btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+/* Ссылки-кнопки красились цветом обычной ссылки: «.ct a» (класс + элемент)
+   весит больше одноклассовых .ct-btn и .ct-btn--primary. На «Пропустить →»
+   это давало текст цвета --ct-brand поверх фона --ct-brand — кнопка выглядела
+   пустой синей плашкой. Возвращаем кнопкам их цвета селектором тяжелее. */
+.ct a.ct-btn,
+.ct a.ct-btn:hover { color: var(--ct-ink); }
+.ct a.ct-btn.is-on,
+.ct a.ct-btn.is-on:hover,
+.ct a.ct-btn--primary,
+.ct a.ct-btn--primary:hover { color: var(--ct-brand-ink); }
+
+/* «Обзвонили — убрать из базы»: действие необратимое, поэтому красный контур.
+   Сплошную заливку не даём — сплошная красная кнопка притягивает промахи,
+   а на наведении фон всё же темнеет, чтобы было видно, куда жмёшь. */
+.ct-btn--danger,
+.ct button.ct-btn--danger:not(.secondary):not(.outline):not(.contrast) {
+  background: var(--ct-danger-soft);
+  border-color: var(--ct-danger-line);
+  color: var(--ct-danger);
+  font-weight: 600;
+}
+.ct-btn--danger:hover,
+.ct button.ct-btn--danger:not(.secondary):not(.outline):not(.contrast):hover {
+  background: var(--ct-danger-line);
+  border-color: var(--ct-danger);
+  color: var(--ct-danger);
+}
+
+/* Ряд действий карточки. Pico тянет любой <button> на всю ширину, из-за чего
+   «убрать из базы» разъезжалась на весь экран, а подпись падала под неё. */
+.ct-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ct-card-actions form { display: flex; margin: 0; }
+.ct-card-actions .ct-btn { width: auto; }
+/* та же беда, что у вкладок: кнопки пагинации — ссылки внутри <nav>, и
+   «[data-theme=light] nav a» из app.css перебивает им цвет, радиус и hover */
+.ct nav a.ct-btn {
+  color: var(--ct-ink);
+  border-radius: var(--ct-r-sm);
+  padding: 7px 14px;
+}
+.ct nav a.ct-btn--sm { padding: 4px 10px; }
+.ct nav a.ct-btn:hover {
+  color: var(--ct-ink);
+  background: var(--ct-surface-2);
+  text-decoration: none;
+}
+.ct nav a.ct-btn.is-on, .ct nav a.ct-btn.is-on:hover { color: var(--ct-brand-ink); }
+/* «блик», который app.css вешает на кнопки псевдоэлементом (селектор с четырьмя
+   классами), гасим селектором на класс тяжелее — иначе по кнопке «Применить»
+   на наведении пробегала бы белая полоса от золотой темы */
+.ct .ct-btn::after,
+.ct button.ct-btn:not(.secondary):not(.outline):not(.contrast)::after,
+.ct [role="button"].ct-btn:not(.secondary):not(.outline):not(.contrast)::after {
+  content: none;
+}
+
+/* Переключатель режимов размечен как <div role="group"> — а Pico считает
+   [role=group] «слипшейся» группой кнопок: тянет детей на всю ширину
+   (flex:1 1 auto) и срезает им внутренние углы. Возвращаем кнопки к своему
+   размеру и радиусу (селекторы тяжелее пиковских [role=group]>*). */
+.ct-modes { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; width: auto; box-shadow: none; }
+/* кнопки по своему содержимому (у .ct-btn white-space:nowrap), а лишние
+   переносятся на вторую строку — на узком экране ряд действий не уезжает вбок */
+.ct-modes > * { flex: 0 0 auto; }
+.ct-modes > .ct-btn:not(:first-child) {
+  margin-left: 0;
+  border-top-left-radius: var(--ct-r-sm);
+  border-bottom-left-radius: var(--ct-r-sm);
+}
+.ct-modes > .ct-btn:not(:last-child) {
+  border-top-right-radius: var(--ct-r-sm);
+  border-bottom-right-radius: var(--ct-r-sm);
+}
+
+/* --------------------------------------------------------------- фильтры */
+.ct-filters {
+  background: var(--ct-surface);
+  border: 1px solid var(--ct-line);
+  border-radius: var(--ct-r-lg);
+  box-shadow: var(--ct-sh-1);
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+.ct-filters > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--ct-font);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ct-ink-2);
+  text-transform: none;
+  letter-spacing: normal;
+}
+.ct-filters > summary::-webkit-details-marker { display: none; }
+.ct-filters > summary::before {
+  content: "▸";
+  color: var(--ct-muted);
+  transition: transform .12s;
+}
+.ct-filters[open] > summary::before { transform: rotate(90deg); }
+/* тот же чужой шеврон Pico, что и у раскрывашек карточки, плюс его же отступ
+   в 1rem под раскрытым summary (у нас ниже свой margin-top у сетки полей) */
+.ct-filters > summary::after { content: none; }
+.ct-filters[open] > summary { margin-bottom: 0; }
+.ct-filters-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px 14px;
+  margin-top: 12px;
+}
+/* подписи полей: у app.css они золотые КАПСОМ с разрядкой — здесь спокойнее */
+.ct-filters label {
+  display: block;
+  font-family: var(--ct-font);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ct-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--ct-caps);
+  margin: 0 0 4px;
+}
+.ct-filters label small {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+}
+.ct-filters input[type="text"],
+.ct-filters select {
+  width: 100%;
+  margin: 0;
+  font-family: var(--ct-font);
+  font-size: 13px;
+  height: auto;
+  padding: 7px 10px;
+  color: var(--ct-ink);
+  /* именно background-COLOR: сокращённое background сбросило бы
+     background-image, а у <select> это единственная стрелка — Pico гасит
+     нативную (appearance:none) и рисует свою фоновой картинкой */
+  background-color: var(--ct-surface);
+  border: 1px solid var(--ct-line-strong);
+  border-radius: var(--ct-r-sm);
+  box-shadow: none;
+}
+/* справа запас под стрелку списка: Pico гасит нативную (appearance:none) и
+   рисует свой шеврон фоном у правого края — с обычным padding'ом длинное
+   название региона заезжало бы прямо под него */
+.ct-filters select { padding-right: 28px; }
+.ct-filters input[type="text"]:focus,
+.ct-filters select:focus {
+  border-color: var(--ct-brand);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, .18);
+}
+/* Чекбоксы-«чипы»: как .chip в панели рассылки.
+   Селектор нарочно длинный: app.css красит подписи полей золотым КАПСОМ
+   ([data-theme="light"] label) и отдельно правит label:has(> input[type=checkbox])
+   — чтобы победить оба (и не зависеть от поддержки :has), нужно три класса. */
+.ct-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.ct-chip,
+.ct-filters .ct-chips label.ct-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--ct-line-strong);
+  border-radius: var(--ct-r-pill);
+  background: var(--ct-surface);
+  color: var(--ct-ink-2);
+  font-family: var(--ct-font);
+  font-size: 13px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  cursor: pointer;
+  user-select: none;
+  margin: 0;
+}
+.ct-chip:hover { border-color: var(--ct-muted); }
+.ct-chip input[type="checkbox"] { margin: 0; accent-color: var(--ct-brand); }
+/* отмеченный чип подсвечен акцентом. :has() есть во всех актуальных браузерах;
+   если его нет — чип просто останется белым, а сам чекбокс всё равно отмечен */
+.ct-chip:has(input:checked),
+.ct-filters .ct-chips label.ct-chip:has(input:checked) {
+  background: var(--ct-brand-soft);
+  border-color: var(--ct-brand-line);
+  color: var(--ct-brand-text);
+  font-weight: 500;
+}
+.ct-filters-actions { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+
+/* --------------------------------------------------------------- контакты */
+.ct-contacts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+/* list-style на <ul> тут мало: Pico вешает «ul li { list-style: square }» на САМ
+   <li>, а такое правило сильнее унаследованного — без явного list-style у li
+   рядом с каждым контактом торчал бы квадратный маркер. */
+.ct-contact {
+  list-style: none;
+  border: 1px solid var(--ct-line);
+  border-left: 3px solid var(--ct-line-strong);
+  border-radius: var(--ct-r-md);
+  background: var(--ct-surface-2);
+  padding: 10px 12px;
+}
+/* закупщики — главное, ради чего продажник открывает карточку */
+.ct-contact.is-buyer {
+  border-left-color: var(--ct-ok);
+  background: var(--ct-ok-soft);
+  border-color: var(--ct-ok-line);
+}
+.ct-contact-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.ct-contact-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ct-ink);
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.ct-contact-value:hover { color: var(--ct-brand); text-decoration: underline; }
+.ct-contact-who { color: var(--ct-ink-2); font-size: 13px; margin-top: 2px; }
+.ct-contact-src { font-size: 12px; color: var(--ct-muted); margin-top: 4px; }
+.ct-contact-src a { font-weight: 500; overflow-wrap: anywhere; }
+.ct-url { color: var(--ct-muted); font-family: var(--ct-mono); font-size: 11px; }
+/* честная отметка «ссылки на источник нет» — требование владельца:
+   не притворяемся, что ссылка есть */
+.ct-nolink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px dashed var(--ct-line-strong);
+  border-radius: var(--ct-r-pill);
+  color: var(--ct-muted);
+  font-size: 11px;
+}
+
+/* --------------------------------------------------- новостные поводы */
+.ct-signals { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.ct-signal {
+  list-style: none;                /* см. комментарий у .ct-contact */
+  border: 1px solid var(--ct-line);
+  border-left: 3px solid var(--ct-line-strong);
+  border-radius: var(--ct-r-md);
+  background: var(--ct-surface-3);
+  padding: 10px 12px;
+}
+.ct-signal.is-hot  { border-left-color: var(--ct-danger); background: var(--ct-danger-soft); border-color: var(--ct-danger-line); }
+.ct-signal.is-warm { border-left-color: var(--ct-warn);   background: var(--ct-warn-soft);   border-color: var(--ct-warn-line); }
+.ct-signal-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.ct-signal-what { color: var(--ct-ink); font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
+.ct-signal-meta { font-size: 12px; color: var(--ct-muted); margin-top: 4px; }
+
+/* ------------------------------------------------------- пары «ключ-значение» */
+.ct-kv { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.ct-kv-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 9rem) 1fr;
+  gap: 4px 12px;
+  align-items: baseline;
+}
+.ct-kv dt { color: var(--ct-muted); font-size: 12px; }
+.ct-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--ct-ink); font-size: 13px; }
+.ct-kv dd a { overflow-wrap: anywhere; }
+@media (max-width: 520px) {
+  .ct-kv-row { grid-template-columns: 1fr; }
+}
+
+/* --------------------------------------------------------------- раскрывашки */
+/* в obzvon_base.html прописан «золотой чип» селектором #card details > summary
+   (вес 0,1,0,2) — перебиваем его селектором с тем же id плюс класс */
+.ct details, #card .ct details {
+  border: 1px solid var(--ct-line);
+  border-radius: var(--ct-r-md);
+  background: var(--ct-surface-2);
+  padding: 8px 12px;
+  margin: 8px 0 0;
+}
+.ct details > summary, #card .ct details > summary {
+  cursor: pointer;
+  width: auto;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 0;
+  font-family: var(--ct-font);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ct-ink-2);
+}
+.ct details > summary::before, #card .ct details > summary::before {
+  content: "▸";
+  color: var(--ct-muted);
+  transition: transform .12s;
+}
+/* у Pico своя стрелка-шеврон на summary::after (float:right, а в нашем flex-
+   summary она становится ещё одним элементом строки) — со своим «▸» получалось
+   бы два маркера подряд, поэтому чужой гасим */
+.ct details > summary::after, #card .ct details > summary::after { content: none; }
+.ct details[open] > summary::before, #card .ct details[open] > summary::before {
+  transform: rotate(90deg);
+}
+.ct details > summary:hover, #card .ct details > summary:hover {
+  background: none;
+  color: var(--ct-brand);
+}
+.ct-list-plain { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ct-list-plain li { list-style: none; font-size: 13px; color: var(--ct-ink-2); }
+
+/* ---------------------------------------------------------------- таблица */
+.ct-table-wrap {
+  border: 1px solid var(--ct-line);
+  border-radius: var(--ct-r-lg);
+  background: var(--ct-surface);
+  box-shadow: var(--ct-sh-1);
+  overflow-x: auto;
+}
+/* .ct .ct-table рядом с .ct-table не для красоты: app.css красит таблицу
+   селектором «[data-theme=light] table» (золотая рамка + радиус 10px), и
+   одного класса, чтобы его перебить, не хватает. */
+.ct-table, .ct .ct-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+  background: var(--ct-surface);
+  font-size: 13px;
+}
+.ct-table thead th {
+  text-align: left;
+  font-family: var(--ct-font);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--ct-caps);
+  color: var(--ct-muted);
+  background: var(--ct-surface-2);
+  border: 0;
+  border-bottom: 1px solid var(--ct-line);
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+.ct-table tbody td {
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--ct-line);
+  vertical-align: top;
+  color: var(--ct-ink-2);
+  background: var(--ct-surface);
+}
+.ct-table tbody tr:last-child td { border-bottom: 0; }
+.ct-table tbody tr:nth-child(even) td { background: var(--ct-surface); }
+.ct-table tbody tr:hover td { background: var(--ct-surface-2); }
+.ct-table td.ct-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* ссылки в таблице: app.css отдельно красит «[data-theme=light] table a» в
+   золото — перебиваем селектором с двумя классами (иначе телефоны, checko и
+   ссылки-источники в списке остались бы золотыми) */
+.ct-table a, .ct .ct-table a { color: var(--ct-brand); font-family: var(--ct-font); }
+.ct-table a:hover, .ct .ct-table a:hover { color: var(--ct-brand-hover); }
+.ct-table .ct-name { color: var(--ct-ink); font-weight: 600; }
+.ct-table .ct-dim { color: var(--ct-muted); font-size: 12px; }
+/* контакт прямо в ячейке списка: значение кликабельно, под ним — источник */
+.ct-cell-contact { margin-bottom: 6px; }
+.ct-cell-contact:last-child { margin-bottom: 0; }
+/* два класса — по той же причине, что и у .ct-table a: app.css задаёт
+   font-weight ссылкам таблицы селектором «[data-theme=light] table a» */
+.ct-cell-contact > a, .ct .ct-cell-contact > a {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.ct-cell-contact .ct-badge { margin-left: 4px; }
+.ct-cell-contact .ct-nolink { padding: 0 5px; }
+
+/* ------------------------------------------------------------- пагинация */
+.ct-pager, .ct nav.ct-pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 10px 0;
+}
+.ct-pager .ct-page-info { margin-left: 4px; color: var(--ct-muted); font-size: 12px; }
+
+/* ------------------------------------------------------------- сообщения */
+.ct-alert {
+  border: 1px solid var(--ct-warn-line);
+  background: var(--ct-warn-soft);
+  color: var(--ct-warn);
+  border-radius: var(--ct-r-md);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.ct-alert--error { border-color: var(--ct-danger-line); background: var(--ct-danger-soft); color: var(--ct-danger); }
+.ct-alert--info  { border-color: var(--ct-info-line);  background: var(--ct-info-soft);  color: var(--ct-info); }
+.ct-alert code {
+  font-family: var(--ct-mono);
+  font-size: 12px;
+  background: rgba(0, 0, 0, .06);
+  color: inherit;
+  padding: 1px 4px;
+  border-radius: var(--ct-r-xs);
+}
+.ct-loading { color: var(--ct-muted); font-size: 13px; padding: 16px; }
+
+/* ---------------------------------------------------------------- печать */
+@media print {
+  main.container > nav:first-child, .ct-filters, .ct-modes, .ct-tabs,
+  .ct-pager, .ct-card-actions { display: none; }
+  .ct-card { box-shadow: none; break-inside: avoid; }
+  .ct-contact-src a::after { content: " (" attr(href) ")"; font-size: 10px; }
+}
+
+/* ------------------------------------------------------- люди с должностями */
+/* Блок отдельный от контактов: тут человек с ролью, у которого телефона может
+   не быть вовсе. Технические ЛПР выделены рамкой — это те, ради кого всё
+   затевалось, и на карточке они должны находиться взглядом сразу. */
+.ct-people { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ct-person {
+  border: 1px solid var(--ct-line);
+  border-radius: var(--ct-r-sm);
+  padding: 8px 12px;
+  background: var(--ct-surface-2);
+}
+.ct-person.is-tech {
+  border-color: var(--ct-ok-line);
+  background: var(--ct-ok-soft);
+}
+.ct-person-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ct-person-lines { margin-top: 4px; font-size: 13px; }
+.ct-person-lines > div { margin-top: 2px; }

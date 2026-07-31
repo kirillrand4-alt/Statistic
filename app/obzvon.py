@@ -115,6 +115,8 @@ def create_app() -> FastAPI:
     # а не через templates.env.globals — тот общий с основным приложением.
     app.mount(f"{obz}/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(routes_obzvon.router, prefix=obz)
+    from app.api import routes_centro  # Центробежные 1/2
+    routes_centro.include_centro(app, prefix=obz)
 
     if obz:  # корень процесса -> на страницу обзвона (удобно при заходе на порт)
         @app.get("/", include_in_schema=False)

@@ -1,0 +1,195 @@
+{# ============================================================================
+   centro_list.html — ФРАГМЕНТ постраничного списка «Центробежные».
+
+   Куда класть на сервере: C:\seostat\app\web\templates\centro_list.html
+   (имя задано константой TPL_LIST в routes_centro.py).
+
+   Подгружается тем же скриптом в #card, что и карточка. В шаблон приходит
+   РОВНО одна страница строк (res.rows) плюс контакты этих строк одним
+   словарём contacts_by_inn — всю базу не рендерим ни здесь, ни в SQL.
+
+   Ссылки навигации ведут на полную страницу (href), а data-frag — адрес этого
+   же фрагмента: скрипт подменяет таблицу на месте, без JS работает обычный
+   переход. Фильтры зашиты в обе ссылки, поэтому отбор не теряется.
+
+   Контекст: db_error, db_total, stats, res (PageResult), contacts_by_inn,
+   regions, okveds, page_sizes, page_url(n), frag_url(n), card_url(row_no),
+   size_url(n), size_frag_url(n), flt, label, base, base_path + помощники
+   tel_href, mail_href, fmt_mln, short_text, split_list.
+   ============================================================================ #}
+
+{# те же служебные данные, что у карточки: списки для фильтров и счётчики шапки #}
+<span data-dbtotal="{{ db_total }}" hidden></span>
+<script type="application/json" id="filters-data">{{ {"regions": regions, "okveds": okveds, "stats": stats, "db_total": db_total}|tojson }}</script>
+
+{# «край достигнут»: кнопка остаётся на месте (навигация не прыгает), но клик
+   по ней невозможен — иначе «назад» с первой страницы перезагружал бы её же #}
+{% set off = 'aria-disabled="true" tabindex="-1"' %}
+
+{% macro nav() %}
+  {# один и тот же блок навигации сверху и снизу таблицы: на 200 строках
+     прокручивать наверх ради «вперёд» неудобно. id внутри не используем —
+     блок выводится дважды. #}
+  <nav class="ct-pager" aria-label="Страницы списка">
+    <a class="ct-btn ct-btn--sm" title="Первая страница"
+       href="{{ page_url(1) }}" data-frag="{{ frag_url(1) }}"
+       {% if not res.has_prev %}{{ off|safe }}{% endif %}>«</a>
+    <a class="ct-btn ct-btn--sm" title="Предыдущая"
+       href="{{ page_url(res.page - 1 if res.has_prev else 1) }}"
+       data-frag="{{ frag_url(res.page - 1 if res.has_prev else 1) }}"
+       {% if not res.has_prev %}{{ off|safe }}{% endif %}>‹ Назад</a>
+
+    {% for n in res.window() %}
+      <a class="ct-btn ct-btn--sm{% if n == res.page %} is-on{% endif %}"
+         href="{{ page_url(n) }}" data-frag="{{ frag_url(n) }}"
+         {% if n == res.page %}aria-current="page"{% endif %}>{{ n }}</a>
+    {% endfor %}
+
+    <a class="ct-btn ct-btn--sm" title="Следующая"
+       href="{{ page_url(res.page + 1 if res.has_next else res.pages) }}"
+       data-frag="{{ frag_url(res.page + 1 if res.has_next else res.pages) }}"
+       {% if not res.has_next %}{{ off|safe }}{% endif %}>Вперёд ›</a>
+    <a class="ct-btn ct-btn--sm" title="Последняя страница"
+       href="{{ page_url(res.pages) }}" data-frag="{{ frag_url(res.pages) }}"
+       {% if not res.has_next %}{{ off|safe }}{% endif %}>»</a>
+
+    <span class="ct-page-info">страница {{ res.page }} из {{ res.pages }}</span>
+  </nav>
+{% endmacro %}
+
+{% macro contact_cell(c) %}
+  {# Значение кликабельно (tel:/mailto:), рядом — источник ссылкой на страницу,
+     откуда контакт взят. Ссылки нет — так и написано. #}
+  {# кликабельна только http(s)-ссылка: схему источнику данных не доверяем #}
+  {% set url = c.source_url if (c.source_url or '').startswith(('http://', 'https://')) else '' %}
+  <div class="ct-cell-contact">
+    <a href="{{ c.href }}" title="{{ 'Позвонить' if c.kind == 'phone' else 'Написать' }} {{ c.value }}">{{ c.value }}</a>
+    {% if c.is_purchaser %}<span class="ct-badge ct-badge--buy">закупки</span>{% endif %}
+    {% if not c.in_sales_base %}<span class="ct-badge ct-badge--new">новый</span>{% endif %}
+    <div class="ct-dim">
+      {% if url %}
+        <a href="{{ url }}" target="_blank" rel="noopener noreferrer"
+           title="Открыть страницу-источник: {{ url }}">{{ short_text(c.source or 'источник', 26) }} ↗</a>
+      {% else %}
+        {{ short_text(c.source or 'источник не указан', 26) }}
+        <span class="ct-nolink">без ссылки</span>
+      {% endif %}
+    </div>
+  </div>
+{% endmacro %}
+
+<div class="ct">
+
+{% if db_error %}
+<p class="ct-alert ct-alert--error">{{ db_error }}</p>
+{% endif %}
+
+<section class="ct-card">
+  <header class="ct-card-head">
+    <h3>
+      {% if res.total %}
+        Строки {{ res.first_no }}–{{ res.last_no }} из {{ res.total }}
+      {% else %}
+        Под фильтры не попала ни одна компания
+      {% endif %}
+    </h3>
+    <span class="ct-note">
+      по
+      {% for n in page_sizes %}
+        {%- if n == res.size -%}
+          <strong>{{ n }}</strong>
+        {%- else -%}
+          <a href="{{ size_url(n) }}" data-frag="{{ size_frag_url(n) }}">{{ n }}</a>
+        {%- endif -%}
+        {{ " · " if not loop.last }}
+      {% endfor %}
+      на странице
+    </span>
+  </header>
+
+  {{ nav() }}
+
+  {% if res.rows %}
+  <div class="ct-table-wrap">
+    <table class="ct-table">
+      <thead>
+        <tr>
+          <th scope="col" style="width:3.5rem">№</th>
+          <th scope="col">Компания</th>
+          <th scope="col">Регион</th>
+          <th scope="col">Основной ОКВЭД</th>
+          <th scope="col">Контакты и источники</th>
+          <th scope="col" style="text-align:right" title="Общий приоритет: балл по ОКВЭД × выручка">Приоритет</th>
+          <th scope="col" style="text-align:right">Выручка, млн ₽</th>
+          <th scope="col"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in res.rows %}
+        {% set row_no = res.offset + loop.index0 %}{# 0-based = skip карточки #}
+        {% set cts = contacts_by_inn.get(c.inn) or [] %}
+        {# закупщики уже отсортированы наверх в SQL — первые два контакта и есть
+           «кому звонить»; остальные показывает карточка #}
+        {% set top = cts[:2] %}
+        <tr>
+          <td>{{ row_no + 1 }}</td>
+          <td>
+            <div class="ct-name">{{ short_text(c.name_short or c.name_full, 64) }}</div>
+            {% if c.inn %}
+            <div class="ct-dim">
+              ИНН <a href="https://checko.ru/search?query={{ c.inn|urlencode }}"
+                     target="_blank" rel="noopener noreferrer"
+                     title="Открыть карточку на checko.ru">{{ c.inn }} ↗</a>
+            </div>
+            {% endif %}
+            <div class="ct-badges" style="margin-top:4px">
+              {% if c.n_purchaser %}<span class="ct-badge ct-badge--buy">закупщики: {{ c.n_purchaser }}</span>{% endif %}
+              {% if c.n_signals %}<span class="ct-badge ct-badge--hot">поводы: {{ c.n_signals }}</span>{% endif %}
+              {% if c.in_obzvon %}<span class="ct-badge ct-badge--violet">в обзвоне</span>{% endif %}
+              {% if c.status and 'действ' not in (c.status|lower) %}
+              <span class="ct-badge ct-badge--danger">{{ short_text(c.status, 22) }}</span>
+              {% endif %}
+            </div>
+          </td>
+          <td class="ct-dim">{{ c.region or "—" }}</td>
+          <td class="ct-dim">{{ short_text(c.okved_main, 40) or "—" }}</td>
+          <td>
+            {% if top %}
+              {% for ct in top %}{{ contact_cell(ct) }}{% endfor %}
+              {% if cts|length > top|length %}
+              <div class="ct-dim">ещё {{ cts|length - top|length }} в карточке</div>
+              {% endif %}
+            {% else %}
+              <span class="ct-none">контактов нет</span>
+            {% endif %}
+          </td>
+          {# разряды пробелом, а не экспонента: у крупных компаний «%g» давал
+             «8,1408e+08» — в колонке чисел это выглядит как сбой #}
+          <td class="ct-num">{{ ('{:,.0f}'.format(c.rank_metric))|replace(',', ' ')
+                                if c.rank_metric and c.rank_metric >= 1
+                                else (('%g'|format(c.rank_metric))|replace('.', ',')
+                                      if c.rank_metric else (c.priority or 0)) }}</td>
+          <td class="ct-num">{{ fmt_mln(c.revenue_num) }}</td>
+          <td>
+            <a class="ct-btn ct-btn--sm" href="{{ card_url(row_no) }}"
+               title="Открыть карточку этой компании со всеми контактами">Открыть</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {{ nav() }}
+  {% elif not db_error %}
+  <p class="ct-note">Ослабьте фильтры сверху — например, снимите «есть контакт
+    закупщика» или «есть новостной повод».</p>
+  {% endif %}
+
+  <footer class="ct-note" style="margin-top:10px">
+    Порядок тот же, что у карточки: общий приоритет ↓, выручка ↓.
+    Всего в базе «{{ label }}»: {{ db_total }}.
+  </footer>
+</section>
+
+</div>

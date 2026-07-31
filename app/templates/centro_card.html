@@ -1,0 +1,464 @@
+{# ============================================================================
+   centro_card.html — ФРАГМЕНТ карточки очереди «Центробежные».
+
+   Куда класть на сервере: C:\seostat\app\web\templates\centro_card.html
+   (имя задано константой TPL_CARD в routes_centro.py).
+
+   Подгружается скриптом centro.html в #card — как боевая obzvon_card.html.
+   Здесь ВСЁ, что известно о компании: реквизиты, руководство, финансы, ОКВЭД,
+   оборудование, все контакты с источниками и живыми ссылками, все новостные
+   поводы. Разрушающих действий (удалить/загрузить) нет: база read-only,
+   её целиком пересобирает офлайн-скрипт.
+
+   Контекст: db_error, db_total, stats, company (dict|None), total, skip,
+   wrapped, contacts, phones, emails, purchasers, signals, okved_all_list,
+   equipment_all_list, sites, regions, okveds, qs_next, flt, base, label, hint,
+   base_path + помощники tel_href, mail_href, fmt_mln, short_text, split_list.
+   ============================================================================ #}
+
+{# служебные данные для формы фильтров и счётчиков шапки (их читает скрипт
+   каркаса; тем же приёмом живёт боевая карточка обзвона) #}
+<span data-dbtotal="{{ db_total }}" hidden></span>
+<script type="application/json" id="filters-data">{{ {"regions": regions, "okveds": okveds, "stats": stats, "db_total": db_total}|tojson }}</script>
+
+<div class="ct">
+
+{# --------------------------------------------------------------- макросы --#}
+{% macro source_line(c) %}
+  {# Источник контакта + ЖИВАЯ ссылка на страницу-источник. Если ссылки нет —
+     говорим об этом прямо, а не делаем вид, что источник подтверждён.
+     Кликабельным делаем только http(s): в href попадает значение из базы,
+     и схему выбирать источнику данных мы не даём. #}
+  {% set url = c.source_url if (c.source_url or '').startswith(('http://', 'https://')) else '' %}
+  <p class="ct-contact-src">
+    Источник:
+    {% if url %}
+      <a href="{{ url }}" target="_blank" rel="noopener noreferrer"
+         title="Открыть страницу-источник: {{ url }}">{{ c.source or 'страница-источник' }} ↗</a>
+      <span class="ct-url">{{ short_text(url, 72) }}</span>
+    {% else %}
+      <span>{{ c.source or 'не указан' }}</span>
+      <span class="ct-nolink" title="В базе нет адреса страницы, откуда взят этот контакт">
+        ссылки на источник нет</span>
+    {% endif %}
+  </p>
+{% endmacro %}
+
+{% macro contact_row(c) %}
+  <li class="ct-contact{% if c.is_purchaser %} is-buyer{% endif %}">
+    <div class="ct-contact-top">
+      {# телефон — tel:, почта — mailto:: звонок и письмо в один клик #}
+      <a class="ct-contact-value" href="{{ c.href }}"
+         title="{{ 'Позвонить' if c.kind == 'phone' else 'Написать' }} {{ c.value }}">
+        {{ '☎' if c.kind == 'phone' else '✉' }} {{ c.value }}</a>
+      <span class="ct-badges">
+        {% if c.is_purchaser %}
+        <span class="ct-badge ct-badge--buy"
+              title="Роль или источник контакта про закупки и снабжение">закупки</span>
+        {% endif %}
+        {% if c.in_sales_base %}
+        <span class="ct-badge ct-badge--muted" title="Контакт уже был в базе продажников">был в базе</span>
+        {% else %}
+        <span class="ct-badge ct-badge--new" title="Этого контакта не было в базе продажников">новый</span>
+        {% endif %}
+        {# Общий контакт: тот же номер/почта висит у нескольких компаний. Так
+           выглядят централизованные закупочные центры — по Росатому одно
+           извещение ЕИС охватывает восемь заказчиков, и в каждой карточке стоит
+           контакт «Атомкомплекта», а не снабженца завода. Без этой пометки
+           продажник узнаёт правду на третьем одинаковом гудке. #}
+        {% if c.shared_with and c.shared_with > 1 %}
+        <span class="ct-badge ct-badge--warm"
+              title="Этот же контакт указан ещё у {{ c.shared_with - 1 }} компан{{ 'ии' if c.shared_with == 2 else 'ий' }} — похоже на общий закупочный центр, а не на снабженца этого завода">
+          общий на {{ c.shared_with }}</span>
+        {% endif %}
+      </span>
+    </div>
+    {% if c.person or c.role %}
+    <p class="ct-contact-who">
+      {{ c.person }}{% if c.person and c.role %} · {% endif %}{{ c.role }}
+    </p>
+    {% endif %}
+    {{ source_line(c) }}
+  </li>
+{% endmacro %}
+
+{% macro kv(key, val) %}
+  <div class="ct-kv-row">
+    <dt>{{ key }}</dt>
+    <dd>{% if val %}{{ val }}{% else %}<span class="ct-none">—</span>{% endif %}</dd>
+  </div>
+{% endmacro %}
+
+{# ------------------------------------------------------------- сообщения --#}
+{% if db_error %}
+<p class="ct-alert ct-alert--error">{{ db_error }}</p>
+{% endif %}
+{% if wrapped %}
+<p class="ct-alert ct-alert--info">Очередь закончилась — показываю сначала.</p>
+{% endif %}
+
+{% if company %}
+{% set st = (company.status or '')|lower %}
+{% set rest_phones = phones | rejectattr('is_purchaser') | list %}
+{% set rest_emails = emails | rejectattr('is_purchaser') | list %}
+
+<section class="ct-card">
+  <header class="ct-card-head">
+    <div class="ct-title-wrap">
+      <h3>{{ company.name_short or company.name_full or ('ИНН ' ~ company.inn) }}</h3>
+      {% if company.name_full and company.name_full != company.name_short %}
+      <p class="ct-note">{{ company.name_full }}</p>
+      {% endif %}
+    </div>
+    <div class="ct-badges">
+      {# Статус в источниках приходит кодом ЕГРЮЛ (ACTIVE / LIQUIDATING /
+         LIQUIDATED / BANKRUPT / REORGANIZING), а не по-русски: проверка на
+         «действ» не срабатывала ни разу и живые компании висели с КРАСНЫМ
+         бейджем. Переводим и красим по коду, неизвестный код показываем как есть. #}
+      {% if company.status %}
+      {% set st_map = {'active': ('действующая', 'ct-badge--buy'),
+                       'liquidating': ('ликвидируется', 'ct-badge--warm'),
+                       'reorganizing': ('реорганизуется', 'ct-badge--warm'),
+                       'bankrupt': ('банкротство', 'ct-badge--danger'),
+                       'liquidated': ('ликвидирована', 'ct-badge--danger')} %}
+      {% set st_pair = st_map.get(st) %}
+      <span class="ct-badge {{ st_pair[1] if st_pair else ('ct-badge--buy' if 'действ' in st else 'ct-badge--muted') }}"
+            title="Статус в ЕГРЮЛ: {{ company.status }}">{{ st_pair[0] if st_pair else company.status }}</span>
+      {% endif %}
+      {% if company.in_obzvon %}
+      <span class="ct-badge ct-badge--violet" title="Компания нашлась в общей базе обзвона (161 тыс. строк)">есть в обзвоне</span>
+      {% endif %}
+      {% if company.n_purchaser %}
+      {# телефон закупщика выносим в ОТДЕЛЬНЫЙ бейдж: он есть далеко не всегда
+         (в centro1 у 55 компаний против 167 с любым контактом закупщика), а
+         звонить можно только по нему #}
+      {% set purch_tel = purchasers | selectattr('kind', 'equalto', 'phone') | list %}
+      {% if purch_tel %}
+      <span class="ct-badge ct-badge--buy" title="Есть телефон закупщика — можно звонить">
+        ☎ закупщик: {{ purch_tel|length }}</span>
+      {% endif %}
+      <span class="ct-badge ct-badge--buy">закупщиков: {{ company.n_purchaser }}</span>
+      {% endif %}
+      {% if company.n_signals %}
+      <span class="ct-badge ct-badge--hot">поводов: {{ company.n_signals }}</span>
+      {% endif %}
+    </div>
+  </header>
+
+  <p class="ct-note">
+    № {{ skip + 1 }} из {{ total }} в очереди
+    {# то же, что в блоке «Деньги»: без этого крупные значения уходили
+       в экспоненту («8,1408e+08») и читались как ошибка #}
+    {% if company.rank_metric %} · общий приоритет
+      {{ ('{:,.0f}'.format(company.rank_metric))|replace(',', ' ')
+         if company.rank_metric >= 1
+         else ('%g'|format(company.rank_metric))|replace('.', ',') }}{% endif %}
+    {% if company.priority %} · балл по всем ОКВЭД {{ company.priority }}{% endif %}
+    {% if company.max_hit %} · макс. балл связки {{ company.max_hit }}{% endif %}
+  </p>
+
+  {# Главное действие оператора — СВЕРХУ (владелец 28.07): обзвонил и убрал.
+     Компания уходит из очереди навсегда; в Битрикс её переносят вручную.
+     Кнопка «Пропустить» осталась внизу и лишь показывает следующую. #}
+  <div class="ct-card-actions" style="margin-top:12px">
+    <form method="post" action="{{ base_path }}/{{ base }}/done" style="display:inline">
+      <input type="hidden" name="inn" value="{{ company.inn }}">
+      <input type="hidden" name="back" value="{{ base_path }}/{{ base }}?{{ qs_same }}">
+      <button class="ct-btn ct-btn--danger" type="submit"
+              title="Компания уйдёт из очереди навсегда. В Битрикс переносите вручную.">
+        ✓ Обзвонили — убрать из базы
+      </button>
+    </form>
+    <span class="ct-note" style="margin-left:10px">
+      уберёт компанию из очереди насовсем
+    </span>
+  </div>
+</section>
+
+{# ------------------------------------------------------------- контакты --#}
+{# Главный блок карточки: закупщики идут первыми и выделены, у каждого
+   контакта — подпись источника и ссылка на страницу-источник. #}
+<section class="ct-card">
+  <header class="ct-card-head">
+    <h3>Контакты</h3>
+    <span class="ct-note">
+      телефонов {{ phones|length }} · почты {{ emails|length }}
+      {%- if purchasers %} · из них закупщиков {{ purchasers|length }}{% endif %}
+    </span>
+  </header>
+
+  {% if purchasers %}
+  <p class="ct-section-title">Закупки и снабжение — звонить сюда</p>
+  <ul class="ct-contacts">
+    {% for c in purchasers %}{{ contact_row(c) }}{% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if rest_phones %}
+  <p class="ct-section-title" style="margin-top:14px">Телефоны</p>
+  <ul class="ct-contacts">
+    {% for c in rest_phones %}{{ contact_row(c) }}{% endfor %}
+  </ul>
+  {% endif %}
+
+  {# Почта СВЁРНУТА по умолчанию (владелец 28.07): «они же звонить будут».
+     Телефоны остаются раскрытыми. Заодно это лечит вес страницы: у крупных
+     компаний контактов сотни (рекорд — 2878 на одну), и вываливать их разом
+     значит грузить браузер сотнями килобайт разметки. #}
+  {% if rest_emails %}
+  <details class="ct-fold" style="margin-top:14px">
+    <summary class="ct-section-title">Почта ({{ rest_emails|length }}) — развернуть</summary>
+    <ul class="ct-contacts">
+      {% for c in rest_emails %}{{ contact_row(c) }}{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+
+  {% if not contacts %}
+  <p class="ct-note">Контактов в базе нет — ни телефонов, ни почты.
+    Компания попала в очередь по реквизитам и приоритету.</p>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------ люди с должностями --#}
+{# Отдельным блоком от контактов: здесь люди, у которых должность ЕСТЬ, а
+   телефона может не быть. Такому человеку всё равно можно позвонить — через
+   приёмную, назвав имя, и это качественно другой разговор, чем «дайте
+   кого-нибудь по компрессорам». #}
+{% if persons %}
+<section class="ct-card">
+  <header class="ct-card-head">
+    <h3>Люди с должностями</h3>
+    <span class="ct-note">{{ persons|length }} чел. · технические ЛПР первыми</span>
+  </header>
+  <div class="ct-people">
+    {% for p in persons %}
+    <div class="ct-person{% if p.is_tech %} is-tech{% endif %}">
+      <div class="ct-person-top">
+        <b>{{ p.person }}</b>
+        {% if p.post %}<span class="ct-badge {{ 'ct-badge--buy' if p.is_tech else 'ct-badge--muted' }}">{{ p.post }}</span>{% endif %}
+      </div>
+      <div class="ct-person-lines">
+        {% if p.phone %}
+        <div><a href="{{ p.tel_href }}">{{ p.phone }}</a></div>
+        {% endif %}
+        {% if p.email %}
+        <div><a href="{{ p.mail_href }}">{{ p.email }}</a></div>
+        {% endif %}
+        {% if not p.phone and not p.email %}
+        {# честно: контактов нет, но имя есть — с ним и звонить в приёмную #}
+        <div class="ct-note">прямого контакта нет — спрашивать по имени в приёмной</div>
+        {% endif %}
+        <div class="ct-note">
+          {% if p.source_url %}
+          <a href="{{ p.source_url }}" target="_blank" rel="noopener noreferrer">источник ↗</a>
+          {% elif p.source %}{{ p.source }}{% endif %}
+          {% if p.observed_at %} · наблюдалось {{ p.observed_at }}{% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{# -------------------------------------------------------- новостные поводы --#}
+{% if signals %}
+<section class="ct-card">
+  <header class="ct-card-head">
+    <h3>Новостные поводы</h3>
+    <span class="ct-note">{{ signals|length }} шт. · повод для звонка «по делу»</span>
+  </header>
+  <ul class="ct-signals">
+    {% for s in signals %}
+    {% set hot = s.hotness|int %}
+    <li class="ct-signal{% if hot >= 4 %} is-hot{% elif hot >= 2 %} is-warm{% endif %}">
+      <div class="ct-signal-top">
+        <span class="ct-badges">
+          {% if s.event_type %}<span class="ct-badge ct-badge--brand">{{ s.event_type }}</span>{% endif %}
+          {% if hot >= 4 %}<span class="ct-badge ct-badge--hot">горячо · {{ hot }}/5</span>
+          {% elif hot >= 2 %}<span class="ct-badge ct-badge--warm">накал {{ hot }}/5</span>
+          {% elif hot %}<span class="ct-badge ct-badge--muted">накал {{ hot }}/5</span>{% endif %}
+        </span>
+        {% if s.ts %}<span class="ct-note">{{ s.ts }}</span>{% endif %}
+      </div>
+      {% if s.what %}<p class="ct-signal-what">{{ s.what }}</p>{% endif %}
+      <p class="ct-signal-meta">
+        Источник:
+          {% set surl = s.source_url if (s.source_url or '').startswith(('http://', 'https://')) else '' %}
+        {% if surl %}
+          <a href="{{ surl }}" target="_blank" rel="noopener noreferrer"
+             title="Открыть новость: {{ surl }}">{{ s.source or 'новость' }} ↗</a>
+          <span class="ct-url">{{ short_text(surl, 72) }}</span>
+        {% else %}
+          <span>{{ s.source or 'не указан' }}</span>
+          <span class="ct-nolink" title="В базе нет адреса новости">ссылки на новость нет</span>
+        {% endif %}
+      </p>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{# ------------------------------------------------- реквизиты и деятельность --#}
+<div class="ct-cols">
+  <section class="ct-card">
+    <h3>Реквизиты</h3>
+    <dl class="ct-kv" style="margin-top:10px">
+      <div class="ct-kv-row">
+        <dt>ИНН</dt>
+        <dd>
+          {% if company.inn %}
+          {# сам ИНН — ссылка на карточку checko: проверить контрагента в один клик #}
+          <a href="https://checko.ru/search?query={{ company.inn|urlencode }}"
+             target="_blank" rel="noopener noreferrer"
+             title="Открыть карточку компании на checko.ru">{{ company.inn }} ↗</a>
+          {% else %}<span class="ct-none">—</span>{% endif %}
+        </dd>
+      </div>
+      {{ kv('КПП', company.kpp) }}
+      {{ kv('ОГРН', company.ogrn) }}
+      {{ kv('ОКПО', company.okpo) }}
+      {# ОПФ показываем сокращением, полное название — подсказкой: «ООО» в
+         строке читается быстрее, чем «Общество с ограниченной…» #}
+      <div class="ct-kv-row">
+        <dt>ОПФ</dt>
+        <dd>{% if company.opf %}<span {% if company.opf_full %}title="{{ company.opf_full }}"{% endif %}>{{ company.opf }}</span>
+            {% else %}<span class="ct-none">—</span>{% endif %}</dd>
+      </div>
+      {{ kv('Регистрация', company.reg_date) }}
+      {{ kv('Регион', company.region) }}
+      {{ kv('Адрес', company.address) }}
+      {# «~» в Jinja склеивает через str(), поэтому пустое поле обязательно
+         подменяем на '' — иначе в карточке появилось бы слово «None» #}
+      {% set dir_extra = [] %}
+      {% if company.director_post %}{% set _ = dir_extra.append(company.director_post|lower) %}{% endif %}
+      {% if company.director_inn %}{% set _ = dir_extra.append('ИНН ' ~ company.director_inn) %}{% endif %}
+      {% set dir_txt = (company.director or '') ~
+                       ((' (' ~ dir_extra|join(', ') ~ ')') if (company.director and dir_extra) else '') %}
+      {{ kv('Директор', dir_txt) }}
+      {# Учредители есть только в выгрузке обзвона (226 компаний из 936): DaData
+         на текущем тарифе поле founders отдаёт пустым. #}
+      {{ kv('Учредители', company.founders) }}
+      <div class="ct-kv-row">
+        <dt>Сайт</dt>
+        <dd>
+          {% if sites %}
+            {% for s in sites %}
+            {% set href = s if s.startswith(('http://', 'https://')) else 'https://' ~ s %}
+            <a href="{{ href }}" target="_blank" rel="noopener noreferrer">{{ s }} ↗</a>{% if not loop.last %}<br>{% endif %}
+            {% endfor %}
+          {% else %}<span class="ct-none">—</span>{% endif %}
+        </dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="ct-card">
+    <h3>Деньги и деятельность</h3>
+    <dl class="ct-kv" style="margin-top:10px">
+      <div class="ct-kv-row">
+        <dt>Выручка{% if company.revenue_year %} ({{ company.revenue_year }}){% endif %}</dt>
+        <dd>
+          {# В выгрузке выручка лежит по-разному: где-то «169600000000» голыми
+             цифрами, где-то с единицами («1,2 млрд»). Голое число само по себе
+             нечитаемо — показываем его в миллионах, а исходную строку оставляем
+             подсказкой только когда в ней есть что-то кроме цифр. #}
+          {% set rev_raw = (company.revenue or '')|trim %}
+          {% set rev_plain = rev_raw|replace(' ', '')|replace(' ', '') %}
+          {% if company.revenue_num %}{{ fmt_mln(company.revenue_num) }} млн ₽
+            {% if rev_plain and not rev_plain.isdigit() %}
+            <span class="ct-note">({{ rev_raw }})</span>
+            {% endif %}
+          {% elif rev_raw %}{{ rev_raw }}
+          {% else %}<span class="ct-none">—</span>{% endif %}
+        </dd>
+      </div>
+      {{ kv('Прибыль', company.profit) }}
+      {{ kv('Уставный капитал', company.capital) }}
+      {{ kv('Собственный капитал', company.equity) }}
+      {{ kv('Сотрудники', company.staff) }}
+      {{ kv('Основной ОКВЭД', company.okved_main) }}
+      {{ kv('Оборудование', company.equipment) }}
+      {{ kv('Деятельность', company.activity) }}
+      {# «%g» уводил крупные значения в экспоненту: у АВТОВАЗа приоритет
+         показывался как «8,1408e+08». Разряды бьём пробелом, дробную часть —
+         запятой, как в fmt_mln у выручки. #}
+      {% set rk = company.rank_metric %}
+      {{ kv('Приоритет', (('{:,.0f}'.format(rk))|replace(',', ' ') if rk >= 1
+                          else ('%g'|format(rk))|replace('.', ',')) if rk else '') }}
+    </dl>
+
+    {# Почему компания вообще в этой базе. Поля лежали в выгрузке обзвона и до
+       сих пор терялись при сборке снимка, а продажнику это первый вопрос. #}
+    {% if company.okved_reason or company.calc_comment %}
+    <details>
+      <summary>Почему компания в базе</summary>
+      <dl class="ct-kv" style="margin-top:8px">
+        {{ kv('ОКВЭД, давшие баллы', company.okved_reason) }}
+        {{ kv('Комментарий расчёта', company.calc_comment) }}
+      </dl>
+    </details>
+    {% endif %}
+
+    {% if okved_all_list %}
+    <details>
+      <summary>Все ОКВЭД ({{ okved_all_list|length }})</summary>
+      <ul class="ct-list-plain">
+        {% for o in okved_all_list %}<li>{{ o }}</li>{% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+
+    {% if equipment_all_list %}
+    <details>
+      <summary>Все категории оборудования ({{ equipment_all_list|length }})</summary>
+      <ul class="ct-list-plain">
+        {% for c in equipment_all_list %}<li>{{ c }}</li>{% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+  </section>
+</div>
+
+{# ------------------------------------------------------------- действия --#}
+<section class="ct-card">
+  <div class="ct-card-actions ct-modes" style="margin:0">
+    <a class="ct-btn ct-btn--primary" href="{{ base_path }}/{{ base }}?{{ qs_next }}">Пропустить →</a>
+    {% if company.inn %}
+    <a class="ct-btn" href="https://checko.ru/search?query={{ company.inn|urlencode }}"
+       target="_blank" rel="noopener noreferrer">Карточка на checko ↗</a>
+    {% endif %}
+    {% if sites %}
+    {% set first_site = sites[0] %}
+    <a class="ct-btn" href="{{ first_site if first_site.startswith(('http://', 'https://')) else 'https://' ~ first_site }}"
+       target="_blank" rel="noopener noreferrer">Сайт компании ↗</a>
+    {% endif %}
+  </div>
+  <p class="ct-note" style="margin-top:10px">
+    «Пропустить» просто показывает следующую компанию и ничего не меняет.
+    Убирает из очереди только кнопка «Обзвонили» вверху карточки.
+  </p>
+</section>
+
+{% elif db_error %}
+{# сообщение уже показано сверху — второй раз не повторяем #}
+{% elif db_total %}
+<section class="ct-card">
+  <h3>Под фильтры не попала ни одна компания</h3>
+  <p class="ct-note" style="margin-top:6px">
+    Ослабьте отбор сверху — в базе «{{ label }}» {{ db_total }} компаний.
+  </p>
+</section>
+{% else %}
+<section class="ct-card">
+  <h3>База пуста</h3>
+  <p class="ct-note" style="margin-top:6px">
+    В <code>centrifugal.db</code> нет строк базы «{{ base }}». Соберите базу
+    скриптом и положите файл на место — панель подхватит его сама.
+  </p>
+</section>
+{% endif %}
+
+</div>

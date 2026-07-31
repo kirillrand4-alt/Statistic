@@ -23,6 +23,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Index,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -514,18 +515,61 @@ class CollectionRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+# Ключ сортировки очереди обзвона — повторяется во всех индексах очереди ниже
+# и в callbase._order_by(). Меняется только вместе с ними.
+_QUEUE_ORDER = (text("rank_metric DESC"), text("priority DESC"),
+                text("revenue_num DESC"), "id")
+
+
 class CallCompany(Base):
     """Компания в базе обзвона (страницы «Обзвон …»). Загружается из выгрузок
     Checko (xlsx/tsv); ``base`` разделяет базы компаний («kc» — Компрессор Центр,
     «meyer» — Meyer). Очередь обзвона сортируется по ``rank_metric`` (приоритет
     ОКВЭД × выручка — колонка готового расчёта из xlsx), затем по выручке.
     «Удалить и следующая» удаляет строку (копия дописывается в
-    data/callbase/deleted_<base>.tsv)."""
+    data/callbase/deleted_<base>.tsv).
+
+    Постраничный список (LIMIT/OFFSET) на 161k строк требует, чтобы И фильтры,
+    И порядок брались из индекса, иначе SQLite на каждый запрос строит временный
+    B-tree сортировки по всей базе. Отсюда два решения ниже:
+
+    * производные колонки ``search_blob``/``equipment_blob``/``is_active``/
+      ``has_phone``/``has_mobile`` — фильтры, которые раньше считались в Python
+      (регистронезависимый поиск по кириллице, «действующие», «есть сотовый»),
+      посчитаны один раз при записи и потому доступны SQL;
+    * индексы очереди повторяют ORDER BY целиком (все четыре колонки, DESC),
+      а не только ``rank_metric`` — тогда LIMIT/OFFSET это проход по индексу
+      без сортировки.
+    """
 
     __tablename__ = "call_company"
+    # Все индексы очереди устроены одинаково: [ведущий фильтр] + ВЕСЬ порядок
+    # сортировки (DESC, как в ORDER BY) + хвост из дешёвых фильтровых колонок.
+    #   * порядок целиком — иначе SQLite строит временный B-tree на все строки
+    #     под фильтром (на регионе «Москва», 33k строк, это было 450 мс на
+    #     страницу вместо 5 мс);
+    #   * хвост (has_phone/has_mobile/is_active/max_hit) делает индекс
+    #     покрывающим: флажковые фильтры проверяются по записи индекса, без
+    #     чтения самой строки таблицы (было 300 мс на страницу, стало 20 мс).
+    # Хвостовые колонки стоят ПОСЛЕ id (то есть после полного ключа сортировки),
+    # чтобы не влиять на порядок обхода. Суммарно индексы ≈ 36 МБ на таблицу
+    # ≈ 175 МБ при 161k строк — приемлемая плата.
     __table_args__ = (
         Index("ix_call_company_base_inn", "base", "inn"),
-        Index("ix_call_company_queue", "base", "rank_metric"),
+        Index("ix_cc_queue", "base", *_QUEUE_ORDER,
+              "has_phone", "has_mobile", "is_active", "max_hit"),
+        # «только действующие» — фильтр по умолчанию, поэтому у него свой индекс
+        # с is_active впереди: тогда он и отбирает, и сразу отдаёт порядок
+        Index("ix_cc_queue_active", "base", "is_active", *_QUEUE_ORDER,
+              "has_phone", "has_mobile", "max_hit"),
+        # селективные фильтры из выпадающих списков — тоже с порядком внутри
+        Index("ix_cc_base_region", "base", "region", *_QUEUE_ORDER,
+              "has_phone", "has_mobile", "is_active", "max_hit"),
+        Index("ix_cc_base_okved", "base", "okved_main", *_QUEUE_ORDER,
+              "has_phone", "has_mobile", "is_active", "max_hit"),
+        # под GROUP BY в callbase.equipments() — список категорий оборудования
+        # для выпадающего фильтра
+        Index("ix_cc_base_equipment", "base", "equipment", "equipment_all"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -566,3 +610,14 @@ class CallCompany(Base):
     revenue_num: Mapped[float | None] = mapped_column(Float, nullable=True)   # руб., распарсено
     rank_metric: Mapped[float | None] = mapped_column(Float, nullable=True)   # приоритет × выручка / 10000
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    # --- производные поля для быстрых фильтров (считает callbase.derived) ---
+    # SQLite не умеет регистронезависимый LIKE/LOWER для кириллицы, поэтому строки
+    # поиска складываем заранее приведёнными через casefold(): тогда побайтовый LIKE
+    # с так же приведённой подстрокой даёт корректный регистронезависимый поиск.
+    # NULL в search_blob = строка ещё не мигрирована (маркер для ensure_schema).
+    search_blob: Mapped[str | None] = mapped_column(Text, nullable=True)     # название|ИНН|адрес|директор
+    equipment_blob: Mapped[str | None] = mapped_column(Text, nullable=True)  # equipment|equipment_all
+    is_active: Mapped[int] = mapped_column(Integer, default=0)    # «действующ» в статусе
+    has_phone: Mapped[int] = mapped_column(Integer, default=0)    # непустые «Телефоны»
+    has_mobile: Mapped[int] = mapped_column(Integer, default=0)   # среди телефонов есть +79…/89…
