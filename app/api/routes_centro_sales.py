@@ -1,4 +1,4 @@
-"""Authenticated unified Centro queue (source snapshot + persistent sales state)."""
+"""Authenticated Centro queue with detailed centrifugal-compressor evidence."""
 from __future__ import annotations
 
 import hashlib
@@ -6,15 +6,14 @@ import hmac
 import os
 import time
 from collections import defaultdict, deque
-from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from app.api import routes_centro as source
 from app.api.routes_obzvon import _same_origin
 from app.config import get_settings
+from app.services import centro_catalog as catalog
 from app.services import centro_sales as sales
 from app.web import templates
 
@@ -26,8 +25,10 @@ LOGIN_ATTEMPTS: dict[str, deque] = defaultdict(deque)
 
 FILTER_ALIASES = {
     "okved": ("okved", "okved_main", "okved_all"),
-    "equipment": ("tipy_mashin", "equipment_all", "oborudovanie"),
-    "brand": ("marki", "marki_iz_faktov", "brands"),
+    "equipment": ("tipy_mashin", "equipment_all", "oborudovanie_po_okved", "oborudovanie"),
+    "model": ("marki", "marki_iz_faktov", "models"),
+    "medium": ("sreda", "sreda_po_faktam", "medium"),
+    "condition": ("sostoyaniy", "sostoyaniya_po_faktam", "pometka", "vyvod_ekspertizy"),
     "legal_status": ("status_egrul", "status"),
 }
 
@@ -39,10 +40,7 @@ def _secret() -> bytes:
 def _require_secret() -> bytes:
     secret = _secret()
     if len(secret) < 32:
-        raise HTTPException(
-            503,
-            "CENTRO_SESSION_SECRET не настроен или слишком короткий",
-        )
+        raise HTTPException(503, "CENTRO_SESSION_SECRET не настроен или слишком короткий")
     return secret
 
 
@@ -87,18 +85,8 @@ def current_user(request: Request) -> dict:
     )
 
 
-def _source_version() -> str:
-    try:
-        path = Path(source.db_path())
-        stat = path.stat()
-        return f"{stat.st_size}:{stat.st_mtime_ns}"
-    except (OSError, AttributeError):
-        return "unknown"
-
-
-def _source_companies() -> tuple[list[dict], str]:
-    with source.connect() as conn:
-        rows = [dict(row) for row in conn.execute("SELECT * FROM company")]
+def _source_companies() -> tuple[list[dict], str, dict[str, str]]:
+    rows = catalog.list_companies()
     merged: dict[str, dict] = {}
     for row in rows:
         inn = sales.normalize_inn(row.get("inn"))
@@ -109,67 +97,29 @@ def _source_companies() -> tuple[list[dict], str]:
             if value not in (None, "") and current.get(key) in (None, ""):
                 current[key] = value
         current["has_phone"] = bool(
-            current.get("n_phones")
+            current.get("has_phone")
+            or current.get("n_phones")
             or current.get("telefony_predpriyatiya")
             or current.get("telefony_iz_bazy")
+            or current.get("nomera_bez_vladelca")
         )
         current["has_purchaser"] = bool(
-            current.get("n_purchaser") or current.get("zakupshchik")
+            current.get("has_purchaser")
+            or current.get("n_purchaser")
+            or current.get("zakupshchik")
         )
         current["has_tech"] = bool(
-            current.get("tehnicheskih_s_nomerom") or current.get("n_tech")
+            current.get("has_tech")
+            or current.get("n_tech")
+            or current.get("tehnicheskih_s_nomerom")
+            or current.get("tehnicheskie_lyudi")
         )
         current["has_signal"] = bool(
-            current.get("n_signals") or current.get("novost")
+            current.get("has_signal")
+            or current.get("n_signals")
+            or current.get("novost")
         )
-    return list(merged.values()), _source_version()
-
-
-def _contacts(inn: str) -> list[dict]:
-    result: list[dict] = []
-    by_value: dict[str, dict] = {}
-    try:
-        with source.connect() as conn:
-            if not source._table_exists(conn, "contact"):
-                return []
-            rows = [
-                dict(row)
-                for row in conn.execute("SELECT * FROM contact WHERE inn=?", (inn,))
-            ]
-        for row in rows:
-            kind = str(row.get("kind") or "")
-            if kind == "phone":
-                key = sales.normalize_phone(row.get("value"))
-            else:
-                key = str(row.get("value") or "").strip().casefold()
-            if not key:
-                continue
-            source_name = str(row.get("source") or "").strip()
-            source_url = source.src_url(row.get("source_url"))
-            if key in by_value:
-                old = by_value[key]
-                if source_name and source_name not in old["sources"]:
-                    old["sources"].append(source_name)
-                if source_url and source_url not in old["source_urls"]:
-                    old["source_urls"].append(source_url)
-                continue
-            item = source._contact(row)
-            item["value"] = key if kind == "phone" else row.get("value")
-            item["sources"] = [source_name] if source_name else []
-            item["source_urls"] = [source_url] if source_url else []
-            item["is_tech"] = int(bool(row.get("tehLPR") or row.get("is_tech")))
-            by_value[key] = item
-            result.append(item)
-        result.sort(
-            key=lambda contact: (
-                not bool(contact.get("is_purchaser")),
-                not bool(contact.get("is_tech")),
-                contact.get("kind") != "phone",
-            )
-        )
-        return result
-    except source.CentroDbUnavailable:
-        return []
+    return list(merged.values()), catalog.source_version(), catalog.database_info()
 
 
 def _text(company: dict, aliases: tuple[str, ...]) -> str:
@@ -200,17 +150,20 @@ def _matches(rows: list[dict], request: Request) -> list[dict]:
     region = params.get("region", "").strip()
     call_status = params.get("call_status", "").strip()
     assigned_user = params.get("assigned_user", "").strip()
-    okved = params.get("okved", "").strip().casefold()
-    equipment = params.get("equipment", "").strip().casefold()
-    brand = params.get("brand", "").strip().casefold()
-    legal_status = params.get("legal_status", "").strip().casefold()
+    values = {
+        name: params.get(name, "").strip().casefold()
+        for name in ("okved", "equipment", "model", "medium", "condition", "legal_status")
+    }
     min_revenue = _number(params.get("min_revenue"))
     max_revenue = _number(params.get("max_revenue"))
     min_priority = _number(params.get("min_priority"))
+    max_priority = _number(params.get("max_priority"))
 
     out: list[dict] = []
     for company in rows:
-        blob = " ".join(str(value or "") for value in company.values()).casefold()
+        blob = str(company.get("search_blob") or "").casefold()
+        if not blob:
+            blob = " ".join(str(value or "") for value in company.values()).casefold()
         if q and q not in blob:
             continue
         if region and str(company.get("region") or "") != region:
@@ -227,35 +180,34 @@ def _matches(rows: list[dict], request: Request) -> list[dict]:
             continue
         if params.get("has_signal") == "1" and not company.get("has_signal"):
             continue
-        if okved and okved not in _text(company, FILTER_ALIASES["okved"]).casefold():
+        if params.get("has_model") == "1" and not _text(company, FILTER_ALIASES["model"]).strip(" |	"):
             continue
-        if equipment and equipment not in _text(company, FILTER_ALIASES["equipment"]).casefold():
-            continue
-        if brand and brand not in _text(company, FILTER_ALIASES["brand"]).casefold():
-            continue
-        if legal_status and legal_status not in _text(
-            company, FILTER_ALIASES["legal_status"]
-        ).casefold():
+        failed = False
+        for name, needle in values.items():
+            if needle and needle not in _text(company, FILTER_ALIASES[name]).casefold():
+                failed = True
+                break
+        if failed:
             continue
         revenue = _company_number(company, "vyruchka_rub", "revenue_num", "revenue")
         if min_revenue is not None and (revenue is None or revenue < min_revenue):
             continue
         if max_revenue is not None and (revenue is None or revenue > max_revenue):
             continue
-        priority = _company_number(company, "moy_prioritet", "rank_metric")
+        priority = _company_number(company, "moy_prioritet", "rank_metric", "ball_prioriteta")
         if min_priority is not None and (priority is None or priority < min_priority):
+            continue
+        if max_priority is not None and (priority is None or priority > max_priority):
             continue
         out.append(company)
     return out
 
 
-def _choice_values(companies: list[dict], aliases: tuple[str, ...], limit: int = 200) -> list[str]:
+def _choice_values(companies: list[dict], aliases: tuple[str, ...], limit: int = 500) -> list[str]:
     values: set[str] = set()
     for company in companies:
         for alias in aliases:
             values.update(sales.split_values(company.get(alias)))
-            if len(values) >= limit:
-                break
     return sorted(values, key=str.casefold)[:limit]
 
 
@@ -276,6 +228,28 @@ def _queue_rank(company: dict) -> tuple:
         -float(company.get("assignment_score") or 0),
         company.get("inn") or "",
     )
+
+
+def _fallback_fact(company: dict) -> list[dict]:
+    model = company.get("marki") or company.get("marki_iz_faktov") or ""
+    evidence = company.get("vyvod_ekspertizy") or company.get("prioritet_pochemu") or ""
+    quote = company.get("citaty_dokazatelstv") or ""
+    links = sales.split_values(company.get("ssylki_na_istochniki"))
+    if not any((model, evidence, quote, links)):
+        return []
+    return [
+        {
+            "status": company.get("pometka") or company.get("sostoyaniya_po_faktam") or "",
+            "model": model,
+            "equipment_type": company.get("tipy_mashin") or "",
+            "medium": company.get("sreda_po_faktam") or company.get("sreda") or "",
+            "event_date": company.get("daty_faktov") or company.get("data_zakluchenia") or "",
+            "evidence": evidence,
+            "quote": quote,
+            "source": "сводная база доказательств",
+            "source_url": catalog.safe_source_url(links[0]) if links else "",
+        }
+    ]
 
 
 @router.get("/centro/login")
@@ -330,18 +304,18 @@ def centro(
     inn: str = "",
     user=Depends(current_user),
 ):
+    db_info: dict[str, str] = {}
     try:
-        companies, version = _source_companies()
+        companies, version, db_info = _source_companies()
         error = ""
-    except source.CentroDbUnavailable as exc:
+    except catalog.CentroDbUnavailable as exc:
         companies, version, error = [], "", str(exc)
 
     with sales.connect() as conn:
         sales_users = [
             row[0]
             for row in conn.execute(
-                "SELECT username FROM users "
-                "WHERE role='sales' AND is_active=1 ORDER BY username"
+                "SELECT username FROM users WHERE role='sales' AND is_active=1 ORDER BY username"
             )
         ]
     if sales_users and companies:
@@ -359,7 +333,7 @@ def centro(
         comments = [
             dict(row)
             for row in conn.execute(
-                "SELECT * FROM company_comment ORDER BY created_at DESC LIMIT 500"
+                "SELECT * FROM company_comment ORDER BY created_at DESC LIMIT 1000"
             )
         ]
 
@@ -381,9 +355,7 @@ def centro(
             continue
         company = dict(source_company)
         company["assigned_user"] = assignment["username"] if assignment else ""
-        company["assignment_score"] = (
-            assignment.get("assignment_score", 0) if assignment else 0
-        )
+        company["assignment_score"] = assignment.get("assignment_score", 0) if assignment else 0
         if assignment:
             company.update(states.get((company["inn"], assignment["username"]), {}))
         visible.append(company)
@@ -394,10 +366,7 @@ def centro(
     pages = max(1, (len(visible) + size - 1) // size)
     page = min(max(1, page), pages)
     normalized_inn = sales.normalize_inn(inn)
-    chosen = next(
-        (company for company in visible if company["inn"] == normalized_inn),
-        None,
-    )
+    chosen = next((company for company in visible if company["inn"] == normalized_inn), None)
     if inn and not chosen:
         raise HTTPException(404, "Компания не найдена или не назначена пользователю")
     if not chosen and visible:
@@ -412,11 +381,10 @@ def centro(
         key=str.casefold,
     )
     choices = {
-        "okved": _choice_values(companies, FILTER_ALIASES["okved"]),
-        "equipment": _choice_values(companies, FILTER_ALIASES["equipment"]),
-        "brand": _choice_values(companies, FILTER_ALIASES["brand"]),
-        "legal_status": _choice_values(companies, FILTER_ALIASES["legal_status"]),
+        name: _choice_values(companies, aliases)
+        for name, aliases in FILTER_ALIASES.items()
     }
+
     selected_comments = [
         comment
         for comment in comments
@@ -424,13 +392,51 @@ def centro(
         and comment["inn"] == chosen["inn"]
         and (user["role"] == "admin" or comment["username"] == user["username"])
     ]
+    contact_rows: list[dict] = []
+    role_contacts: list[dict] = []
+    unassigned_contacts: list[dict] = []
+    facts: list[dict] = []
+    news: list[dict] = []
+    people: list[dict] = []
+    company_sources: list[dict] = []
+    if chosen and not error:
+        try:
+            contact_rows = catalog.contacts(chosen["inn"])
+            role_contacts = [item for item in contact_rows if item.get("has_role")]
+            unassigned_contacts = [item for item in contact_rows if not item.get("has_role")]
+            facts = catalog.facts(chosen["inn"])
+            news = catalog.signals(chosen["inn"])
+            people = catalog.persons(chosen["inn"])
+            company_sources = catalog.company_sources(chosen["inn"])
+        except catalog.CentroDbUnavailable:
+            pass
+        if not facts:
+            facts = _fallback_fact(chosen)
+        if not news and (chosen.get("novost") or chosen.get("novost_ssylka")):
+            news = [
+                {
+                    "title": chosen.get("novost") or "Новостной повод",
+                    "event_type": "новость предприятия",
+                    "event_date": "",
+                    "quote": "",
+                    "source": "новостной поиск",
+                    "source_url": catalog.safe_source_url(chosen.get("novost_ssylka")),
+                }
+            ]
+
     return templates.TemplateResponse(
         request,
         "centro.html",
         {
             "user": user,
             "company": chosen,
-            "contacts": _contacts(chosen["inn"]) if chosen else [],
+            "contacts": contact_rows,
+            "role_contacts": role_contacts,
+            "unassigned_contacts": unassigned_contacts,
+            "facts": facts,
+            "news": news,
+            "people": people,
+            "company_sources": company_sources,
             "comments": selected_comments,
             "rows": visible[(page - 1) * size : page * size],
             "total": len(visible),
@@ -444,6 +450,7 @@ def centro(
             "query_string": filter_query,
             "base_path": BP,
             "call_results": sales.CALL_RESULT_LABELS,
+            "db_info": db_info,
         },
     )
 
@@ -481,10 +488,7 @@ def update_comment(
         raise HTTPException(403, "Нельзя редактировать чужой комментарий")
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    return RedirectResponse(
-        request.headers.get("referer") or f"{BP}/centro",
-        303,
-    )
+    return RedirectResponse(request.headers.get("referer") or f"{BP}/centro", 303)
 
 
 @router.get("/centro/admin")
@@ -499,22 +503,30 @@ def admin_page(request: Request, user=Depends(current_user)):
                 "SUM(a.assignment_score) score, AVG(a.assignment_score) average, "
                 "SUM(CASE WHEN COALESCE(s.call_result,'new') <> 'new' THEN 1 ELSE 0 END) processed "
                 "FROM company_assignment a "
-                "LEFT JOIN company_state s "
-                "ON s.inn=a.inn AND s.username=a.username "
+                "LEFT JOIN company_state s ON s.inn=a.inn AND s.username=a.username "
                 "GROUP BY a.username ORDER BY a.username"
             )
         ]
         users = [
             row[0]
             for row in conn.execute(
-                "SELECT username FROM users "
-                "WHERE role='sales' AND is_active=1 ORDER BY username"
+                "SELECT username FROM users WHERE role='sales' AND is_active=1 ORDER BY username"
             )
         ]
+    try:
+        db_info = catalog.database_info()
+    except catalog.CentroDbUnavailable:
+        db_info = {}
     return templates.TemplateResponse(
         request,
         "centro_admin.html",
-        {"user": user, "stats": stats, "sales_users": users, "base_path": BP},
+        {
+            "user": user,
+            "stats": stats,
+            "sales_users": users,
+            "base_path": BP,
+            "db_info": db_info,
+        },
     )
 
 
