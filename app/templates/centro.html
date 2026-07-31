@@ -67,6 +67,7 @@
   <input name="model" list="model-list-main" value="{{ request.query_params.get('model','') }}" placeholder="Модель / марка">
   <datalist id="model-list-main">{% for value in choices.model %}<option value="{{ value }}">{% endfor %}</datalist>
   <label class="check"><input type="checkbox" name="has_phone" value="1" {% if request.query_params.get('has_phone') == '1' %}checked{% endif %}> Есть телефон</label>
+  <label class="check"><input type="checkbox" name="has_role_phone" value="1" {% if request.query_params.get('has_role_phone') == '1' %}checked{% endif %}> Телефон с ролью</label>
   <button>Найти</button>
   <button type="button" class="secondary" data-open-filters>Все фильтры</button>
   <a class="reset-link" href="{{ base_path }}/centro">Сбросить</a>
@@ -122,6 +123,7 @@
         <h3>Наличие данных</h3>
         <div class="checks-grid">
           <label class="check"><input type="checkbox" name="has_phone" value="1" {% if request.query_params.get('has_phone') == '1' %}checked{% endif %}> Телефон</label>
+          <label class="check"><input type="checkbox" name="has_role_phone" value="1" {% if request.query_params.get('has_role_phone') == '1' %}checked{% endif %}> Телефон с установленной ролью</label>
           <label class="check"><input type="checkbox" name="has_purchaser" value="1" {% if request.query_params.get('has_purchaser') == '1' %}checked{% endif %}> Закупщик / снабжение</label>
           <label class="check"><input type="checkbox" name="has_tech" value="1" {% if request.query_params.get('has_tech') == '1' %}checked{% endif %}> Технический ЛПР</label>
           <label class="check"><input type="checkbox" name="has_signal" value="1" {% if request.query_params.get('has_signal') == '1' %}checked{% endif %}> Новостной повод</label>
@@ -150,6 +152,7 @@
         <span class="tag tag-status">{{ company.status_egrul or company.status or 'Статус не указан' }}</span>
         {% if company.has_signal %}<span class="tag tag-hot">есть повод</span>{% endif %}
         {% if company.has_phone %}<span class="tag tag-buy">есть телефон</span>{% endif %}
+        {% if company.has_role_phone %}<span class="tag tag-buy">телефон с ролью</span>{% endif %}
         {% if company.has_tech %}<span class="tag tag-tech">есть тех. ЛПР</span>{% endif %}
       </div>
     </div>
@@ -158,7 +161,7 @@
       <span><b>ИНН</b> {{ company.inn }} <button type="button" class="text-button" data-copy="{{ company.inn }}">копировать</button></span>
       <span><b>Регион</b> {{ company.region or '—' }}</span>
       <span><b>Приоритет</b> {{ company.moy_prioritet or company.rank_metric or company.ball_prioriteta or '—' }}</span>
-      <span><b>Фактов</b> {{ company.n_facts or company.faktov_centrobezhnyh or 0 }}</span>
+      <span><b>Фактов</b> {{ facts|length }}</span>
     </div>
   </section>
 
@@ -241,6 +244,16 @@
     </section>
   </div>
 
+  {% if company.vyvod_ekspertizy or company.data_zakluchenia %}
+  <section class="card">
+    <div class="section-head">
+      <div><h2>Заключение комиссии</h2><p>Значение из сводной базы предприятия.</p></div>
+      {% if company.data_zakluchenia %}<span class="tag tag-status">{{ company.data_zakluchenia }}</span>{% endif %}
+    </div>
+    <p>{{ company.vyvod_ekspertizy or 'Значение заключения не указано' }}</p>
+  </section>
+  {% endif %}
+
   <section class="card call-reason">
     <div class="reason-icon">!</div>
     <div>
@@ -268,7 +281,7 @@
 
   <section class="card equipment-section">
     <div class="section-head">
-      <div><h2>Оборудование — что уже известно</h2><p>Факты из полной базы с доказательствами, цитатами, датами и ссылками.</p></div>
+      <div><h2>Оборудование — что уже известно</h2><p>Воздушные и неопределённые компрессорные факты с доказательствами, датами и ссылками. Насосы и явно не воздушные среды скрыты.</p></div>
       <span class="counter">{{ facts|length }}</span>
     </div>
     {% if facts %}
@@ -294,7 +307,7 @@
         </article>
       {% endfor %}
       </div>
-    {% else %}<p class="muted">Подробных фактов по оборудованию в текущем снимке нет.</p>{% endif %}
+    {% else %}<p class="muted">Подробных воздушных компрессорных фактов в текущем снимке нет.</p>{% endif %}
   </section>
 
   <section class="card summary-card">
@@ -306,6 +319,8 @@
       <div><dt>Состояние</dt><dd>{{ company.sostoyaniya_po_faktam or company.pometka or '—' }}</dd></div>
       <div><dt>Важность покупки</dt><dd>{{ company.vazhnost_pokupki or '—' }}</dd></div>
       <div><dt>Доступность контакта</dt><dd>{{ company.dostupnost_kontakta or '—' }}</dd></div>
+      <div><dt>Заключение комиссии</dt><dd>{{ company.vyvod_ekspertizy or '—' }}</dd></div>
+      <div><dt>Дата заключения</dt><dd>{{ company.data_zakluchenia or '—' }}</dd></div>
     </dl>
   </section>
 
