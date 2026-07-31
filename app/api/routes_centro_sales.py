@@ -14,6 +14,7 @@ from fastapi.responses import RedirectResponse
 from app.api.routes_obzvon import _same_origin
 from app.config import get_settings
 from app.services import centro_catalog as catalog
+from app.services import centro_medium
 from app.services import centro_sales as sales
 from app.web import templates
 
@@ -87,6 +88,7 @@ def current_user(request: Request) -> dict:
 
 def _source_companies() -> tuple[list[dict], str, dict[str, str]]:
     rows = catalog.list_companies()
+    role_phone_inns = catalog.role_phone_inns()
     merged: dict[str, dict] = {}
     for row in rows:
         inn = sales.normalize_inn(row.get("inn"))
@@ -103,6 +105,7 @@ def _source_companies() -> tuple[list[dict], str, dict[str, str]]:
             or current.get("telefony_iz_bazy")
             or current.get("nomera_bez_vladelca")
         )
+        current["has_role_phone"] = inn in role_phone_inns
         current["has_purchaser"] = bool(
             current.get("has_purchaser")
             or current.get("n_purchaser")
@@ -147,6 +150,7 @@ def _company_number(company: dict, *names: str) -> float | None:
 def _matches(rows: list[dict], request: Request) -> list[dict]:
     params = request.query_params
     q = params.get("q", "").strip().casefold()
+    exact_inn = q if q.isdigit() and len(q) in {10, 12} else ""
     region = params.get("region", "").strip()
     call_status = params.get("call_status", "").strip()
     assigned_user = params.get("assigned_user", "").strip()
@@ -161,6 +165,11 @@ def _matches(rows: list[dict], request: Request) -> list[dict]:
 
     out: list[dict] = []
     for company in rows:
+        if exact_inn:
+            if str(company.get("inn") or "") == exact_inn:
+                out.append(company)
+            continue
+
         blob = str(company.get("search_blob") or "").casefold()
         if not blob:
             blob = " ".join(str(value or "") for value in company.values()).casefold()
@@ -174,13 +183,15 @@ def _matches(rows: list[dict], request: Request) -> list[dict]:
             continue
         if params.get("has_phone") == "1" and not company.get("has_phone"):
             continue
+        if params.get("has_role_phone") == "1" and not company.get("has_role_phone"):
+            continue
         if params.get("has_purchaser") == "1" and not company.get("has_purchaser"):
             continue
         if params.get("has_tech") == "1" and not company.get("has_tech"):
             continue
         if params.get("has_signal") == "1" and not company.get("has_signal"):
             continue
-        if params.get("has_model") == "1" and not _text(company, FILTER_ALIASES["model"]).strip(" |	"):
+        if params.get("has_model") == "1" and not _text(company, FILTER_ALIASES["model"]).strip(" |\t"):
             continue
         failed = False
         for name, needle in values.items():
@@ -237,19 +248,18 @@ def _fallback_fact(company: dict) -> list[dict]:
     links = sales.split_values(company.get("ssylki_na_istochniki"))
     if not any((model, evidence, quote, links)):
         return []
-    return [
-        {
-            "status": company.get("pometka") or company.get("sostoyaniya_po_faktam") or "",
-            "model": model,
-            "equipment_type": company.get("tipy_mashin") or "",
-            "medium": company.get("sreda_po_faktam") or company.get("sreda") or "",
-            "event_date": company.get("daty_faktov") or company.get("data_zakluchenia") or "",
-            "evidence": evidence,
-            "quote": quote,
-            "source": "сводная база доказательств",
-            "source_url": catalog.safe_source_url(links[0]) if links else "",
-        }
-    ]
+    item = {
+        "status": company.get("pometka") or company.get("sostoyaniya_po_faktam") or "",
+        "model": model,
+        "equipment_type": company.get("tipy_mashin") or "",
+        "medium": company.get("sreda_po_faktam") or company.get("sreda") or "",
+        "event_date": company.get("daty_faktov") or company.get("data_zakluchenia") or "",
+        "evidence": evidence,
+        "quote": quote,
+        "source": "сводная база доказательств",
+        "source_url": catalog.safe_source_url(links[0]) if links else "",
+    }
+    return [item] if centro_medium.keep_fact(item) else []
 
 
 @router.get("/centro/login")
