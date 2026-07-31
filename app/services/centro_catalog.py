@@ -1,8 +1,8 @@
 """Read-only access to the replaceable centrifugal-compressor source database.
 
 The sales workflow (users, assignments, call results and comments) lives in
-``centro_sales.db``.  This module reads the separate source snapshot built from
-CSV files.  Newer snapshots expose detailed facts, news, people and provenance;
+``centro_sales.db``. This module reads the separate source snapshot built from
+CSV files. Newer snapshots expose detailed facts, news, people and provenance;
 older snapshots continue to work with graceful fallbacks.
 """
 from __future__ import annotations
@@ -12,6 +12,8 @@ import re
 import sqlite3
 from pathlib import Path
 from typing import Any
+
+from app.services import centro_medium
 
 ROOT = Path(__file__).resolve().parents[2]
 DB_PATH_ENV = "CENTRIFUGAL_DB"
@@ -92,15 +94,40 @@ def list_companies() -> list[dict]:
             raise CentroDbUnavailable("В базе нет таблицы company")
         rows = _rows(conn, "SELECT * FROM company")
 
-    # Некоторые исторические снимки содержат search_blob без ИНН. Из-за этого
-    # точный поиск по ИНН возвращал «Компании не найдены», хотя строка company
-    # существовала. Добавляем нормализованный ИНН в поисковый текст при чтении,
-    # не изменяя read-only файл и не требуя повторной сборки базы.
+    # Некоторые снимки содержат search_blob без ИНН. Добавляем ИНН при чтении,
+    # не меняя read-only файл и не требуя повторной сборки базы.
     for row in rows:
-        inn = re.sub(r"\D", "", str(row.get("inn") or ""))[:12]
+        normalized_inn = re.sub(r"\D", "", str(row.get("inn") or ""))[:12]
         blob = str(row.get("search_blob") or "").strip()
-        row["search_blob"] = f"{inn} {blob}".strip()
+        row["search_blob"] = f"{normalized_inn} {blob}".strip()
     return rows
+
+
+def role_phone_inns() -> set[str]:
+    """ИНН компаний, где есть телефон, привязанный к роли/должности."""
+    with connect() as conn:
+        columns = table_columns(conn, "contact")
+        if not columns or "kind" not in columns:
+            return set()
+        role_checks: list[str] = []
+        if "has_role" in columns:
+            role_checks.append("COALESCE(has_role,0)=1")
+        if "is_purchaser" in columns:
+            role_checks.append("COALESCE(is_purchaser,0)=1")
+        if "is_tech" in columns:
+            role_checks.append("COALESCE(is_tech,0)=1")
+        if "role" in columns:
+            role_checks.append("TRIM(COALESCE(role,''))<>''")
+        if "position" in columns:
+            role_checks.append("TRIM(COALESCE(position,''))<>''")
+        if not role_checks:
+            return set()
+        sql = (
+            "SELECT DISTINCT inn FROM contact WHERE kind='phone' AND ("
+            + " OR ".join(role_checks)
+            + ")"
+        )
+        return {str(row[0]) for row in conn.execute(sql).fetchall() if row[0]}
 
 
 _URL_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
@@ -216,20 +243,20 @@ def facts(inn: str, limit: int = 500) -> list[dict]:
         )
     result: list[dict] = []
     for row in rows:
-        result.append(
-            {
-                **row,
-                "status": row.get("status") or row.get("chto") or "",
-                "model": row.get("model") or row.get("kto_ili_marka") or "",
-                "equipment_type": row.get("equipment_type") or row.get("dolzhnost_ili_tip") or "",
-                "medium": row.get("medium") or row.get("rol") or "",
-                "event_date": row.get("event_date") or row.get("data") or "",
-                "evidence": row.get("evidence") or row.get("chem_dokazano") or "",
-                "quote": row.get("quote") or row.get("citata") or "",
-                "source": row.get("source") or row.get("istochnik") or "",
-                "source_url": safe_source_url(row.get("source_url") or row.get("ssylka")),
-            }
-        )
+        item = {
+            **row,
+            "status": row.get("status") or row.get("chto") or "",
+            "model": row.get("model") or row.get("kto_ili_marka") or "",
+            "equipment_type": row.get("equipment_type") or row.get("dolzhnost_ili_tip") or "",
+            "medium": row.get("medium") or row.get("rol") or "",
+            "event_date": row.get("event_date") or row.get("data") or "",
+            "evidence": row.get("evidence") or row.get("chem_dokazano") or "",
+            "quote": row.get("quote") or row.get("citata") or "",
+            "source": row.get("source") or row.get("istochnik") or "",
+            "source_url": safe_source_url(row.get("source_url") or row.get("ssylka")),
+        }
+        if centro_medium.keep_fact(item):
+            result.append(item)
     return result
 
 
