@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Распределение — Центробежные</title>
+  <link rel="stylesheet" href="{{ base_path }}/static/css/centro.css">
+</head>
+<body>
+<header class="topbar"><a href="{{ base_path }}/centro">← Моя база</a><strong>Статистика распределения</strong><span>{{ user.username }}</span></header>
+<main class="admin-page">
+  <table>
+    <thead><tr><th>Пользователь</th><th>Компаний</th><th>Сумма score</th><th>Средний score</th><th>Обработано</th><th>Осталось</th></tr></thead>
+    <tbody>{% for row in stats %}<tr><td>{{ row.username }}</td><td>{{ row.companies }}</td><td>{{ '%.1f'|format(row.score or 0) }}</td><td>{{ '%.2f'|format(row.average or 0) }}</td><td>{{ row.processed or 0 }}</td><td>{{ row.companies-(row.processed or 0) }}</td></tr>{% else %}<tr><td colspan="6">Назначений пока нет.</td></tr>{% endfor %}</tbody>
+  </table>
+  <section>
+    <h2>Ручное переназначение</h2>
+    <p>Статус звонка сохраняется и переносится к новому ответственному.</p>
+    <form method="post" action="{{ base_path }}/centro/reassign">
+      <input name="inn" inputmode="numeric" placeholder="ИНН" required>
+      <select name="username" required><option value="">Выберите сотрудника</option>{% for value in sales_users %}<option value="{{ value }}">{{ value }}</option>{% endfor %}</select>
+      <button>Переназначить</button>
+    </form>
+  </section>
+</main>
+</body>
+</html>

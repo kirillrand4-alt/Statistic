@@ -1,262 +1,364 @@
-{# ============================================================================
-   centro.html — КАРКАС страниц «Центробежные 1 / 2».
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Центробежные — база продаж</title>
+  <link rel="stylesheet" href="{{ base_path }}/static/css/centro.css">
+</head>
+<body>
+{% macro source_link(source, url, label='Источник') %}
+  <div class="source-line">
+    <span>{{ label }}:</span>
+    {% if url %}
+      <a href="{{ url }}" target="_blank" rel="noopener noreferrer">{{ source or 'открыть первоисточник' }} ↗</a>
+    {% else %}
+      <span>{{ source or 'не указан' }}</span>
+      <em>ссылки нет</em>
+    {% endif %}
+  </div>
+{% endmacro %}
 
-   Куда класть на сервере: C:\seostat\app\web\templates\centro.html
-   (имя задано константой TPL_PAGE в routes_centro.py), а centro.css —
-   в C:\seostat\app\web\static\css\centro.css.
-
-   Устроено ровно так же, как боевая obzvon.html, и наследует тот же
-   obzvon_base.html: общая шапка обзвона, переключатель скина (ivory/green),
-   тот же путь до статики. БД на этой странице не трогается вовсе — карточка
-   или список догружаются отдельным запросом фрагментом в #card, как в бою.
-
-   Контекст (см. routes_centro.py): base, label, hint, bases, centro_bases,
-   flt, msg, filters_active, view, page, size, skip, frag_url, frag_qs,
-   card_url, list_url, base_path.
-   ============================================================================ #}
-{% extends "obzvon_base.html" %}
-{% block title %}Обзвон · {{ label }}{% endblock %}
-{% block content %}
-{# Свою таблицу стилей подключаем здесь, а не в <head>: obzvon_base.html блока
-   для <head> не имеет, а править боевой базовый шаблон ради двух страниц —
-   лишний риск. <link rel="stylesheet"> в <body> разрешён стандартом HTML
-   (body-ok relationship) и применяется всеми браузерами; первым элементом
-   блока — чтобы стили пришли до отрисовки содержимого. #}
-<link rel="stylesheet" href="{{ base_path }}/static/css/centro.css">
-
-<div class="ct">
-
-  {# ---------- заголовок страницы: название базы, счётчики, вкладки баз ---- #}
-  <header class="ct-head">
-    <div class="ct-head-row">
-      <div class="ct-title-wrap">
-        <h2 class="ct-title">{{ label }}</h2>
-        <p class="ct-sub">
-          {% if hint %}{{ hint }} · {% endif %}автономная база
-          <code>centrifugal.db</code>, панель читает её только на чтение
-        </p>
-      </div>
-      {# счётчики заполняет скрипт внизу — они приходят вместе с фрагментом,
-         сам каркас в БД не ходит #}
-      <div class="ct-stats" id="ct-stats" aria-live="polite"></div>
+{% macro contact_card(contact) %}
+  <article class="contact-card{% if contact.is_purchaser %} is-buyer{% endif %}{% if contact.is_tech %} is-tech{% endif %}">
+    <div class="contact-main">
+      {% if contact.href %}<a class="contact-value" href="{{ contact.href }}">{{ contact.value }}</a>{% else %}<b class="contact-value">{{ contact.value }}</b>{% endif %}
+      <span class="badges">
+        {% if contact.is_purchaser %}<span class="tag tag-buy">закупки</span>{% endif %}
+        {% if contact.is_tech %}<span class="tag tag-tech">технический ЛПР</span>{% endif %}
+        {% if contact.phone_type %}<span class="tag">{{ contact.phone_type }}</span>{% endif %}
+      </span>
     </div>
+    {% if contact.person or contact.role or contact.position %}
+      <div class="contact-person">
+        <b>{{ contact.person or 'Имя не указано' }}</b>
+        {% if contact.position or contact.role %}<span>{{ contact.position or contact.role }}</span>{% endif %}
+      </div>
+    {% endif %}
+    {{ source_link(contact.source, contact.source_url) }}
+    <button type="button" class="copy-button" data-copy="{{ contact.value }}">Копировать</button>
+  </article>
+{% endmacro %}
 
-    <nav class="ct-tabs" aria-label="Базы обзвона">
-      {% for slug, name in (centro_bases or {}).items() %}
-      <a class="ct-tab{% if slug == base %} is-on{% endif %}"
-         href="{{ base_path }}/{{ slug }}"
-         {% if slug == base %}aria-current="page"{% endif %}>{{ name }}</a>
+<header class="topbar">
+  <div class="brand-block">
+    <strong>Центробежные</strong>
+    <span>база продаж по компрессорному оборудованию</span>
+  </div>
+  <nav>
+    <a href="{{ base_path }}/centro">Вся очередь</a>
+    <a href="{{ base_path }}/centro?call_status=callback">Повторные звонки</a>
+    <a href="{{ base_path }}/centro?call_status=interested">Заинтересованы</a>
+    <a href="{{ base_path }}/centro?call_status=proposal">Предложения</a>
+    {% if user.role == 'admin' %}<a href="{{ base_path }}/centro/admin">Распределение</a>{% endif %}
+  </nav>
+  <div class="user-block">
+    <span>{{ user.username }} · {{ 'администратор' if user.role == 'admin' else 'продавец' }}</span>
+    <form method="post" action="{{ base_path }}/centro/logout"><button class="link-button">Выйти</button></form>
+  </div>
+</header>
+
+<form class="filterbar" method="get">
+  <input type="search" name="q" value="{{ request.query_params.get('q','') }}" placeholder="Название, ИНН, модель, телефон, человек…">
+  <select name="region">
+    <option value="">Все регионы</option>
+    {% for value in regions %}<option value="{{ value }}" {% if request.query_params.get('region') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}
+  </select>
+  <input name="model" list="model-list-main" value="{{ request.query_params.get('model','') }}" placeholder="Модель / марка">
+  <datalist id="model-list-main">{% for value in choices.model %}<option value="{{ value }}">{% endfor %}</datalist>
+  <label class="check"><input type="checkbox" name="has_phone" value="1" {% if request.query_params.get('has_phone') == '1' %}checked{% endif %}> Есть телефон</label>
+  <label class="check"><input type="checkbox" name="has_role_phone" value="1" {% if request.query_params.get('has_role_phone') == '1' %}checked{% endif %}> Телефон с ролью</label>
+  <button>Найти</button>
+  <button type="button" class="secondary" data-open-filters>Все фильтры</button>
+  <a class="reset-link" href="{{ base_path }}/centro">Сбросить</a>
+  <b class="total-count">{{ total }} компаний</b>
+</form>
+
+<dialog id="allFilters">
+  <form method="get" class="dialog-form">
+    <header class="dialog-header">
+      <div><h2>Расширенные фильтры</h2><p>Отбор по компании, оборудованию, источникам и статусу работы.</p></div>
+      <button type="button" class="icon-button" data-close-filters aria-label="Закрыть">×</button>
+    </header>
+    <div class="dialog-scroll">
+      <section class="filter-section">
+        <h3>Компания</h3>
+        <div class="filter-grid">
+          <label>Поиск<input type="search" name="q" value="{{ request.query_params.get('q','') }}"></label>
+          <label>Регион<select name="region"><option value="">Любой</option>{% for value in regions %}<option value="{{ value }}" {% if request.query_params.get('region') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+          <label>Статус ЕГРЮЛ<input name="legal_status" list="status-list" value="{{ request.query_params.get('legal_status','') }}"></label>
+          <datalist id="status-list">{% for value in choices.legal_status %}<option value="{{ value }}">{% endfor %}</datalist>
+          <label>ОКВЭД<input name="okved" list="okved-list" value="{{ request.query_params.get('okved','') }}"></label>
+          <datalist id="okved-list">{% for value in choices.okved %}<option value="{{ value }}">{% endfor %}</datalist>
+          {% if user.role == 'admin' %}<label>Сотрудник<select name="assigned_user"><option value="">Любой</option>{% for value in sales_users %}<option value="{{ value }}" {% if request.query_params.get('assigned_user') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>{% endif %}
+          <label>Результат звонка<select name="call_status"><option value="">Любой</option>{% for value,label in call_results.items() %}<option value="{{ value }}" {% if request.query_params.get('call_status') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+        </div>
+      </section>
+
+      <section class="filter-section">
+        <h3>Центробежное оборудование</h3>
+        <div class="filter-grid">
+          <label>Тип оборудования<input name="equipment" list="equipment-list" value="{{ request.query_params.get('equipment','') }}"></label>
+          <datalist id="equipment-list">{% for value in choices.equipment %}<option value="{{ value }}">{% endfor %}</datalist>
+          <label>Модель / марка<input name="model" list="model-list" value="{{ request.query_params.get('model','') }}"></label>
+          <datalist id="model-list">{% for value in choices.model %}<option value="{{ value }}">{% endfor %}</datalist>
+          <label>Рабочая среда<input name="medium" list="medium-list" value="{{ request.query_params.get('medium','') }}"></label>
+          <datalist id="medium-list">{% for value in choices.medium %}<option value="{{ value }}">{% endfor %}</datalist>
+          <label>Состояние / намерение<input name="condition" list="condition-list" value="{{ request.query_params.get('condition','') }}"></label>
+          <datalist id="condition-list">{% for value in choices.condition %}<option value="{{ value }}">{% endfor %}</datalist>
+        </div>
+      </section>
+
+      <section class="filter-section">
+        <h3>Деньги и приоритет</h3>
+        <div class="filter-grid four">
+          <label>Выручка от<input type="number" name="min_revenue" value="{{ request.query_params.get('min_revenue','') }}" min="0"></label>
+          <label>Выручка до<input type="number" name="max_revenue" value="{{ request.query_params.get('max_revenue','') }}" min="0"></label>
+          <label>Приоритет от<input type="number" step="0.01" name="min_priority" value="{{ request.query_params.get('min_priority','') }}"></label>
+          <label>Приоритет до<input type="number" step="0.01" name="max_priority" value="{{ request.query_params.get('max_priority','') }}"></label>
+        </div>
+      </section>
+
+      <section class="filter-section">
+        <h3>Наличие данных</h3>
+        <div class="checks-grid">
+          <label class="check"><input type="checkbox" name="has_phone" value="1" {% if request.query_params.get('has_phone') == '1' %}checked{% endif %}> Телефон</label>
+          <label class="check"><input type="checkbox" name="has_role_phone" value="1" {% if request.query_params.get('has_role_phone') == '1' %}checked{% endif %}> Телефон с установленной ролью</label>
+          <label class="check"><input type="checkbox" name="has_purchaser" value="1" {% if request.query_params.get('has_purchaser') == '1' %}checked{% endif %}> Закупщик / снабжение</label>
+          <label class="check"><input type="checkbox" name="has_tech" value="1" {% if request.query_params.get('has_tech') == '1' %}checked{% endif %}> Технический ЛПР</label>
+          <label class="check"><input type="checkbox" name="has_signal" value="1" {% if request.query_params.get('has_signal') == '1' %}checked{% endif %}> Новостной повод</label>
+          <label class="check"><input type="checkbox" name="has_model" value="1" {% if request.query_params.get('has_model') == '1' %}checked{% endif %}> Известна модель</label>
+        </div>
+      </section>
+    </div>
+    <menu class="dialog-actions"><a href="{{ base_path }}/centro">Сбросить всё</a><button type="button" class="secondary" data-close-filters>Отмена</button><button>Применить</button></menu>
+  </form>
+</dialog>
+
+{% if error %}
+  <div class="state-card error-card"><h2>Исходная база недоступна</h2><p>{{ error }}</p><p>Пользователи, распределение, результаты звонков и комментарии хранятся отдельно и не потеряны.</p></div>
+{% elif not company %}
+  <div class="state-card"><h2>Компании не найдены</h2><p>Ослабьте фильтры или проверьте распределение.</p></div>
+{% else %}
+<main class="page-wrap">
+  <section class="company-hero card">
+    <div class="hero-main">
+      <div>
+        <span class="eyebrow">Компания {{ (page-1)*size+1 }}–{{ [page*size,total]|min }} из {{ total }}</span>
+        <h1>{{ company.predpriyatie or company.name_full or company.name_short or 'Компания' }}</h1>
+        <p>{{ company.adres or company.address or 'Адрес не указан' }}</p>
+      </div>
+      <div class="hero-badges">
+        <span class="tag tag-status">{{ company.status_egrul or company.status or 'Статус не указан' }}</span>
+        {% if company.has_signal %}<span class="tag tag-hot">есть повод</span>{% endif %}
+        {% if company.has_phone %}<span class="tag tag-buy">есть телефон</span>{% endif %}
+        {% if company.has_role_phone %}<span class="tag tag-buy">телефон с ролью</span>{% endif %}
+        {% if company.has_tech %}<span class="tag tag-tech">есть тех. ЛПР</span>{% endif %}
+      </div>
+    </div>
+    {% if user.role == 'admin' %}<p class="assignment">Назначено: <b>{{ company.assigned_user or 'не назначено' }}</b></p>{% endif %}
+    <div class="hero-meta">
+      <span><b>ИНН</b> {{ company.inn }} <button type="button" class="text-button" data-copy="{{ company.inn }}">копировать</button></span>
+      <span><b>Регион</b> {{ company.region or '—' }}</span>
+      <span><b>Приоритет</b> {{ company.moy_prioritet or company.rank_metric or company.ball_prioriteta or '—' }}</span>
+      <span><b>Фактов</b> {{ facts|length }}</span>
+    </div>
+  </section>
+
+  <section class="card contacts-section">
+    <div class="section-head">
+      <div><h2>Контакты</h2><p>Контакты с установленной ролью показаны сразу. Остальные скрыты.</p></div>
+      <span class="counter">{{ contacts|length }}</span>
+    </div>
+    {% if role_contacts %}
+      <div class="contacts-grid">{% for contact in role_contacts %}{{ contact_card(contact) }}{% endfor %}</div>
+    {% else %}<p class="muted">Контактов с установленной ролью нет.</p>{% endif %}
+    {% if unassigned_contacts %}
+      <details class="fold">
+        <summary>Контакты без установленной роли ({{ unassigned_contacts|length }})</summary>
+        <div class="contacts-grid">{% for contact in unassigned_contacts %}{{ contact_card(contact) }}{% endfor %}</div>
+      </details>
+    {% endif %}
+  </section>
+
+  {% set people_with_role = people | selectattr('has_role') | list %}
+  {% set people_without_role = people | rejectattr('has_role') | list %}
+  {% if people %}
+  <section class="card">
+    <div class="section-head"><div><h2>Люди предприятия</h2><p>Технические специалисты и сотрудники с известными должностями.</p></div><span class="counter">{{ people|length }}</span></div>
+    {% if people_with_role %}
+      <div class="people-grid">
+      {% for person in people_with_role %}
+        <article class="person-card{% if person.is_tech %} is-tech{% endif %}">
+          <b>{{ person.person or 'Имя не указано' }}</b>
+          <span>{{ person.position or person.role or 'Роль не указана' }}</span>
+          {% if person.phone %}<a href="tel:{{ person.phone }}">{{ person.phone }}</a>{% endif %}
+          {% if person.email %}<a href="mailto:{{ person.email }}">{{ person.email }}</a>{% endif %}
+          {{ source_link(person.source, person.source_url) }}
+        </article>
       {% endfor %}
-      {# Ссылок на kc/meyer здесь НЕТ намеренно (владелец 28.07): продажникам,
-         работающим по центробежным, доступ к прежним базам не нужен, а лишние
-         вкладки уводят из своей очереди. Сами базы никуда не делись и открыты
-         по прямым адресам — это отсечение в интерфейсе, а не в правах. #}
-    </nav>
-  </header>
+      </div>
+    {% endif %}
+    {% if people_without_role %}
+      <details class="fold"><summary>Люди без установленной роли ({{ people_without_role|length }})</summary>
+        <div class="people-grid">
+        {% for person in people_without_role %}
+          <article class="person-card"><b>{{ person.person or 'Имя не указано' }}</b>{{ source_link(person.source, person.source_url) }}</article>
+        {% endfor %}
+        </div>
+      </details>
+    {% endif %}
+  </section>
+  {% endif %}
 
-  {% if msg %}<p class="ct-alert">{{ msg }}</p>{% endif %}
+  <div class="two-column">
+    <section class="card">
+      <h2>Реквизиты и руководство</h2>
+      <dl class="data-list">
+        <div><dt>ИНН</dt><dd><a href="https://checko.ru/search?query={{ company.inn }}" target="_blank" rel="noopener noreferrer">{{ company.inn }} ↗</a></dd></div>
+        <div><dt>Регион</dt><dd>{{ company.region or '—' }}</dd></div>
+        <div><dt>Адрес</dt><dd>{{ company.adres or company.address or '—' }}</dd></div>
+        <div><dt>Директор</dt><dd>{{ company.direktor or company.director or '—' }}</dd></div>
+        <div><dt>Статус ЕГРЮЛ</dt><dd>{{ company.status_egrul or company.status or '—' }}</dd></div>
+        <div><dt>Сайт</dt><dd>{% if company.sayt or company.website %}<a href="{{ company.sayt or company.website }}" target="_blank" rel="noopener noreferrer">{{ company.sayt or company.website }} ↗</a>{% else %}—{% endif %}</dd></div>
+        <div><dt>Почта</dt><dd>{{ company.pochta or company.email or '—' }}</dd></div>
+      </dl>
+      {% if company_sources %}
+      <details class="fold"><summary>Источники проверки компании ({{ company_sources|length }})</summary>
+        <ul class="source-list">{% for item in company_sources %}<li><b>{{ item.field_name }}</b>{{ source_link(item.source, item.source_url) }}</li>{% endfor %}</ul>
+      </details>
+      {% endif %}
+    </section>
 
-  {# ---------- режим: карточка по одной компании либо постраничный список.
-       Фильтры зашиты в обе ссылки — переключение режима не сбрасывает отбор. #}
-  <div class="ct-modes" role="group" aria-label="Режим просмотра">
-    <a class="ct-btn{% if view != 'list' %} is-on{% endif %}" href="{{ card_url }}"
-       {% if view != 'list' %}aria-current="page"{% endif %}>Карточка</a>
-    <a class="ct-btn{% if view == 'list' %} is-on{% endif %}" href="{{ list_url }}"
-       {% if view == 'list' %}aria-current="page"{% endif %}>Список</a>
+    <section class="card">
+      <h2>Деньги и деятельность</h2>
+      <dl class="data-list">
+        <div><dt>Выручка</dt><dd>{{ company.vyruchka_rub or company.revenue_num or company.revenue or '—' }}</dd></div>
+        <div><dt>Чистая прибыль</dt><dd>{{ company.chistaya_pribyl or company.profit or '—' }}</dd></div>
+        <div><dt>Сотрудники</dt><dd>{{ company.ssch or company.employees or company.staff or '—' }}</dd></div>
+        <div><dt>Основной ОКВЭД</dt><dd>{{ company.okved or company.okved_main or '—' }}</dd></div>
+        <div><dt>Оборудование по ОКВЭД</dt><dd>{{ company.oborudovanie_po_okved or company.equipment_all or '—' }}</dd></div>
+        <div><dt>Сегмент</dt><dd>{{ company.segment or '—' }}</dd></div>
+      </dl>
+      {% if company.okved_all %}<details class="fold"><summary>Все ОКВЭД</summary><p>{{ company.okved_all }}</p></details>{% endif %}
+    </section>
   </div>
 
-  {# ---------- фильтры очереди (сворачиваемые; значения региона и ОКВЭД
-       подставляет скрипт из JSON, приехавшего вместе с фрагментом) --------- #}
-  <details class="ct-filters" id="flt-box" open>
-    <summary>Фильтры{% if filters_active %} · <span class="ct-badge ct-badge--brand">активны</span>{% endif %}</summary>
-    <form method="get" action="{{ base_path }}/{{ base }}" id="filters">
-      {# признак отправки формы: снятый чекбокс браузер не шлёт вовсе, и без
-         этого признака сервер не отличил бы «снят» от «не трогали» #}
-      <input type="hidden" name="f" value="1">
-      {# режим и размер страницы переживают правку фильтра (иначе смена фильтра
-         выбрасывала бы из «Списка» обратно в «Карточку»). Номер страницы
-         намеренно НЕ тащим: после смены отбора верно начать с первой. #}
-      <input type="hidden" name="view" value="{{ view }}">
-      <input type="hidden" name="size" value="{{ size }}">
+  {% if company.vyvod_ekspertizy or company.data_zakluchenia %}
+  <section class="card">
+    <div class="section-head">
+      <div><h2>Заключение комиссии</h2><p>Значение из сводной базы предприятия.</p></div>
+      {% if company.data_zakluchenia %}<span class="tag tag-status">{{ company.data_zakluchenia }}</span>{% endif %}
+    </div>
+    <p>{{ company.vyvod_ekspertizy or 'Значение заключения не указано' }}</p>
+  </section>
+  {% endif %}
 
-      <div class="ct-filters-grid">
-        <div>
-          <label for="f-q">Поиск <small>(название, ИНН, адрес, директор)</small></label>
-          <input type="text" id="f-q" name="q" value="{{ flt.q }}"
-                 placeholder="например: Челябинск или 7451234567">
-        </div>
-        <div>
-          <label for="f-region">Регион</label>
-          <select name="region" id="f-region" data-selected="{{ flt.region }}">
-            <option value="">— любой —</option>
-            {% if flt.region %}<option value="{{ flt.region }}" selected>{{ flt.region }}</option>{% endif %}
-          </select>
-        </div>
-        <div>
-          <label for="f-okved">Основной ОКВЭД</label>
-          <select name="okved" id="f-okved" data-selected="{{ flt.okved }}">
-            <option value="">— любой —</option>
-            {% if flt.okved %}<option value="{{ flt.okved }}" selected>{{ flt.okved }}</option>{% endif %}
-          </select>
-        </div>
-      </div>
+  <section class="card call-reason">
+    <div class="reason-icon">!</div>
+    <div>
+      <h2>Почему звонить сейчас</h2>
+      <p>{{ company.prioritet_pochemu or company.novost or company.vyvod_ekspertizy or 'Отдельный повод не сформулирован — используйте сведения об оборудовании и деятельности.' }}</p>
+      {% if company.novost_ssylka %}<a href="{{ company.novost_ssylka }}" target="_blank" rel="noopener noreferrer">Источник повода ↗</a>{% endif %}
+    </div>
+  </section>
 
-      <div class="ct-chips">
-        <label class="ct-chip">
-          <input type="checkbox" name="only_phone" value="1" {% if flt.only_phone %}checked{% endif %}>
-          только с телефоном
-        </label>
-        <label class="ct-chip">
-          <input type="checkbox" name="only_purchaser" value="1" {% if flt.only_purchaser %}checked{% endif %}>
-          есть контакт закупщика
-        </label>
-        {# Отдельно от предыдущей (владелец 28.07): у закупщиков почт много, а
-           телефонов мало — в centro1 это 163 против 55, — и звонить можно только
-           по телефонам. Без этой плашки фильтр работал лишь по прямой ссылке. #}
-        <label class="ct-chip">
-          <input type="checkbox" name="only_purchaser_phone" value="1"
-                 {% if flt.only_purchaser_phone %}checked{% endif %}>
-          есть ТЕЛЕФОН закупщика
-        </label>
-        <label class="ct-chip">
-          <input type="checkbox" name="only_signal" value="1" {% if flt.only_signal %}checked{% endif %}>
-          есть новостной повод
-        </label>
-        <label class="ct-chip">
-          <input type="checkbox" name="only_new" value="1" {% if flt.only_new %}checked{% endif %}>
-          есть новый контакт
-        </label>
-      </div>
+  {% if news %}
+  <section class="card">
+    <div class="section-head"><div><h2>Новости и сигналы</h2><p>Каждый повод показан вместе с датой и первоисточником.</p></div><span class="counter hot-counter">{{ news|length }}</span></div>
+    <div class="news-list">
+      {% for item in news %}
+      <article class="news-card">
+        <div class="news-top"><span class="tag tag-hot">{{ item.event_type or 'новость' }}</span><time>{{ item.event_date or '' }}</time></div>
+        <h3>{{ item.title }}</h3>
+        {% if item.quote %}<blockquote>{{ item.quote }}</blockquote>{% endif %}
+        {{ source_link(item.source, item.source_url, 'Новость') }}
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
 
-      {# кнопка нужна для работы без JS: со скриптом форма отправляется сама #}
-      <div class="ct-filters-actions">
-        <button type="submit" class="ct-btn ct-btn--primary">Применить</button>
-        {% if filters_active %}
-        <a class="ct-btn ct-btn--sm" href="{{ base_path }}/{{ base }}?f=1&amp;view={{ view }}&amp;size={{ size }}">Сбросить</a>
-        {% endif %}
+  <section class="card equipment-section">
+    <div class="section-head">
+      <div><h2>Оборудование — что уже известно</h2><p>Воздушные и неопределённые компрессорные факты с доказательствами, датами и ссылками. Насосы и явно не воздушные среды скрыты.</p></div>
+      <span class="counter">{{ facts|length }}</span>
+    </div>
+    {% if facts %}
+      <div class="facts-list">
+      {% for fact in facts %}
+        <article class="fact-card">
+          <div class="fact-head">
+            <div class="badges">
+              {% if fact.status %}<span class="tag tag-status">{{ fact.status }}</span>{% endif %}
+              {% if fact.event_date %}<span class="tag">{{ fact.event_date }}</span>{% endif %}
+            </div>
+            {% if fact.source_url %}<a class="source-button" href="{{ fact.source_url }}" target="_blank" rel="noopener noreferrer">Первоисточник ↗</a>{% endif %}
+          </div>
+          <dl class="fact-grid">
+            <div><dt>Модель / марка</dt><dd>{{ fact.model or 'не установлена' }}</dd></div>
+            <div><dt>Тип оборудования</dt><dd>{{ fact.equipment_type or 'не установлен' }}</dd></div>
+            <div><dt>Рабочая среда</dt><dd>{{ fact.medium or 'не названа' }}</dd></div>
+            <div><dt>Дата факта</dt><dd>{{ fact.event_date or 'не указана' }}</dd></div>
+            <div class="wide"><dt>Чем доказано</dt><dd>{{ fact.evidence or 'доказательство не описано' }}</dd></div>
+            {% if fact.quote %}<div class="wide"><dt>Цитата</dt><dd><blockquote>{{ fact.quote }}</blockquote></dd></div>{% endif %}
+          </dl>
+          {{ source_link(fact.source, fact.source_url) }}
+        </article>
+      {% endfor %}
       </div>
+    {% else %}<p class="muted">Подробных воздушных компрессорных фактов в текущем снимке нет.</p>{% endif %}
+  </section>
+
+  <section class="card summary-card">
+    <h2>Сводка по оборудованию</h2>
+    <dl class="data-list three">
+      <div><dt>Типы машин</dt><dd>{{ company.tipy_mashin or company.equipment_all or '—' }}</dd></div>
+      <div><dt>Модели / марки</dt><dd>{{ company.marki or company.marki_iz_faktov or '—' }}</dd></div>
+      <div><dt>Рабочая среда</dt><dd>{{ company.sreda or company.sreda_po_faktam or '—' }}</dd></div>
+      <div><dt>Состояние</dt><dd>{{ company.sostoyaniya_po_faktam or company.pometka or '—' }}</dd></div>
+      <div><dt>Важность покупки</dt><dd>{{ company.vazhnost_pokupki or '—' }}</dd></div>
+      <div><dt>Доступность контакта</dt><dd>{{ company.dostupnost_kontakta or '—' }}</dd></div>
+      <div><dt>Заключение комиссии</dt><dd>{{ company.vyvod_ekspertizy or '—' }}</dd></div>
+      <div><dt>Дата заключения</dt><dd>{{ company.data_zakluchenia or '—' }}</dd></div>
+    </dl>
+  </section>
+
+  <section class="card work-card">
+    <form method="post" action="{{ base_path }}/centro/save" class="work-form">
+      <input type="hidden" name="inn" value="{{ company.inn }}">
+      <input type="hidden" name="return_query" value="{{ query_string }}">
+      <label>Комментарий<textarea name="comment" maxlength="5000" placeholder="Результат разговора, контакт, потребность, следующий шаг"></textarea></label>
+      <label>Результат<select name="call_result" required>{% for value,label in call_results.items() %}<option value="{{ value }}" {% if company.call_result == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <label>Следующий контакт<input type="datetime-local" name="next_contact_at" value="{{ company.next_contact_at or '' }}"></label>
+      <button class="primary-button">Сохранить и перейти дальше</button>
     </form>
-  </details>
+    <div class="work-actions">
+      {% if page > 1 %}<a class="action-button" href="?page={{ page-1 }}{% if query_string %}&{{ query_string }}{% endif %}">← Назад</a>{% endif %}
+      {% if page < pages %}<a class="action-button primary" href="?page={{ page+1 }}{% if query_string %}&{{ query_string }}{% endif %}">Пропустить →</a>{% endif %}
+      <details class="comments"><summary>Комментарии ({{ comments|length }})</summary>{% for item in comments %}<article><b>{{ item.username }}</b><time>{{ item.created_at }}</time><p>{{ item.body }}</p></article>{% endfor %}</details>
+    </div>
+  </section>
 
-  {# карточка/список догружаются отдельным запросом — сам каркас мгновенный #}
-  <div id="card">
-    <p class="ct-loading" aria-busy="true">Загружаю {% if view == 'list' %}список{% else %}карточку{% endif %}…</p>
-  </div>
-</div>
+  <section class="card queue">
+    <div class="section-head"><h2>Личная очередь</h2><span>{{ page }} / {{ pages }}</span></div>
+    <div class="queue-list">
+      {% for item in rows %}<a href="{{ base_path }}/centro?inn={{ item.inn }}{% if query_string %}&{{ query_string }}{% endif %}" {% if item.inn == company.inn %}class="active"{% endif %}><b>{{ item.predpriyatie or item.name_short or item.inn }}</b><span>{{ item.region or '' }} · {{ call_results.get(item.call_result or 'new', item.call_result or 'Новый') }}</span></a>{% endfor %}
+    </div>
+    <nav>{% if page > 1 %}<a href="?page={{ page-1 }}{% if query_string %}&{{ query_string }}{% endif %}">← Назад</a>{% endif %}<span>{{ page }}/{{ pages }}</span>{% if page < pages %}<a href="?page={{ page+1 }}{% if query_string %}&{{ query_string }}{% endif %}">Далее →</a>{% endif %}</nav>
+  </section>
+
+  {% if user.role == 'admin' and db_info %}
+  <details class="database-info"><summary>Какая база сейчас подключена</summary><dl>{% for key,value in db_info.items() %}<div><dt>{{ key }}</dt><dd>{{ value }}</dd></div>{% endfor %}</dl></details>
+  {% endif %}
+</main>
+{% endif %}
 
 <script>
-  (function () {
-    // сворачивание фильтров запоминаем: страница перезагружается на каждый
-    // «пропустить» и каждую правку фильтра — иначе блок разворачивался бы заново
-    var box = document.getElementById("flt-box");
-    if (box) {
-      try { box.open = localStorage.getItem("centroFilters") !== "closed"; } catch (e) {}
-      box.addEventListener("toggle", function () {
-        try { localStorage.setItem("centroFilters", box.open ? "open" : "closed"); } catch (e) {}
-      });
-    }
-    // фильтры применяются сами: изменение любого поля перезагружает очередь
-    var form = document.getElementById("filters");
-    if (form) form.addEventListener("change", function () { form.submit(); });
-
-    // frag_qs — уже url-энкоденная строка; |safe обязателен, иначе Jinja
-    // экранирует & в &amp;, и сервер увидит параметр "amp;skip" вместо "skip"
-    // (в бою это ломало и пропуск, и все фильтры кроме первого).
-    var url = "{{ frag_url }}{% if frag_qs %}?{{ frag_qs|safe }}{% endif %}";
-    var cardBox = document.getElementById("card");
-
-    function fillSelect(id, items) {
-      var sel = document.getElementById(id);
-      if (!sel || !items) return;
-      var selected = sel.getAttribute("data-selected") || "";
-      var first = sel.options[0].cloneNode(true);
-      sel.innerHTML = "";
-      sel.appendChild(first);
-      items.forEach(function (it) {
-        var name = it[0], n = it[1];
-        var o = document.createElement("option");
-        o.value = name;
-        o.textContent = name + " (" + n + ")";
-        if (name === selected) o.selected = true;
-        sel.appendChild(o);
-      });
-    }
-
-    // счётчики базы в шапке. Значения ставим через textContent, а не innerHTML:
-    // в шапку не должно попадать ничего, что можно принять за разметку.
-    var STAT_LABELS = [
-      ["total", "всего"], ["with_phone", "с телефоном"], ["with_email", "с почтой"],
-      ["with_purchaser", "с закупщиком"],
-      // отдельно от предыдущего: по телефону звонят, по почте нет, и разрыв
-      // велик — в базе продажников 167 против 55
-      ["with_purchaser_phone", "☎ закупщика"],
-      ["with_signal", "с поводом"],
-      ["in_obzvon", "есть в обзвоне"]
-    ];
-    function fillStats(stats) {
-      var boxEl = document.getElementById("ct-stats");
-      if (!boxEl) return;
-      boxEl.textContent = "";
-      if (!stats) return;
-      STAT_LABELS.forEach(function (pair) {
-        var v = stats[pair[0]];
-        if (v === undefined || v === null) return;
-        var wrap = document.createElement("span");
-        wrap.className = "ct-stat";
-        var num = document.createElement("b");
-        num.textContent = String(v);
-        var lbl = document.createElement("span");
-        lbl.textContent = pair[1];
-        wrap.appendChild(num);
-        wrap.appendChild(lbl);
-        boxEl.appendChild(wrap);
-      });
-    }
-
-    function load(fragUrl, pageUrl) {
-      cardBox.setAttribute("aria-busy", "true");
-      return fetch(fragUrl, {credentials: "same-origin"})
-        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.text(); })
-        .then(function (html) {
-          cardBox.removeAttribute("aria-busy");
-          cardBox.innerHTML = html;
-          var data = {};
-          try {
-            data = JSON.parse((cardBox.querySelector("#filters-data") || {}).textContent || "{}");
-          } catch (e) {}
-          fillSelect("f-region", data.regions);
-          fillSelect("f-okved", data.okveds);
-          fillStats(data.stats);
-          // адресная строка догоняет показанную страницу: F5 и «поделиться
-          // ссылкой» отдают ровно то, что на экране
-          if (pageUrl) { try { history.replaceState(null, "", pageUrl); } catch (e) {} }
-        })
-        .catch(function (e) {
-          cardBox.removeAttribute("aria-busy");
-          cardBox.textContent = "";
-          var p = document.createElement("p");
-          p.className = "ct-alert ct-alert--error";
-          p.textContent = "Не удалось загрузить (" + e.message + "). ";
-          var a = document.createElement("a");
-          a.href = "javascript:location.reload()";
-          a.textContent = "Повторить";
-          p.appendChild(a);
-          cardBox.appendChild(p);
-        });
-    }
-
-    // Переход по страницам списка подменяет только таблицу: полная перезагрузка
-    // на каждый «вперёд» — лишний круг и потеря развёрнутых фильтров. Ссылки
-    // при этом настоящие (href на полную страницу), поэтому без JS и в новой
-    // вкладке навигация тоже работает.
-    cardBox.addEventListener("click", function (ev) {
-      var a = ev.target.closest ? ev.target.closest("a[data-frag]") : null;
-      if (!a || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button) return;
-      ev.preventDefault();
-      load(a.getAttribute("data-frag"), a.getAttribute("href"));
-    });
-
-    load(url, null);
-  })();
+const dialog=document.getElementById('allFilters');
+document.querySelectorAll('[data-open-filters]').forEach(button=>button.addEventListener('click',()=>dialog?.showModal()));
+document.querySelectorAll('[data-close-filters]').forEach(button=>button.addEventListener('click',()=>dialog?.close()));
+document.querySelectorAll('[data-copy]').forEach(button=>button.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(button.dataset.copy||'');const old=button.textContent;button.textContent='Скопировано';setTimeout(()=>button.textContent=old,1200)}catch(e){}}));
 </script>
-{% endblock %}
+</body>
+</html>
