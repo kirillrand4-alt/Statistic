@@ -19,18 +19,9 @@ from pathlib import Path
 from app.services import centro_medium
 
 REQUIRED_FIELDS = {
-    "inn",
-    "sostoyanie",
-    "sreda",
-    "marki",
-    "srok_sluzhby",
-    "vyvod_ekspertizy",
-    "data",
-    "chto_za_data",
-    "chem_dokazano",
-    "tekst",
-    "ssylka",
-    "istochnik",
+    "inn", "sostoyanie", "sreda", "marki", "srok_sluzhby",
+    "vyvod_ekspertizy", "data", "chto_za_data", "chem_dokazano",
+    "tekst", "ssylka", "istochnik",
 }
 
 
@@ -105,12 +96,9 @@ def make_fact(row: dict[str, str]) -> dict[str, str]:
 def fact_key(company_inn: str, fact: dict[str, str]) -> tuple[str, ...]:
     return (
         company_inn,
-        fact["status"].casefold(),
-        fact["model"].casefold(),
-        fact["medium"].casefold(),
-        fact["event_date"].casefold(),
-        fact["evidence"].casefold(),
-        fact["quote"].casefold(),
+        fact["status"].casefold(), fact["model"].casefold(),
+        fact["medium"].casefold(), fact["event_date"].casefold(),
+        fact["evidence"].casefold(), fact["quote"].casefold(),
         fact["source_url"].casefold(),
     )
 
@@ -118,8 +106,7 @@ def fact_key(company_inn: str, fact: dict[str, str]) -> tuple[str, ...]:
 def rebuild_company_search(conn: sqlite3.Connection) -> None:
     company_columns = conn.execute('PRAGMA table_info("company")').fetchall()
     text_fields = [
-        str(row[1])
-        for row in company_columns
+        str(row[1]) for row in company_columns
         if str(row[2]).upper() == "TEXT" and str(row[1]) != "search_blob"
     ]
     select_fields = ",".join(f'"{field}"' for field in text_fields)
@@ -140,6 +127,27 @@ def rebuild_company_search(conn: sqlite3.Connection) -> None:
             if clean(value)
         ).casefold()
         conn.execute("UPDATE company SET search_blob=? WHERE inn=?", (blob, company_inn))
+
+
+def replace_database_file(temporary: Path, target: Path) -> None:
+    """Replace an existing SQLite file safely on Windows.
+
+    Windows may reject os.replace(temp, target) when the destination already
+    exists. Move the original aside first, then install the prepared snapshot.
+    Restore the original automatically if the second move fails.
+    """
+    backup = target.with_suffix(target.suffix + ".facts.bak")
+    backup.unlink(missing_ok=True)
+    os.replace(target, backup)
+    try:
+        os.replace(temporary, target)
+    except Exception:
+        if target.exists():
+            target.unlink(missing_ok=True)
+        os.replace(backup, target)
+        raise
+    else:
+        backup.unlink(missing_ok=True)
 
 
 def process(database: Path, facts_csv: Path, *, dry_run: bool = False) -> Counter:
@@ -204,13 +212,8 @@ def process(database: Path, facts_csv: Path, *, dry_run: bool = False) -> Counte
                 if not any(
                     fact[name]
                     for name in (
-                        "status",
-                        "model",
-                        "medium",
-                        "event_date",
-                        "evidence",
-                        "quote",
-                        "source_url",
+                        "status", "model", "medium", "event_date", "evidence",
+                        "quote", "source_url",
                     )
                 ):
                     counters["excluded_empty"] += 1
@@ -235,19 +238,13 @@ def process(database: Path, facts_csv: Path, *, dry_run: bool = False) -> Counte
                     source_url,source,commission_conclusion,service_life,date_kind
                     ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
-                        company_inn,
-                        fact["status"] or None,
-                        fact["model"] or None,
-                        fact["equipment_type"] or None,
-                        fact["medium"] or None,
-                        fact["event_date"] or None,
-                        fact["evidence"] or None,
-                        fact["quote"] or None,
-                        fact["source_url"] or None,
-                        fact["source"] or None,
+                        company_inn, fact["status"] or None,
+                        fact["model"] or None, fact["equipment_type"] or None,
+                        fact["medium"] or None, fact["event_date"] or None,
+                        fact["evidence"] or None, fact["quote"] or None,
+                        fact["source_url"] or None, fact["source"] or None,
                         fact["commission_conclusion"] or None,
-                        fact["service_life"] or None,
-                        fact["date_kind"] or None,
+                        fact["service_life"] or None, fact["date_kind"] or None,
                     ),
                 )
 
@@ -284,7 +281,7 @@ def process(database: Path, facts_csv: Path, *, dry_run: bool = False) -> Counte
         conn.close()
 
     if not dry_run:
-        os.replace(temporary, target)
+        replace_database_file(temporary, target)
 
     return counters
 
