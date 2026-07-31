@@ -1,13 +1,143 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Моя база — Центробежные</title><link rel="stylesheet" href="{{ base_path }}/static/css/centro.css"></head><body>
-<header class="topbar"><strong>Центробежные · Моя база</strong><nav><a href="{{ base_path }}/centro">Осталось</a><a href="{{ base_path }}/centro?call_status=callback">Повторные звонки</a><a href="{{ base_path }}/centro?call_status=interested">Заинтересованы</a>{% if user.role=='admin' %}<a href="{{ base_path }}/centro/admin">Статистика распределения</a>{% endif %}</nav><span>{{ user.username }} · {{ user.role }}</span><form method="post" action="{{ base_path }}/centro/logout"><button class="link-button">Выйти</button></form></header>
-<form class="filterbar" method="get"><input type="search" name="q" value="{{ request.query_params.get('q','') }}" placeholder="Название, ИНН, адрес, контакт, телефон…"><select name="region"><option value="">Все регионы</option>{% for v in regions %}<option {% if request.query_params.get('region')==v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select><label><input type="checkbox" name="has_phone" value="1" {% if request.query_params.get('has_phone')=='1' %}checked{% endif %}> с телефоном</label>{% if user.role=='admin' %}<select name="assigned_user"><option value="">Все компании</option>{% for u in sales_users %}<option {% if request.query_params.get('assigned_user')==u %}selected{% endif %}>{{ u }}</option>{% endfor %}</select>{% endif %}<button>Найти</button><button type="button" onclick="document.getElementById('allFilters').showModal()">Все фильтры</button><a href="{{ base_path }}/centro">Сбросить</a><b>{{ total }} компаний</b></form>
-<dialog id="allFilters"><form method="get"><h2>Все фильтры</h2><p>Категориальные значения загружаются из текущего снимка.</p><label>Результат звонка<select name="call_status"><option value="">Любой</option>{% for r in call_results|sort %}<option value="{{ r }}">{{ r }}</option>{% endfor %}</select></label><label><input type="checkbox" name="has_phone" value="1"> Есть телефон</label><menu><button>Применить</button><button type="button" onclick="this.closest('dialog').close()">Закрыть</button></menu></form></dialog>
-{% if error %}<div class="db-error"><h2>Исходная база недоступна</h2><p>{{ error }}</p><p>Рабочее состояние не потеряно: оно хранится отдельно в centro_sales.db.</p></div>{% elif not company %}<div class="empty"><h2>Компании не найдены</h2><p>Измените фильтры или попросите администратора проверить назначения.</p></div>{% else %}
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Моя база — Центробежные</title>
+  <link rel="stylesheet" href="{{ base_path }}/static/css/centro.css">
+</head>
+<body>
+<header class="topbar">
+  <strong>Центробежные · Моя база</strong>
+  <nav>
+    <a href="{{ base_path }}/centro">Вся очередь</a>
+    <a href="{{ base_path }}/centro?call_status=callback">Повторные звонки</a>
+    <a href="{{ base_path }}/centro?call_status=interested">Заинтересованы</a>
+    <a href="{{ base_path }}/centro?call_status=proposal">Предложения</a>
+    {% if user.role == 'admin' %}<a href="{{ base_path }}/centro/admin">Распределение</a>{% endif %}
+  </nav>
+  <span>{{ user.username }} · {{ user.role }}</span>
+  <form method="post" action="{{ base_path }}/centro/logout"><button class="link-button">Выйти</button></form>
+</header>
+
+<form class="filterbar" method="get">
+  <input type="search" name="q" value="{{ request.query_params.get('q','') }}" placeholder="Название, ИНН, адрес, контакт, телефон…">
+  <select name="region">
+    <option value="">Все регионы</option>
+    {% for value in regions %}<option value="{{ value }}" {% if request.query_params.get('region') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}
+  </select>
+  <label class="check"><input type="checkbox" name="has_phone" value="1" {% if request.query_params.get('has_phone') == '1' %}checked{% endif %}> Есть телефон</label>
+  {% if user.role == 'admin' %}
+  <select name="assigned_user">
+    <option value="">Все сотрудники</option>
+    {% for value in sales_users %}<option value="{{ value }}" {% if request.query_params.get('assigned_user') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}
+  </select>
+  {% endif %}
+  <button>Найти</button>
+  <button type="button" class="secondary" data-open-filters>Все фильтры</button>
+  <a href="{{ base_path }}/centro">Сбросить</a>
+  <b>{{ total }} компаний</b>
+</form>
+
+<dialog id="allFilters">
+  <form method="get" class="dialog-form">
+    <header><h2>Все фильтры</h2><button type="button" class="icon-button" data-close-filters aria-label="Закрыть">×</button></header>
+    <label>Поиск<input type="search" name="q" value="{{ request.query_params.get('q','') }}"></label>
+    <label>Регион<select name="region"><option value="">Любой</option>{% for value in regions %}<option value="{{ value }}" {% if request.query_params.get('region') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+    <label>Результат звонка<select name="call_status"><option value="">Любой</option>{% for value,label in call_results.items() %}<option value="{{ value }}" {% if request.query_params.get('call_status') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    {% if user.role == 'admin' %}<label>Сотрудник<select name="assigned_user"><option value="">Любой</option>{% for value in sales_users %}<option value="{{ value }}" {% if request.query_params.get('assigned_user') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>{% endif %}
+    <label>ОКВЭД<input name="okved" list="okved-list" value="{{ request.query_params.get('okved','') }}"></label>
+    <datalist id="okved-list">{% for value in choices.okved %}<option value="{{ value }}">{% endfor %}</datalist>
+    <label>Тип оборудования<input name="equipment" list="equipment-list" value="{{ request.query_params.get('equipment','') }}"></label>
+    <datalist id="equipment-list">{% for value in choices.equipment %}<option value="{{ value }}">{% endfor %}</datalist>
+    <label>Марка<input name="brand" list="brand-list" value="{{ request.query_params.get('brand','') }}"></label>
+    <datalist id="brand-list">{% for value in choices.brand %}<option value="{{ value }}">{% endfor %}</datalist>
+    <label>Статус ЕГРЮЛ<input name="legal_status" list="status-list" value="{{ request.query_params.get('legal_status','') }}"></label>
+    <datalist id="status-list">{% for value in choices.legal_status %}<option value="{{ value }}">{% endfor %}</datalist>
+    <div class="two-cols">
+      <label>Выручка от<input type="number" name="min_revenue" value="{{ request.query_params.get('min_revenue','') }}" min="0"></label>
+      <label>Выручка до<input type="number" name="max_revenue" value="{{ request.query_params.get('max_revenue','') }}" min="0"></label>
+    </div>
+    <label>Приоритет от<input type="number" step="0.01" name="min_priority" value="{{ request.query_params.get('min_priority','') }}"></label>
+    <fieldset><legend>Наличие данных</legend>
+      <label class="check"><input type="checkbox" name="has_phone" value="1" {% if request.query_params.get('has_phone') == '1' %}checked{% endif %}> Телефон</label>
+      <label class="check"><input type="checkbox" name="has_purchaser" value="1" {% if request.query_params.get('has_purchaser') == '1' %}checked{% endif %}> Закупщик</label>
+      <label class="check"><input type="checkbox" name="has_tech" value="1" {% if request.query_params.get('has_tech') == '1' %}checked{% endif %}> Технический ЛПР</label>
+      <label class="check"><input type="checkbox" name="has_signal" value="1" {% if request.query_params.get('has_signal') == '1' %}checked{% endif %}> Новостной повод</label>
+    </fieldset>
+    <menu><a href="{{ base_path }}/centro">Сбросить</a><button>Применить</button></menu>
+  </form>
+</dialog>
+
+{% if error %}
+<div class="db-error"><h2>Исходная база недоступна</h2><p>{{ error }}</p><p>Рабочие статусы и комментарии хранятся отдельно и не потеряны.</p></div>
+{% elif not company %}
+<div class="empty"><h2>Компании не найдены</h2><p>Измените фильтры или проверьте распределение.</p></div>
+{% else %}
 <main class="workspace">
-<section class="panel company"><h1>{{ company.predpriyatie or company.name_full or company.name_short or 'Компания' }}</h1><span class="badge">{{ company.status_egrul or company.status or 'Статус не указан' }}</span><dl><dt>ИНН</dt><dd><b>{{ company.inn }}</b> <button onclick="copyText('{{ company.inn }}')">Копировать</button></dd><dt>Регион</dt><dd>{{ company.region or '—' }}</dd><dt>Адрес</dt><dd>{{ company.adres or company.address or '—' }}</dd><dt>Директор</dt><dd>{{ company.direktor or company.director or '—' }}</dd><dt>ОКВЭД</dt><dd>{{ company.okved or company.okved_main or '—' }}</dd><dt>Выручка</dt><dd>{{ company.vyruchka_rub or company.revenue_num or '—' }}</dd><dt>Прибыль</dt><dd>{{ company.chistaya_pribyl or '—' }}</dd><dt>Численность</dt><dd>{{ company.ssch or '—' }}</dd><dt>Сайт / почта</dt><dd>{{ company.sayt or company.website or '—' }}<br>{{ company.pochta or '—' }}</dd></dl></section>
-<section class="panel contacts"><h2>Контакты</h2>{% for c in contacts %}<article class="contact"><div><a class="phone" href="{{ c.href }}">{{ c.value }}</a>{% if c.is_purchaser %}<span class="hot">Закупщик</span>{% endif %}{% if c.is_tech %}<span class="tech">Технический ЛПР</span>{% endif %}</div><b>{{ c.person or 'Общий контакт' }}</b><small>{{ c.role or c.vid_nomera or '' }}</small><div>{% for s in c.sources %}<span>{{ s }}</span>{% endfor %}{% for u in c.source_urls %}<a href="{{ u }}" target="_blank" rel="noopener noreferrer">Источник ↗</a>{% endfor %}</div><button onclick="copyText('{{ c.value }}')">Копировать</button></article>{% else %}<p>Контакты не найдены.</p>{% endfor %}</section>
-<section class="panel reason"><h2>Причина звонка</h2><dl><dt>Мой приоритет</dt><dd>{{ company.moy_prioritet or company.rank_metric or '—' }}</dd><dt>Важность покупки</dt><dd>{{ company.vazhnost_pokupki or '—' }}</dd><dt>Доступность</dt><dd>{{ company.dostupnost_kontakta or '—' }}</dd><dt>Отметка</dt><dd>{{ company.pometka or '—' }}</dd><dt>Типы машин</dt><dd>{{ company.tipy_mashin or '—' }}</dd><dt>Марки</dt><dd>{{ company.marki or company.marki_iz_faktov or '—' }}</dd><dt>Состояние</dt><dd>{{ company.sostoyaniy or company.sostoyaniya_po_faktam or '—' }}</dd><dt>Фактов</dt><dd>{{ company.faktov_centrobezhnyh or company.n_facts or 0 }}</dd><dt>Почему сейчас</dt><dd>{{ company.prioritet_pochemu or company.novost or '—' }}</dd></dl></section>
+  <section class="panel company">
+    <div class="panel-title"><h1>{{ company.predpriyatie or company.name_full or company.name_short or 'Компания' }}</h1><span class="badge">{{ company.status_egrul or company.status or 'Статус не указан' }}</span></div>
+    {% if user.role == 'admin' %}<p class="owner">Назначено: <b>{{ company.assigned_user or 'не назначено' }}</b></p>{% endif %}
+    <dl>
+      <dt>ИНН</dt><dd><b>{{ company.inn }}</b> <button type="button" class="copy" data-copy="{{ company.inn }}">Копировать</button></dd>
+      <dt>Регион</dt><dd>{{ company.region or '—' }}</dd>
+      <dt>Адрес</dt><dd>{{ company.adres or company.address or '—' }}</dd>
+      <dt>Директор</dt><dd>{{ company.direktor or company.director or '—' }}</dd>
+      <dt>ОКВЭД</dt><dd>{{ company.okved or company.okved_main or '—' }}</dd>
+      <dt>Выручка</dt><dd>{{ company.vyruchka_rub or company.revenue_num or company.revenue or '—' }}</dd>
+      <dt>Прибыль</dt><dd>{{ company.chistaya_pribyl or company.profit or '—' }}</dd>
+      <dt>Численность</dt><dd>{{ company.ssch or company.employees or '—' }}</dd>
+      <dt>Сайт / почта</dt><dd>{{ company.sayt or company.website or '—' }}<br>{{ company.pochta or company.email or '—' }}</dd>
+    </dl>
+  </section>
+
+  <section class="panel contacts"><h2>Контакты</h2>
+    {% for contact in contacts %}
+    <article class="contact">
+      <div><a class="phone" href="{{ contact.href }}">{{ contact.value }}</a>{% if contact.is_purchaser %}<span class="hot">Закупщик</span>{% endif %}{% if contact.is_tech %}<span class="tech">Технический ЛПР</span>{% endif %}</div>
+      <b>{{ contact.person or 'Общий контакт' }}</b><small>{{ contact.role or contact.vid_nomera or '' }}</small>
+      <div>{% for value in contact.sources %}<span>{{ value }}</span>{% endfor %}{% for url in contact.source_urls %}<a href="{{ url }}" target="_blank" rel="noopener noreferrer">Источник ↗</a>{% endfor %}</div>
+      <button type="button" class="copy" data-copy="{{ contact.value }}">Копировать</button>
+    </article>
+    {% else %}<p>Контакты не найдены.</p>{% endfor %}
+  </section>
+
+  <section class="panel reason"><h2>Причина звонка</h2><dl>
+    <dt>Приоритет</dt><dd>{{ company.moy_prioritet or company.rank_metric or '—' }}</dd>
+    <dt>Важность покупки</dt><dd>{{ company.vazhnost_pokupki or '—' }}</dd>
+    <dt>Доступность</dt><dd>{{ company.dostupnost_kontakta or '—' }}</dd>
+    <dt>Отметка</dt><dd>{{ company.pometka or '—' }}</dd>
+    <dt>Типы машин</dt><dd>{{ company.tipy_mashin or company.equipment_all or '—' }}</dd>
+    <dt>Марки</dt><dd>{{ company.marki or company.marki_iz_faktov or '—' }}</dd>
+    <dt>Состояние</dt><dd>{{ company.sostoyaniy or company.sostoyaniya_po_faktam or '—' }}</dd>
+    <dt>Фактов</dt><dd>{{ company.faktov_centrobezhnyh or company.n_facts or 0 }}</dd>
+    <dt>Почему сейчас</dt><dd>{{ company.prioritet_pochemu or company.novost or '—' }}</dd>
+  </dl></section>
 </main>
-<section class="callbar"><form method="post" action="{{ base_path }}/centro/save"><input type="hidden" name="inn" value="{{ company.inn }}"><input type="hidden" name="return_query" value="{{ query_string }}"><textarea name="comment" maxlength="5000" placeholder="Быстрый комментарий"></textarea><select name="call_result" required><option value="new">Новый</option><option value="no_answer">Нет ответа</option><option value="callback">Перезвонить</option><option value="contacted">Связались</option><option value="interested">Заинтересован</option><option value="proposal">Предложение отправлено</option><option value="not_target">Не целевой</option><option value="wrong_number">Неверный номер</option><option value="completed">Завершено</option></select><input type="datetime-local" name="next_contact_at"><button>Сохранить и следующая</button></form><span>Компания {{ (page-1)*20+1 }} из {{ total }}</span><details><summary>Последние комментарии ({{ comments|length }})</summary>{% for c in comments %}<p><b>{{ c.username }}</b> · {{ c.created_at }}<br>{{ c.body }}</p>{% endfor %}</details></section>
-<section class="queue"><h2>Личная очередь</h2>{% for c in rows %}<a href="{{ base_path }}/centro?inn={{ c.inn }}{% if query_string %}&{{ query_string }}{% endif %}" {% if c.inn==company.inn %}class="active"{% endif %}><b>{{ c.predpriyatie or c.name_short or c.inn }}</b><span>{{ c.region or '' }} · {{ c.call_result or 'new' }}</span></a>{% endfor %}<nav>{% if page>1 %}<a href="?page={{ page-1 }}&{{ query_string }}">←</a>{% endif %}<span>{{ page }}/{{ pages }}</span>{% if page<pages %}<a href="?page={{ page+1 }}&{{ query_string }}">→</a>{% endif %}</nav></section>
-{% endif %}<script>function copyText(v){navigator.clipboard.writeText(v)}</script></body></html>
+
+<section class="callbar">
+  <form method="post" action="{{ base_path }}/centro/save">
+    <input type="hidden" name="inn" value="{{ company.inn }}">
+    <input type="hidden" name="return_query" value="{{ query_string }}">
+    <textarea name="comment" maxlength="5000" placeholder="Комментарий к звонку"></textarea>
+    <select name="call_result" required>{% for value,label in call_results.items() %}<option value="{{ value }}" {% if company.call_result == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+    <input type="datetime-local" name="next_contact_at" value="{{ company.next_contact_at or '' }}">
+    <button>Сохранить и следующая</button>
+  </form>
+  <span>Компания {{ (page-1)*size+1 }}–{{ [page*size,total]|min }} из {{ total }}</span>
+  <details><summary>Комментарии ({{ comments|length }})</summary>{% for value in comments %}<article><b>{{ value.username }}</b> · {{ value.created_at }}<p>{{ value.body }}</p></article>{% endfor %}</details>
+</section>
+
+<section class="queue"><h2>Личная очередь</h2>
+  {% for item in rows %}<a href="{{ base_path }}/centro?inn={{ item.inn }}{% if query_string %}&{{ query_string }}{% endif %}" {% if item.inn == company.inn %}class="active"{% endif %}><b>{{ item.predpriyatie or item.name_short or item.inn }}</b><span>{{ item.region or '' }} · {{ call_results.get(item.call_result or 'new', item.call_result or 'Новый') }}</span></a>{% endfor %}
+  <nav>{% if page > 1 %}<a href="?page={{ page-1 }}{% if query_string %}&{{ query_string }}{% endif %}">← Назад</a>{% endif %}<span>{{ page }}/{{ pages }}</span>{% if page < pages %}<a href="?page={{ page+1 }}{% if query_string %}&{{ query_string }}{% endif %}">Далее →</a>{% endif %}</nav>
+</section>
+{% endif %}
+<script>
+const dialog=document.getElementById('allFilters');
+document.querySelector('[data-open-filters]')?.addEventListener('click',()=>dialog.showModal());
+document.querySelector('[data-close-filters]')?.addEventListener('click',()=>dialog.close());
+document.querySelectorAll('[data-copy]').forEach(button=>button.addEventListener('click',async()=>{await navigator.clipboard.writeText(button.dataset.copy||'');button.textContent='Скопировано';setTimeout(()=>button.textContent='Копировать',1200)}));
+</script>
+</body>
+</html>
