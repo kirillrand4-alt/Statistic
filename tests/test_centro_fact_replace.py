@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from app.tools.replace_centro_facts import process
@@ -12,7 +13,10 @@ def _write(path: Path, text: str) -> Path:
 
 
 def _database(path: Path) -> Path:
-    with sqlite3.connect(path) as conn:
+    # sqlite3.Connection как context manager завершает транзакцию, но не
+    # закрывает файловый дескриптор. closing обязателен для тестов на Windows,
+    # иначе последующее атомарное переименование SQLite получает WinError 32.
+    with closing(sqlite3.connect(path)) as conn:
         conn.executescript(
             """
             CREATE TABLE company(
@@ -45,6 +49,7 @@ def _database(path: Path) -> Path:
             INSERT INTO fact(inn,model,medium) VALUES('1234567890','СТАРЫЙ НАСОС','воздух');
             """
         )
+        conn.commit()
     return path
 
 
@@ -86,7 +91,7 @@ def test_replaces_only_facts_and_preserves_conclusion(tmp_path):
     result = process(database, facts)
     assert result["kept"] == 3
 
-    with sqlite3.connect(database) as conn:
+    with closing(sqlite3.connect(database)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT * FROM fact ORDER BY model").fetchall()
         assert {row["model"] for row in rows} == {"К-250", "К-500", "К-СМЕШ"}
