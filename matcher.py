@@ -93,9 +93,25 @@ def brand_from_text(text):
             return BRAND_ALIASES.get(b, BRAND_ALIASES.get(b.split()[0], b.split()[0]))
     return None
 
+# Серия, по которой бренд узнаётся однозначно. Нужна там, где площадка пишет линейку
+# БЕЗ производителя: pnevmoteh даёт «Компрессор винтовой IMPETUS 90 - 7,5 бар VSD»,
+# и 32 такие карточки уходили в «бренд не определён».
+#
+# ВАЖНО: это отдельная карта, а НЕ запись в BRAND_ALIASES. Проверено 11.08: добавление
+# "impetus" в BRAND_ALIASES ухудшило матчинг Dalgakiran с 740 до 690, потому что
+# gen_series пропускает бренд-токены — и наша собственная серия IMPETUS переставала
+# извлекаться у 59 карточек. Здесь карта читается ТОЛЬКО при определении бренда.
+SERIES_BRAND = {"impetus": "dalgakiran"}
+_SERIES_RE = re.compile(r"(?<![a-zа-яё])(" + "|".join(SERIES_BRAND) + r")(?![a-zа-яё])", re.I)
+
+
 def brand_of(u, name=""):
-    """Бренд: сперва из URL, иначе — из названия товара."""
-    return find_brand(u) or (brand_from_text(name) if name else None)
+    """Бренд: сперва из URL, иначе — из названия товара, иначе — по имени серии."""
+    b = find_brand(u) or (brand_from_text(name) if name else None)
+    if b:
+        return b
+    m = _SERIES_RE.search(f"{name} {u}")
+    return SERIES_BRAND[m.group(1).lower()] if m else None
 
 def _merge_ip(tokens):
     """ip + 54  ->  ip54 ; ip-54 уже разбит на ip,54."""
