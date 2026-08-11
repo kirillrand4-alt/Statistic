@@ -222,10 +222,22 @@ def variant_letters(name, brand):
                      and t not in drop and t.translate(_CYR2LAT) not in drop)
 
 
+# Визуальные омоглифы: в коде модели одну и ту же букву набирают то латиницей, то
+# кириллицей — «КС 10-10 B4» (латинская B) против «КС10-10В4» (кириллическая В),
+# «VEGA 8 СF» (кириллическая С) против «VEGA 8-7,5 CF». В ключе серии такое
+# сворачивание опасно (там _CYR2LAT намеренно фонетический: в→v, н→n), но метка
+# сравнивается симметрично с обеих сторон, поэтому здесь безопасно — и только
+# ФОЛБЭКОМ, когда прямое сравнение уже не сошлось.
+_HOMOGLYPH = str.maketrans('авекмнорстух', 'abekmhopctyx')
+
+
 def same_variant(a, b):
-    """Метки равны как множества ИЛИ как склеенная строка: «H AC» == «HAC»."""
+    """Метки равны как множества, как склеенная строка («H AC» == «HAC») или
+    после сворачивания визуальных омоглифов (фолбэк, только если иначе не сошлось)."""
     glue = lambda s: "".join(sorted("".join(sorted(s))))
-    return a == b or glue(a) == glue(b)
+    if a == b or glue(a) == glue(b): return True
+    ga, gb = glue(a).translate(_HOMOGLYPH), glue(b).translate(_HOMOGLYPH)
+    return "".join(sorted(ga)) == "".join(sorted(gb))
 
 
 def variant_sig(text):
