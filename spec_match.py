@@ -209,10 +209,17 @@ def variant_letters(name, brand):
     ID=осушитель у Dalgakiran, DF=частотник у Spitzenreiter, HH=высокое давление
     у Sullair), но сравниваем мы их КАК МЕТКИ с обеих сторон — поэтому словарь
     значений не нужен и ошибиться в трактовке нельзя."""
-    from brand_spec_review import _CYR2LAT
+    # Из метки ВЫЧИТАЕМ всё, чем уже владеют выделенные правила, иначе признак
+    # считается дважды и метка расходится на пустом месте. Замер 11.08 по Atlas:
+    # 392 разрыва, из них 234 из-за нашей приписки «без N/CE», 126 из-за TM/FM
+    # (ресивер — receiver_filter), 27 из-за FF (осушитель — ff_filter), 52 из-за
+    # P/Pack (модуль считает Pack/AC/WC одним товаром, см. шапку brand_spec_review).
+    from brand_spec_review import _CYR2LAT, _STOPW
+    drop = _STOPW | {"n","bar","atm","psi","l","kg","mm","db","hp","kw","cd","dd","yd"}
     toks, _ = model_code(name, brand)
     return frozenset(t.translate(_CYR2LAT) for t in toks
-                     if not re.fullmatch(r"[\d.]+", t) and len(t) <= 5)
+                     if not re.fullmatch(r"[\d.]+", t) and len(t) <= 5
+                     and t not in drop and t.translate(_CYR2LAT) not in drop)
 
 
 def same_variant(a, b):
