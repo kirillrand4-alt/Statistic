@@ -13,7 +13,8 @@ from matcher import brand_of, BRAND_ALIASES, brand_from_text
 from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value, bar_flow_pairs,
                         series_num, text_flags, is_compressor, match, receiver_filter, ff_filter,
                         ip_filter, ip_class, cool_filter, cool_class, is_flow_key, card_issue,
-                        prefer_exact_variant, VARIANT_MARKS)
+                        prefer_exact_variant, VARIANT_MARKS, model_code,
+                        variant_letters, same_variant)
 from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
 from scrape_files import U, OURS_DIR, find_ours
 
@@ -98,8 +99,47 @@ def gen_series(text, brand):
         return ((w+suf).translate(_CYR2LAT), float(m.group(2).replace(",",".")))
     return None
 
+# Экспериментальный режим (по умолчанию ВЫКЛЮЧЕН): буквы уходят из ключа семейства в
+# метку исполнения, которая сравнивается отдельно (см. variant_filter). Замер 11.08 на
+# боевых данных: снимает 7 ложных сцепок из 8 доказанных, возвращает 25 верных пар из 32
+# подтверждённых агентами, притаскивает 2 ложных из 27 опровергнутых, но теряет 6 из 42
+# ранее подтверждённых и уменьшает общее число матчей на 658. Пока эти 658 не проверены
+# выборочно — режим не включаем. Включение: VARIANT_STRICT=1.
+VARIANT_STRICT = os.getenv("VARIANT_STRICT", "").strip() in ("1", "true", "yes")
+
+
+def base_family(text, brand):
+    """Семейство без буквенного хвоста: первый буквенный токен кода модели + номер.
+       наш «ET SL 45 H AC 10 бар»               -> ('sl', 45)
+       их  «ET-Compressors SL 45 HAC (IP23) 10» -> ('sl', 45)"""
+    sn = gen_series(text, brand)
+    if not sn: return sn
+    for t in model_code(text, brand)[0]:
+        if not re.fullmatch(r"[\d.]+", t):
+            return (t.translate(_CYR2LAT), sn[1])
+    return sn
+
+
 def ser_of(text, brand):
-    return series_num(text) if brand=="atlas" else _with_variant(gen_series(text, brand), text)
+    if brand=="atlas": return series_num(text)
+    if VARIANT_STRICT: return base_family(text, brand)
+    return _with_variant(gen_series(text, brand), text)
+
+
+def variant_filter(o_name, cands, brand):
+    """Направленное правило исполнения — в форме receiver_filter/ff_filter.
+
+    Если среди кандидатов есть карточка с ТОЙ ЖЕ меткой — оставляем только такие.
+    Если нет, а метки у кандидатов вообще проставлены — значит конкурент исполнения
+    различает, а нашего не возит: режем. Если ни у кого меток нет — молчание,
+    совместимо. Работает только при VARIANT_STRICT."""
+    ours = variant_letters(o_name, brand)
+    marks = [(c, variant_letters(c.get("name") or slug(c["url"]).replace("_"," "), brand))
+             for c in cands]
+    exact = [c for c, m in marks if same_variant(m, ours)]
+    if exact: return exact
+    if ours and any(m for _, m in marks): return []
+    return cands
 
 _DTAIL=re.compile(r'[\d\)лl]\s*[-–]?\s*([дd])\s*(?:\(.*)?$', re.I)   # «270L D», «500Д», «10Д (с осуш.)»
 _VSTAIL=re.compile(r'(?:\d|\))\s*(вс|bc)\s*$', re.I)                  # «ВК100Р-10ВС»
@@ -306,7 +346,8 @@ def build_brand(brand, title, ours, cands, po=None):
             o.get("name","")))
         # Последним шагом — предпочесть кандидата с ТЕМ ЖЕ исполнением, если он есть
         # у конкурента отдельным SKU (проверка 11.08: так было в 6 ложных матчах из 8).
-        m=prefer_exact_variant(o.get("name",""), m)
+        m=(variant_filter(o.get("name",""), m, brand) if VARIANT_STRICT
+           else prefer_exact_variant(o.get("name",""), m))
         per=defaultdict(dict); nexec=defaultdict(lambda: defaultdict(int))
         for c in m:
             k=(c["sn"],c["kw"],c["bar"],c["fl"],c["ff"] or 0,c["vsd"] or 0,c["rv"])
