@@ -121,6 +121,15 @@ def ff_filter(o_ff, cands, o_text=""):
     метке — молчание, а не «нет осушителя»; сравниваются именно МЕТКИ, поэтому
     правило верно и там, где буквы значат не осушитель (ET SOF Dry = безмасляный)."""
     if not o_ff:                       # наш без FF: явные FF-карточки исключаем
+        # Метку берём полную (variant_letters), если известен бренд: Ceccato
+        # «DRD 100/13 IVR PM D A MEAA» и их «DRD 100 IVR PM D A 13 MEAA 400» —
+        # буквы совпадают целиком, а старый variant_sig знал только DF/ID/DRY и
+        # такую пару не спасал.
+        br = (cands[0].get("brand") if cands else None)
+        if br:
+            om = variant_letters(o_text, br) if o_text else frozenset()
+            return [c for c in cands if not c.get("ff")
+                    or (om and same_variant(variant_letters(c.get("name") or "", br), om))]
         osig = variant_sig(o_text) if o_text else frozenset()
         return [c for c in cands if not c.get("ff")
                 or (osig and variant_sig(f"{c.get('name','')} {c.get('url','')}") == osig)]
@@ -425,9 +434,15 @@ def match(o, cands):
             # а не «нет осушителя»: suffix_flags знает только «Д» в хвосте и «с осушителем»,
             # а «DRY» в середине не ловит. Замер 11.08: 22 пары Ceccato, где имена совпадают
             # ПОБУКВЕННО («CECCATO DRC 40/10 DRY CEC A MEAA»), резались именно тут.
-            osig = variant_sig(o.get("name", ""))
-            if not osig or osig != variant_sig(f"{c.get('name','')} {c.get('url','')}"):
-                continue        # метки нет или она другая — правило работает как раньше
+            br = c.get("brand")
+            if br:
+                om = variant_letters(o.get("name", ""), br)
+                if not om or not same_variant(om, variant_letters(c.get("name") or "", br)):
+                    continue
+            else:
+                osig = variant_sig(o.get("name", ""))
+                if not osig or osig != variant_sig(f"{c.get('name','')} {c.get('url','')}"):
+                    continue    # метки нет или она другая — правило работает как раньше
         # наш ff=1 vs их None — решает ff_filter (направленно по серии)
         if not agree(o.get("rv"), c.get("rv")): continue
         out.append(c)

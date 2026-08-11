@@ -227,7 +227,7 @@ def load_ours_all():
         pv=str(r.get("IP_PROP22586","")).strip().lower()   # проп «частотник»: знание да/нет
         if vsd is None and pv:                             # имя-маркер приоритетнее пропа
             vsd = 1 if pv=="да" else (0 if pv=="нет" else None)
-        ours[b].append(dict(sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
+        ours[b].append(dict(brand=b, sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
                             bar=bar_value(r.get("IP_PROP22573")) or bar_from_text(name+" "+code),
                             fl=fl, oil=oil_of(r.get("IP_PROP22583")), ff=ff, vsd=vsd, rv=rv,
                             name=nm or name, url=url, price=p, ip=ip_class(name+" "+code),
@@ -310,7 +310,7 @@ def load_comp_all():
         for i,(bar,fl) in enumerate(pairs):
             if kw is None and fl is None: continue
             cp=price.get(u) if (len(pairs)==1 or i==0) else None
-            cands[b].append(dict(sn=sn, kw=kw, bar=bar or bar_from_text(text), fl=fl, oil=oil,
+            cands[b].append(dict(brand=b, sn=sn, kw=kw, bar=bar or bar_from_text(text), fl=fl, oil=oil,
                                  ff=ff, vsd=vsd, rv=rv, name=nm or slug(u), url=u, site=dm(u),
                                  price=cp, status=status.get(u,""), ip=ip_class(text),
                                  cool=cool_class(text, cool_raw),
