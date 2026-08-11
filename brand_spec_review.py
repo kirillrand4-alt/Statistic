@@ -99,8 +99,8 @@ def gen_series(text, brand):
         return ((w+suf).translate(_CYR2LAT), float(m.group(2).replace(",",".")))
     return None
 
-# Экспериментальный режим (по умолчанию ВЫКЛЮЧЕН): буквы уходят из ключа семейства в
-# метку исполнения, которая сравнивается отдельно (см. variant_filter). Замер 11.08 на
+# Режим ВКЛЮЧЁН (откат: VARIANT_STRICT=0). Буквы уходят из ключа семейства в метку
+# исполнения, которая сравнивается отдельно (см. variant_filter). Замер 11.08 на
 # боевых данных, после вычитания из метки признаков, которыми владеют выделенные фильтры:
 #   ложных сцепок снято     7 из 8 доказанных
 #   верных пар возвращено  24 из 32 подтверждённых агентами
@@ -118,8 +118,8 @@ def gen_series(text, brand):
 # Оставшиеся 5 — реальная асимметрия источников: FINI VISION 1513-500F-ES (конкурент
 # пишет F, мы нет), Ekomak EKO 18G CR STD, Ceccato DRE 120/13 A CE, BERG ATOM (бренд
 # кириллицей у конкурента), Comaro MD-P 132 l/8 против их «132-08 I».
-# Включение: VARIANT_STRICT=1.
-VARIANT_STRICT = os.getenv("VARIANT_STRICT", "").strip() in ("1", "true", "yes")
+# Выключение (вернуться к прежнему поведению): VARIANT_STRICT=0.
+VARIANT_STRICT = os.getenv("VARIANT_STRICT", "1").strip() not in ("0", "false", "no")
 
 
 def base_family(text, brand):
