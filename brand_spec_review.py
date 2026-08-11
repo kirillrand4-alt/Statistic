@@ -14,10 +14,13 @@ from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value, bar_
                         series_num, text_flags, is_compressor, match, receiver_filter, ff_filter,
                         ip_filter, ip_class, cool_filter, cool_class, is_flow_key, card_issue)
 from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
-from scrape_files import U
+from scrape_files import U, OURS_DIR, find_ours
 
-SPECS_CSV = U + "specs2/specs_compact.csv"
-PROKO_CSV = U + "e7171060-products_export_20260608.csv"
+# Наш каталог: выгрузка свойств из Битрикса + выгрузка цен. Имена файлов
+# меняются от выгрузки к выгрузке (products_export_20260608, _20260711, …),
+# поэтому берём последний подходящий из OURS_DIR, а не прибиваем имя гвоздями.
+SPECS_CSV = find_ours("specs_compact", "specs2/specs_compact.csv")
+PROKO_CSV = find_ours("products_export", "e7171060-products_export_20260608.csv")
 OUTDIR = "/home/user/Statistic/brand_reports"
 ZIP    = "/home/user/Statistic/Brands_spec_match.zip"
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",

@@ -1,34 +1,99 @@
-"""Единый список прогонов парсера (прайс+specs). Подключается из build_review и
-спек-скриптов, чтобы новые выгрузки «закидывались» в одном месте.
-Порядок ХРОНОЛОГИЧЕСКИЙ: при объединении specs по URL поздний прогон переписывает ключи."""
+"""Где лежат входные данные матчера: выгрузки парсера и наш каталог.
 
-U = "/root/.claude/uploads/62a19005-a7bf-569b-926e-b59b4a62600d/"
+Раньше здесь был прибит гвоздями путь к папке загрузок конкретной сессии
+(`/root/.claude/uploads/62a19005-.../`) и перечислены двадцать файлов поимённо.
+Папка живёт ровно одну сессию, поэтому при каждом новом заходе матчер переставал
+видеть данные, а свежие выгрузки приходилось дописывать в список руками.
 
-# все выгрузки парсера (prices_checked = ручные прогоны пользователя; all_prices = ночные/общие)
-SCRAPE_FILES = [
-    U + "c7c60579-prices_checked_20260608.csv",
-    U + "7fee0300-all_prices_20260609_102140.csv",
-    U + "4b460a4b-prices_checked_20260609.csv",
-    U + "f85cae40-all_prices_20260609_143339.csv",
-    U + "e0e2167c-prices_checked_20260609_1.csv",
-    U + "night_run/all_prices_20260610_014032.csv",
-    U + "88a8f690-all_prices_20260610_035123.csv",
-    U + "8c41d213-all_prices_20260610_054517.csv",
-    U + "2ad0f5e3-all_prices_20260610_060124.csv",
-    U + "9c5d90fd-all_prices_20260610_061533.csv",
-    U + "c6dd7a65-all_prices_20260610_063956.csv",
-    U + "5beded8c-all_prices_20260610_074407.csv",   # дочистка Atlas: прогон по atlas_competitors_need_specs
-    U + "e6ea00d5-all_prices_20260610_173444.csv",   # дочистка ВСЕ бренды (из rar; 20k строк, specs 99%)
-    U + "2a9dcda0-all_prices_20260611_005525.csv",   # ночной: остаток брендов + осушители/ресиверы/азот/станции
-    U + "e0a44202-all_prices_20260611_020527.csv",   # ночной (кумулятивный): +900 pnevmo-sklad полных
-    U + "bda24f53-all_prices_20260611_034735_hdr.csv", # pnevmo-sklad «снятые»+осушители (был без шапки -> _hdr)
-    U + "e073f158-all_prices_20260611_041506_hdr.csv",  # pnevmo-sklad хвост (898 строк, был без шапки -> _hdr)
-    U + "c7c522c7-all_prices_20260611_100824.csv",       # pnevmo-sklad: недостающие строки (3191)
-    U + "593061d2-all_prices_20260612_161537.csv",        # НОВАЯ схема парсера (old_price/price_on_request/
-                                                          # price_raw/category_path): осушители+азот pnevmo-sklad (57)
-]
+Теперь путь задаётся снаружи, а файлы подхватываются сами:
 
-# прогоны ОБНОВЛЁННОГО парсера (фиксы проверены с 06:01 10.06, см. PARSER_NOTES).
-# Если URL сканирован новым парсером и поле всё равно пустое — на странице данных нет,
-# повторный прогон не поможет.
-NEW_PARSER_FILES = [f for f in SCRAPE_FILES if f.split("-all_prices_")[-1] >= "20260610_060124"]
+    MATCH_DATA_DIR   — корень с данными (по умолчанию ./data рядом со скриптами)
+    PARSER_CSV_DIR   — выгрузки парсера   (по умолчанию MATCH_DATA_DIR/parser)
+    OURS_DIR         — наш каталог из Битрикса (по умолчанию MATCH_DATA_DIR/ours)
+
+Пример (Windows, парсер на этой же машине):
+
+    set MATCH_DATA_DIR=C:\\parser\\data
+    set PARSER_CSV_DIR=C:\\parser\\data
+
+Порядок файлов ХРОНОЛОГИЧЕСКИЙ — по метке времени в имени
+(`prices_20260811_015930.csv`). При объединении характеристик по URL поздний
+прогон переписывает ключи, поэтому порядок важен.
+"""
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+
+DATA_DIR = Path(os.getenv("MATCH_DATA_DIR") or (_HERE / "data"))
+PARSER_CSV_DIR = Path(os.getenv("PARSER_CSV_DIR") or (DATA_DIR / "parser"))
+OURS_DIR = Path(os.getenv("OURS_DIR") or (DATA_DIR / "ours"))
+
+# Совместимость: десяток скриптов берёт отсюда базовый путь как строку и
+# приклеивает к нему имя файла. Оставляем `U` с завершающим разделителем.
+U = str(DATA_DIR) + os.sep
+
+# Имена парсера: prices_<дата>_<время>.csv и prices_checked_<дата>.csv.
+# Старые выгрузки назывались all_prices_<дата>_<время>.csv — их тоже берём.
+_TS = re.compile(r"(?:all_)?prices(?:_checked)?_(\d{8})(?:_(\d{6}))?", re.I)
+
+
+def _stamp(path: Path) -> str:
+    """Метка времени из имени файла — по ней сортируем хронологически."""
+    m = _TS.search(path.name)
+    if not m:
+        return "00000000_000000"
+    return f"{m.group(1)}_{m.group(2) or '000000'}"
+
+
+def find_scrape_files(directory: Path | str | None = None) -> list[str]:
+    """Все выгрузки парсера из папки, от ранних к поздним."""
+    d = Path(directory) if directory else PARSER_CSV_DIR
+    if not d.is_dir():
+        return []
+    files = [p for p in d.glob("*.csv") if _TS.search(p.name)]
+    return [str(p) for p in sorted(files, key=_stamp)]
+
+
+SCRAPE_FILES: list[str] = find_scrape_files()
+
+# Прогоны обновлённого парсера (фиксы проверены с 06:01 10.06, см. PARSER_NOTES).
+# Если URL сканирован новым парсером и поле всё равно пустое — на странице
+# данных нет, повторный прогон не поможет.
+_NEW_PARSER_FROM = os.getenv("NEW_PARSER_FROM", "20260610_060124")
+NEW_PARSER_FILES: list[str] = [f for f in SCRAPE_FILES
+                               if _stamp(Path(f)) >= _NEW_PARSER_FROM]
+
+
+def find_ours(part: str, legacy: str = "") -> str:
+    """Файл нашего каталога по куску имени: самый свежий из OURS_DIR.
+
+    Имена выгрузок Битрикса меняются от раза к разу
+    (`products_export_20260608.csv`, `..._20260711.csv`), поэтому ищем по
+    подстроке и берём последний по времени изменения. `legacy` — путь, который
+    был прибит гвоздями раньше: возвращаем его, если ничего не нашли, чтобы
+    ошибка была понятной («нет такого файла»), а не «переменная не задана».
+    """
+    if OURS_DIR.is_dir():
+        found = [p for p in OURS_DIR.rglob("*.csv") if part.lower() in p.name.lower()]
+        if found:
+            return str(max(found, key=lambda p: p.stat().st_mtime))
+    return U + legacy if legacy else ""
+
+
+def describe() -> str:
+    """Короткая сводка — чтобы скрипты могли печатать, что именно нашли."""
+    if not SCRAPE_FILES:
+        return (f"выгрузок парсера не найдено в {PARSER_CSV_DIR}\n"
+                f"  задайте PARSER_CSV_DIR или положите prices_*.csv туда")
+    first, last = Path(SCRAPE_FILES[0]).name, Path(SCRAPE_FILES[-1]).name
+    return (f"выгрузок парсера: {len(SCRAPE_FILES)} из {PARSER_CSV_DIR}\n"
+            f"  от {first} до {last} (новым парсером: {len(NEW_PARSER_FILES)})")
+
+
+if __name__ == "__main__":
+    print(describe())
+    print(f"наш каталог ожидается в: {OURS_DIR}")
