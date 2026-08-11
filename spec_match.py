@@ -109,12 +109,21 @@ def cool_filter(o_cool, cands):
         return cands
     return [c for c in cands if not c.get("cool") or c["cool"] == o_cool]
 
-def ff_filter(o_ff, cands):
+def ff_filter(o_ff, cands, o_text=""):
     """Направленное правило FF (как receiver_filter): если в серии конкурент РАЗМЕЧАЕТ
     FF (есть карточки с ff=1) — молчуны при нашем FF отбрасываются (молчание=без осушителя);
-    если НИКТО не размечает (Atlas ZR/ZT: FF не пишут) — молчание не противоречит."""
+    если НИКТО не размечает (Atlas ZR/ZT: FF не пишут) — молчание не противоречит.
+
+    `o_text` — имя нашей карточки, необязательный. Нужен для одного случая: наш проп
+    «осушитель» пуст, но в имени стоит та же метка исполнения, что и у кандидата
+    (CECCATO DRC 40/10 DRY — строки совпадают побуквенно, а ff у нас не выставлен,
+    потому что suffix_flags ловит «Д» только в хвосте). Пустой проп при совпавшей
+    метке — молчание, а не «нет осушителя»; сравниваются именно МЕТКИ, поэтому
+    правило верно и там, где буквы значат не осушитель (ET SOF Dry = безмасляный)."""
     if not o_ff:                       # наш без FF: явные FF-карточки исключаем
-        return [c for c in cands if not c.get("ff")]
+        osig = variant_sig(o_text) if o_text else frozenset()
+        return [c for c in cands if not c.get("ff")
+                or (osig and variant_sig(f"{c.get('name','')} {c.get('url','')}") == osig)]
     explicit=[c for c in cands if c.get("ff")]
     return explicit if explicit else cands
 
@@ -132,6 +141,60 @@ def receiver_filter(o_rv, cands):
         crv=c.get("rv")
         if crv is None or crv==1 or o_rv==1 or crv==o_rv: out.append(c)
     return out
+
+# Буквенные метки ИСПОЛНЕНИЯ в хвосте модели. Что именно они значат — зависит от
+# бренда, и проверять надо по данным, а не по здравому смыслу:
+#   ARIACOM NT7 DF, Dalgakiran ... ID, FIAC ... DRY, Comprag PORTA DRY = осушитель;
+#   Spitzenreiter S-10DF   = ЧАСТОТНИК (9 карточек из 10: проп «Частотный
+#                            преобразователь: да», осушителя в спеках нет);
+#   ET SOF Dry 110         = безмасляный (сухого сжатия), тоже не осушитель.
+# Поэтому метка сравнивается КАК МЕТКА («у нас DF — и у него DF»), а вывод
+# «это осушитель» из неё не делается: ff остаётся за пропами и suffix_flags.
+VARIANT_MARKS = re.compile(r'(?<![a-zа-яё])(df|id|dry)(?![a-zа-яё])', re.I)
+
+
+def variant_sig(text):
+    """Метки исполнения из имени/артикула: чем эта карточка отличается от «голой».
+
+    Производители кодируют исполнение буквой в хвосте модели, и это ФИЗИЧЕСКИ
+    другой аппарат, а не то же самое дешевле. Проверено адверсарно 11.08 на
+    50 сцепках: 5 из 8 ложных матчей — ровно этот случай, разница по массе
+    +45…+540 кг:
+        Dalgakiran INVERSYS PLUS 55-13 ID  vs  55-13     (1830 vs 1290 кг)
+        ALMiG BELT 18/13                   vs  18/13-O   (410 vs 505 кг)
+        ALMiG FLEX-7/8 R                   vs  FLEX-7/8-O R (265 vs 310 кг)
+        ARIACOM NT7 13DF 500               vs  NT7 500   (420 vs 370 кг)
+
+    Метки: `ID`, `DF`, `DRY`, `-O`, атласовский `FF` — отдельным токеном либо
+    приклеенные к числу («13DF»). Одиночная «o» — латинская и только как
+    самостоятельный токен, иначе поймаем пол-каталога.
+    """
+    t = " " + str(text).lower().replace("_", "-") + " "
+    t = re.sub(r"(\d)([a-zа-я]+)", r"\1 \2", t)     # 13df -> 13 df
+    toks = set(re.split(r"[^a-zа-я0-9]+", t))
+    sig = set()
+    if toks & {"id", "df", "dry", "o"} or re.search(r'(?<![a-z])ff\b', t):
+        sig.add("exec")
+    return frozenset(sig)
+
+
+def prefer_exact_variant(o_text, cands):
+    """Из кандидатов одной серии предпочесть тех, чьё исполнение совпадает с нашим.
+
+    Ключевое наблюдение проверки: в 6 ложных матчах из 8 верная карточка лежала
+    у ТОГО ЖЕ конкурента отдельным SKU — то есть ошибочный кандидат не просто
+    лишний, он ВЫТЕСНИЛ верного. Поэтому это не резак, а предпочтение: если
+    среди кандидатов есть хоть один с тем же набором меток, оставляем только
+    таких; если точного нет — возвращаем всё как было. Потерять совпадение
+    правило не может по построению, а консервативность фильтров не трогает.
+    """
+    if not cands:
+        return cands
+    ours = variant_sig(o_text)
+    exact = [c for c in cands
+             if variant_sig(f"{c.get('name','')} {c.get('url','')}") == ours]
+    return exact if exact else cands
+
 
 def sane_kw(v):  return v if v and 0.2 <= v <= 2000 else None   # мусор (вес 0.0001) -> None
 def sane_bar(v): return v if v and 3 <= v <= 400 else None
@@ -252,7 +315,15 @@ def match(o, cands):
         # имени Berg). Молчание совместимо. Ловит ВК-18.5Р (ремен) vs ВК-18.5 (прямой).
         if o.get("dr") and c.get("dr") and o["dr"] != c["dr"]: continue
         if (o.get("ff") or 0)==1 and (c.get("ff") or 0)==1: pass        # оба размечены FF — ок
-        elif (o.get("ff") or 0)!=(c.get("ff") or 0) and (c.get("ff") or 0)==1: continue
+        elif (o.get("ff") or 0)!=(c.get("ff") or 0) and (c.get("ff") or 0)==1:
+            # У конкурента осушитель, у нас проп пустой — обычно это конфликт. Но если в
+            # НАШЕМ имени стоит ТА ЖЕ метка исполнения, что и у него, пустой проп — молчание,
+            # а не «нет осушителя»: suffix_flags знает только «Д» в хвосте и «с осушителем»,
+            # а «DRY» в середине не ловит. Замер 11.08: 22 пары Ceccato, где имена совпадают
+            # ПОБУКВЕННО («CECCATO DRC 40/10 DRY CEC A MEAA»), резались именно тут.
+            osig = variant_sig(o.get("name", ""))
+            if not osig or osig != variant_sig(f"{c.get('name','')} {c.get('url','')}"):
+                continue        # метки нет или она другая — правило работает как раньше
         # наш ff=1 vs их None — решает ff_filter (направленно по серии)
         if not agree(o.get("rv"), c.get("rv")): continue
         out.append(c)

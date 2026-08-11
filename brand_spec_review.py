@@ -12,7 +12,8 @@ from collections import defaultdict, Counter
 from matcher import brand_of, BRAND_ALIASES, brand_from_text
 from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value, bar_flow_pairs,
                         series_num, text_flags, is_compressor, match, receiver_filter, ff_filter,
-                        ip_filter, ip_class, cool_filter, cool_class, is_flow_key, card_issue)
+                        ip_filter, ip_class, cool_filter, cool_class, is_flow_key, card_issue,
+                        prefer_exact_variant, VARIANT_MARKS)
 from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
 from scrape_files import U, OURS_DIR, find_ours
 
@@ -38,6 +39,29 @@ _STOPW = {"компрессор","компрессора","компрессор�
 # конкуренты — EKO/KM/VK/AA (латиница). Только «чистые» омофоны: в→v, н→n и визуальные
 # а/е/о/к/м/р/т/х. Исключены с→c/s (СБ=SB, неоднозначно) и буквы без аналога.
 _CYR2LAT = str.maketrans('аеокмртхвн', 'aeokmrtxvn')
+
+def _with_variant(sn, text):
+    """Метку исполнения (DF/ID/DRY) приклеить к имени семейства, ГДЕ БЫ она ни стояла.
+
+    Схема хвостовых суффиксов ловит метку, только если она идёт сразу за номером
+    («NT7 DF 500» -> ntdf), и не ловит, когда между ними влезло давление
+    («NT7 13DF 500» -> nt). Из-за этой асимметрии наша карточка и карточка того же
+    конкурента с тем же исполнением попадали в РАЗНЫЕ семейства и не могли
+    встретиться, а встречалась «голая»:
+        наш ARIACOM NT7 13DF 500  ->  aerocompressors NT7 500      (ложь, 420 vs 370 кг)
+        рядом лежала NT7 DF 500   ->  семейство ntdf, до сравнения не доходила
+    Замер 11.08 на всех брендах (вместе с послаблением ff ниже): снимает 143 таких
+    пары (dalgakiran 124, ariacom 17, cross 2), добавляет 4 верных, из 42
+    подтверждённых верных сцепок не теряет ни одной, новых пар с ЧУЖИМ исполнением
+    не создаёт. Atlas не трогаем: там метка FF симметрична с обеих сторон и в
+    семейство не попадает ни у кого.
+    """
+    if not sn: return sn
+    fam, n = sn
+    t = re.sub(r"(\d)([a-zа-я])", r"\1 \2", str(text).lower().replace("_"," ").replace("-"," "))
+    for mk in sorted({m.group(1).lower() for m in VARIANT_MARKS.finditer(t)}):
+        if mk not in fam: fam += mk
+    return (fam, n)
 
 def gen_series(text, brand):
     s=" "+str(text).lower().replace("_"," ")+" "
@@ -75,7 +99,7 @@ def gen_series(text, brand):
     return None
 
 def ser_of(text, brand):
-    return series_num(text) if brand=="atlas" else gen_series(text, brand)
+    return series_num(text) if brand=="atlas" else _with_variant(gen_series(text, brand), text)
 
 _DTAIL=re.compile(r'[\d\)лl]\s*[-–]?\s*([дd])\s*(?:\(.*)?$', re.I)   # «270L D», «500Д», «10Д (с осуш.)»
 _VSTAIL=re.compile(r'(?:\d|\))\s*(вс|bc)\s*$', re.I)                  # «ВК100Р-10ВС»
@@ -278,7 +302,11 @@ def build_brand(brand, title, ours, cands, po=None):
     clean=[]; ambig=[]; n0=0
     for o in ours:
         m=receiver_filter(o.get("rv"), ff_filter(o.get("ff"),
-            cool_filter(o.get("cool"), ip_filter(o.get("ip"), match(o, by_sn.get(o["sn"], []))))))
+            cool_filter(o.get("cool"), ip_filter(o.get("ip"), match(o, by_sn.get(o["sn"], [])))),
+            o.get("name","")))
+        # Последним шагом — предпочесть кандидата с ТЕМ ЖЕ исполнением, если он есть
+        # у конкурента отдельным SKU (проверка 11.08: так было в 6 ложных матчах из 8).
+        m=prefer_exact_variant(o.get("name",""), m)
         per=defaultdict(dict); nexec=defaultdict(lambda: defaultdict(int))
         for c in m:
             k=(c["sn"],c["kw"],c["bar"],c["fl"],c["ff"] or 0,c["vsd"] or 0,c["rv"])
