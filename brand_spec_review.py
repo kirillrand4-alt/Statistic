@@ -28,6 +28,30 @@ ZIP    = "/home/user/Statistic/Brands_spec_match.zip"
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",
                "pnevmo-sklad.ru","v-p-k.ru","rutector.ru"]
 
+# Раздел каталога в URL как подсказка классификатору. Часть площадок пишет в имени
+# только код модели: у compressortyt 766 карточек Berg из 770 названы «ВК-4Р 8 (IP54)»,
+# слова «компрессор» нет ни в имени, ни в слаге — и is_compressor их отбрасывал, хотя
+# лежат они в /stanciya/kompr/vintovye/berg/.
+#
+# Целиком путь в классификатор отдавать НЕЛЬЗЯ: CATEGORY_RE считает листингом всё, где
+# есть «компрессорЫ» во множественном числе, а у pnevmo-sklad этот кусок стоит в КАЖДОМ
+# товарном адресе (/oborudovanie/vintovye_kompressory/...) — весь сайт стал бы «листингом».
+# Поэтому отдаём одно слово в единственном числе, и только когда раздел действительно
+# компрессорный. Запчасти это не пропускает: PARTS_RE по-прежнему смотрит на имя и слаг
+# («zapchasti», «filtr», «maslo» ловятся там же, где ловились).
+_CAT_COMPR = re.compile(r"/(?:kompr|kompressor\w*|kompressori|vintovye|porshnevye|spiralnye|"
+                        r"peredvizhnye|dozhimnoj|centrobejnye)(?:/|$)", re.I)
+_CAT_PARTS = re.compile(r"/(?:zapchast\w*|raskhodnik\w*|filtry|maslo|servis|obsluzhivan\w*)(?:/|$)", re.I)
+
+
+def cat_hint(url: str) -> str:
+    """«компрессор » если адрес лежит в компрессорном разделе, иначе пусто."""
+    path = "/" + "/".join(str(url).split("/")[3:])
+    if _CAT_PARTS.search(path):
+        return ""
+    return "компрессор " if _CAT_COMPR.search(path) else ""
+
+
 # --- дженерик-серия: первое «слово+число» после чистки -----------------------------------
 _STOPW = {"компрессор","компрессора","компрессоры","kompressor","винтовой","vintovoy","vintovoj",
     "поршневой","porshnevoy","porshnevoj","спиральный","безмасляный","bezmaslyanyy","дизельный",
@@ -260,7 +284,7 @@ def load_comp_all():
         b=brand_of(u, nm)
         if not b: continue
         text=(nm or "")+" "+slug(u)
-        if not any(ch.isdigit() for ch in text) or not is_compressor(text): continue
+        if not any(ch.isdigit() for ch in text) or not is_compressor(cat_hint(u)+text): continue
         sn=ser_of(text, b)
         if not sn: continue
         d=specs.get(u, {})
