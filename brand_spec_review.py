@@ -217,6 +217,40 @@ def variant_filter(o_name, cands, brand):
     return cands
 
 
+_EXEC_MNT=(("салазк","салазки"),("подвес","подвес"),("на скатах","скаты"),
+           ("без шасси","рама"),("на раме","рама"),("шасси","шасси"))
+def exec_tags(name):
+    """Исполнение станции из русских слов имени. Проверка разрывов цен 12.08: из 27
+    доказанных ложных пар 15 — ЗИФ, и почти все различаются именно этими словами
+    (подвес/скаты/салазки, кожух/без кожуха, пакет «Север», шасси/рама).
+      кожух и монтаж — двусторонние теги: режем только при явном конфликте обеих сторон
+      («в кожухе» против «без кожуха»; «на скатах» против «с подвесом»);
+      «север» — по наличию слова: зимний пакет в имя ставят ВСЕГДА, когда он есть
+      (никто не пишет «без пакета Север»), поэтому отсутствие слова = базовая версия.
+    «на раме» = «без шасси» — один вариант (доказано живой парой ЗИФ-ПВ-20/1,2)."""
+    t=" "+str(name).lower()+" "
+    tags={"север": "да" if "север" in t else "нет"}
+    if re.search(r"без\s+кожух", t): tags["кожух"]="нет"
+    elif "кожух" in t: tags["кожух"]="да"
+    for pat,val in _EXEC_MNT:
+        if pat in t: tags["монтаж"]=val; break
+    return tags
+
+
+def exec_filter(o_name, cands):
+    """Направленный фильтр исполнения станции (см. exec_tags). У кандидата к имени
+    приклеивается спека «Исполнение»: rutector пишет «На раме / Стационарный» именно
+    там, а имя оставляет чистым — наш «ЗИФ ПВ-16/1,0 (на шасси)» иначе не отличить."""
+    ot=exec_tags(o_name)
+    out=[]
+    for c in cands:
+        ct=exec_tags((c.get("name") or "")+" "+(c.get("mnt") or ""))
+        if any(k in ot and k in ct and ot[k]!=ct[k] for k in ("кожух","монтаж","север")):
+            continue
+        out.append(c)
+    return out
+
+
 def pick_cands(o, pool, brand):
     """Канонический порядок отбора кандидатов. Порядок ЗНАЧИМ, менять нельзя без замера.
 
@@ -231,6 +265,7 @@ def pick_cands(o, pool, brand):
     карточек с матчем и +1 028 пар, ни одна карточка матч не теряет.
     """
     m = cool_filter(o.get("cool"), ip_filter(o.get("ip"), match(o, pool), o))
+    m = exec_filter(o.get("name", ""), m)
     m = (variant_filter(o.get("name", ""), m, brand) if VARIANT_STRICT
          else prefer_exact_variant(o.get("name", ""), m))
     return ff_filter(o.get("ff"), receiver_filter(o.get("rv"), m), o.get("name", ""))
@@ -388,6 +423,12 @@ def load_comp_all():
                 v=float(str(r.get("price","")).replace(",",".").replace(" ",""))
                 if 100<=v<=50_000_000: price[u]=v   # санити: артикулы в поле цены (99 млрд) и копейки — мимо
             except: pass
+            # «Цена по запросу» в СВЕЖЕМ прогоне ГАСИТ цену из старых: до фиксов парсера
+            # (aerocompressors 11f4a6a, compressortyt 043e9b2) такие карточки получали цену
+            # чужого товара из блока похожих — 560 карточек только на aero. Правило
+            # «поздний непустой переписывает» само по себе эту грязь не вымоет: перескрейп
+            # отдаёт price пустым, и отравленное значение жило бы вечно.
+            if (r.get("price_on_request") or "").strip()=="1": price.pop(u, None)
             st=(r.get("series_status") or "").lower()
             if "снят" in st and "v-p-k.ru/catalog" not in u: status[u]="снято"
     cands=defaultdict(list)
@@ -445,12 +486,19 @@ def load_comp_all():
                 elif vl in ("нет","no"): vsd=0
         if bsuf is not None:   # ВК-схема Berg: Р в коде = ременный, отсутствие = прямой
             dr = "ремен" if "r" in bsuf else "прямой"
+        mnt=next((str(v) for k,v in d.items() if k.strip().lower()=="исполнение"), None)
         srv=None
         for k,v in d.items():
             if "ресивер" in k.lower():
                 n=num(v)
                 if n and n>=10: srv=n; break
-                if str(v).strip().lower() in ("да","есть","yes") and srv is None: srv=1
+                vl=str(v).strip().lower()
+                if vl in ("да","есть","yes") and srv is None: srv=1
+                # Явное «нет» — это НЕ «не указано» (тристейт, правило №4). pnevmo-sklad
+                # пишет «Ресивер: нет», и без нуля наша RSA 15-12-500 (ресивер 500 л,
+                # 450 кг) сцеплялась с их RSA 15 12 без ресивера (290 кг) — 5 доказанных
+                # ложных пар Hansmann в проверке разрывов цен 12.08.
+                if (vl in ("нет","no") or vl.startswith("без")) and srv is None: srv=0
         if rv is None or (rv==1 and srv and srv>1): rv = srv if srv is not None else rv
         # сдвоенные карточки «8/10» -> кандидат на каждый вариант; одна цена на странице =
         # за МЛАДШИЙ (базовый/дешёвый) вариант, на старшие цену не вешаем (она была бы занижена)
@@ -463,7 +511,7 @@ def load_comp_all():
                                  ff=ff, vsd=vsd, rv=rv, name=nm or slug(u), url=u, site=dm(u),
                                  price=cp, status=status.get(u,""), ip=ip_class(text) or ip_from_specs(d),
                                  cool=cool_class(text, cool_raw),
-                                 we=we, dr=dr, sku=skus.get(u) or sku2))
+                                 we=we, dr=dr, sku=skus.get(u) or sku2, mnt=mnt))
     return cands
 
 # --- стили --------------------------------------------------------------------------------

@@ -59,6 +59,13 @@ def competitors(outdir: Path) -> list[tuple[str, int]]:
                 for k, v in r.items():
                     if v not in (None, ""):
                         cur[k] = v
+                # «Цена по запросу» в свежем прогоне гасит цену из старых: до фиксов
+                # парсера карточки без своей цены получали цену чужого товара из блока
+                # похожих, а правило «поздний непустой переписывает» само её не вымоет —
+                # перескрейп отдаёт price пустым (см. brand_spec_review.load_comp_all).
+                if (r.get("price_on_request") or "").strip() == "1":
+                    for k in ("price", "old_price", "discount_pct"):
+                        cur.pop(k, None)
     out = []
     for s in SITES:
         rows = by_site.get(s, {})
