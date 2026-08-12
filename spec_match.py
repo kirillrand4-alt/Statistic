@@ -242,7 +242,13 @@ def variant_letters(name, brand):
     # (ресивер — receiver_filter), 27 из-за FF (осушитель — ff_filter), 52 из-за
     # P/Pack (модуль считает Pack/AC/WC одним товаром, см. шапку brand_spec_review).
     from brand_spec_review import _CYR2LAT, _STOPW
-    drop = _STOPW | {"n","bar","atm","psi","l","kg","mm","db","hp","kw","cd","dd","yd"}
+    # «plus» из стоп-слов ИСКЛЮЧЕНО: у Kraftmann, ALMiG и Lupamat это заводское исполнение,
+    # а не маркетинг. Проверено агентами по живым страницам 12.08: Kraftmann VEGA 15 PLUS R
+    # 270 10 весит 390 кг против 335 у VEGA 15 R 270-10, Lupamat LKV 355/10 DHK PREMIUM даёт
+    # 55 710 л/мин и 9 500 кг против 51 530 и 8 700 у DHK PLUS — и обе версии лежат на одной
+    # площадке отдельными карточками. Слово в имени серии («Fini PLUS 11-08») это не задевает:
+    # там plus стоит до числа и попадает в gen_series, а не в метку.
+    drop = (_STOPW - {"plus"}) | {"n","bar","atm","psi","l","kg","mm","db","hp","kw","cd","dd","yd"}
     toks, _ = model_code(name, brand)
     return frozenset(t.translate(_CYR2LAT) for t in toks
                      if not re.fullmatch(r"[\d.]+", t) and len(t) <= 5
