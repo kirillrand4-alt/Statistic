@@ -244,6 +244,31 @@ def berg_suffix(text):
         elif tok: break
     return suf & {"r","e","o"}
 
+# Класс защиты двигателя в спек-таблицах. Ключ у каждой площадки свой, значение — «IP54»,
+# «IP 55», иногда «IP21 (IP23)». Признак заводской: у CrossAir, Hansmann и Berg исполнения
+# IP23 и IP54/55 продаются отдельными SKU с разницей в цене 5-20%, и агенты по живым
+# страницам поймали на этом 6 ложных пар из 11 в выборке 12.08. Пары «IP21 (IP23)» у
+# pnevmoteh (1 163 карточки) ПРОПУСКАЕМ: два числа в одном поле — источник сам не уверен,
+# а ip_filter режет, и ошибка тут дороже пропуска.
+_IPKEY = re.compile(r"(?:класс|степень)\s+защит|\bip\b\s*$|,\s*ip\s*$|^ip\s+", re.I)
+_IPVAL = re.compile(r"^\s*(?:ip\s*[- ]?)?(\d{2})\s*$", re.I)
+
+
+def ip_from_specs(d):
+    """Класс защиты из спек-таблицы: '54'/'23'/None. 55 нормализуется к 54 (ip_class).
+
+    Голое число берём только когда сам КЛЮЧ говорит про IP («Класс защиты
+    электрооборудования, IP = 54» у pnevmoteh) — иначе поймали бы «Класс защиты: 2».
+    """
+    for k, v in (d or {}).items():
+        if not _IPKEY.search(k.strip()):
+            continue
+        m = _IPVAL.match(str(v))
+        if m:
+            return ip_class("ip" + m.group(1))
+    return None
+
+
 def oil_of(v):
     s=str(v).strip().lower()
     if not s: return None
@@ -267,6 +292,15 @@ def load_ours_all():
         try: p=float(str(row[2]).replace(",",".").replace(" ","")) or None
         except: p=None
         price[sl]=(row[0].strip().replace("&quot;",'"'), row[1].strip(), p)
+    # Класс защиты в выгрузке Битрикса ОТСУТСТВУЕТ (в specs_compact всего 17 колонок), но на
+    # сайте он есть и парсер его снимает ключом «IP электродвигателя» — 1 228 наших карточек.
+    # Без него ip_filter молчит с нашей стороны и не может отсечь чужое исполнение: у CrossAir,
+    # Hansmann и Berg IP23 и IP54/55 — разные SKU с разницей в цене 5-20%.
+    ourip={}
+    for u,d in load_universe()[1].items():
+        if "prokompressor.ru" not in u: continue
+        v=ip_class(str(d.get("IP электродвигателя") or ""))
+        if v: ourip[u.rstrip("/").split("/")[-1].lower()]=v
     ours=defaultdict(list)
     for code,r in rows.items():
         man=(r.get("IP_PROP22553") or "").strip()
@@ -292,7 +326,8 @@ def load_ours_all():
         ours[b].append(dict(brand=b, sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
                             bar=bar_value(r.get("IP_PROP22573")) or bar_from_text(name+" "+code),
                             fl=fl, oil=oil_of(r.get("IP_PROP22583")), ff=ff, vsd=vsd, rv=rv,
-                            name=nm or name, url=url, price=p, ip=ip_class(name+" "+code),
+                            name=nm or name, url=url, price=p,
+                            ip=ip_class(name+" "+code) or ourip.get(code.lower()),
                             cool=cool_class(name+" "+code, r.get("IP_PROP22669")),
                             we=(wev if wev and 1<=wev<=50000 else None), dr=drv))
     return ours
@@ -338,7 +373,13 @@ def load_comp_all():
         ff,rv = suffix_flags(nm or slug(u), b, ff, rv)
         bsuf = berg_suffix(text) if b=="berg" else None
         if bsuf is not None:           # заводская схема ВК: код модели ПОЛНЫЙ, отсутствие
-            vsd = 1 if "e" in bsuf else 0          # буквы = знаем-нет (не «не указано»)
+            # буквы = знаем-нет (не «не указано»). НО схему перебивает прямое слово в имени:
+            # compressortyt называет карточку «ВК-45 7 с частотником» — буквы Е в коде нет,
+            # а частотник есть, и старый безусловный override гасил найденный text_flags
+            # признак в 0. Тогда наш ВК-45 7 IP23 без частотника сцеплялся с их частотным
+            # исполнением (цена выше на 48%) — проверено агентом по живой странице.
+            if not (vsd and re.search(r"частотн|инвертор|vsd", text, re.I)):
+                vsd = 1 if "e" in bsuf else 0
             if "o" in bsuf: ff=1
         we=dr=sku2=None
         for k,v in d.items():
@@ -350,8 +391,15 @@ def load_comp_all():
                 vl=str(v).lower()
                 dr="ремен" if "ремен" in vl else ("прямой" if "прям" in vl else None)
             if sku2 is None and "артикул" in kl: sku2=str(v).strip()
-            if ff is None and "осушит" in kl and str(v).strip().lower() in ("да","есть","yes"):
-                ff=1   # спек-ключ «С осушителем: да» (Zammer /O и др.)
+            # Спек-ключ «осушитель». Значение пишут по-разному, и «да/есть» — не весь набор:
+            # v-p-k ставит «С осушителем = с осушителем» на 2 354 карточках, и без этой
+            # ветки их ff оставался пустым. Из-за этого наш VEGA 15 R 270-10 (без осушителя)
+            # сцеплялся с их VEGA 15 PLUS R 270 10 (с осушителем, 390 кг против наших 335),
+            # хотя верная карточка лежит у них рядом — проверено агентом по живым страницам.
+            # «Тип осушителя: адсорбционный» пропускаем: это характеристика уже имеющегося.
+            if ff is None and "осушит" in kl and not kl.startswith("тип"):
+                vl=str(v).strip().lower()
+                if vl in ("да","есть","yes") or vl.startswith("с осушител"): ff=1
             if vsd is None and "частот" in kl:     # «Частотный преобразователь: да/нет»;
                 vl=str(v).strip().lower()          # «Частота тока: 50» отсеется значением
                 if vl in ("да","есть","yes") or "частотн" in vl: vsd=1
@@ -374,7 +422,7 @@ def load_comp_all():
             cp=price.get(u) if (len(pairs)==1 or i==0) else None
             cands[b].append(dict(brand=b, sn=sn, kw=kw, bar=bar or bar_from_text(text), fl=fl, oil=oil,
                                  ff=ff, vsd=vsd, rv=rv, name=nm or slug(u), url=u, site=dm(u),
-                                 price=cp, status=status.get(u,""), ip=ip_class(text),
+                                 price=cp, status=status.get(u,""), ip=ip_class(text) or ip_from_specs(d),
                                  cool=cool_class(text, cool_raw),
                                  we=we, dr=dr, sku=skus.get(u) or sku2))
     return cands
