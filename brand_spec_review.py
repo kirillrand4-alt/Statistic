@@ -230,7 +230,7 @@ def pick_cands(o, pool, brand):
     как метка VS успевала их развести. Замер 11.08: перестановка даёт +35 наших
     карточек с матчем и +1 028 пар, ни одна карточка матч не теряет.
     """
-    m = cool_filter(o.get("cool"), ip_filter(o.get("ip"), match(o, pool)))
+    m = cool_filter(o.get("cool"), ip_filter(o.get("ip"), match(o, pool), o))
     m = (variant_filter(o.get("name", ""), m, brand) if VARIANT_STRICT
          else prefer_exact_variant(o.get("name", ""), m))
     return ff_filter(o.get("ff"), receiver_filter(o.get("rv"), m), o.get("name", ""))
@@ -310,27 +310,32 @@ def load_ours_all():
         try: p=float(str(row[2]).replace(",",".").replace(" ","")) or None
         except: p=None
         price[sl]=(row[0].strip().replace("&quot;",'"'), row[1].strip(), p)
-    # Класс защиты. В Битриксе свойство ЕСТЬ (на карточку сайта тянется оттуда же), но в
-    # выгрузку specs_compact оно не попадает — в файле 17 колонок, IP среди них нет.
-    # Поэтому два источника, в порядке надёжности:
-    #   1) колонка выгрузки, если её добавят — ищем по ЗНАЧЕНИЮ вида «IP54», а не по номеру
-    #      свойства: ID у IP_PROP меняется от выгрузки к выгрузке, и прибивать его гвоздями
-    #      значит сломаться на следующей. Как только свойство появится, подхватится само;
-    #   2) до тех пор — парсерная выгрузка нашего же сайта, ключ «IP электродвигателя».
-    # Без класса защиты ip_filter молчит с нашей стороны и не может отсечь чужое исполнение:
-    # у CrossAir, Hansmann и Berg IP23 и IP54/55 — разные SKU с разницей в цене 5-20%,
-    # агенты поймали на этом 6 ложных пар из 11 в выборке 12.08.
-    ipcol=Counter()
-    for r in rows.values():
-        for k,v in r.items():
-            if k.startswith("IP_PROP") and re.fullmatch(r"\s*ip\s*[- ]?\d{2}\s*", str(v), re.I):
-                ipcol[k]+=1
-    ipcol=ipcol.most_common(1)[0][0] if ipcol else None
+    # Класс защиты, три источника в порядке надёжности: имя карточки -> проверенная
+    # колонка выгрузки -> скрейп нашего сайта. Без него ip_filter молчит с нашей стороны
+    # и не может отсечь чужое исполнение: у CrossAir, Hansmann и Berg IP23 и IP54/55 —
+    # разные SKU с разницей в цене 5-20%, агенты поймали на этом 6 ложных пар из 11 (12.08).
     ourip={}
     for u,d in load_universe()[1].items():
         if "prokompressor.ru" not in u: continue
         v=ip_class(str(d.get("IP электродвигателя") or ""))
         if v: ourip[u.rstrip("/").split("/")[-1].lower()]=v
+    # Колонку выгрузки ищем по ЗНАЧЕНИЮ вида «IP54», а не по номеру свойства: ID у IP_PROP
+    # меняется от выгрузки к выгрузке. Свойств об одном ДВА, и доверять можно не всякому:
+    # колонку берём, только если она сходится со скрейпом нашего же сайта там, где известны
+    # оба значения (>=50 карточек, >=95%). 22674 «IP электродвигателя» проходит — 602/602;
+    # 22959 «Степень защиты двигателя» на Magnus доказанно врёт (370 карточек IP54/55 при
+    # живом IP23, проверка агентами 12.08) и без сверки в матчер не допускается.
+    ipcol=Counter()
+    for r in rows.values():
+        for k,v in r.items():
+            if k.startswith("IP_PROP") and re.fullmatch(r"\s*ip\s*[- ]?\d{2}\s*", str(v), re.I):
+                ipcol[k]+=1
+    ipcols=[]
+    for k,_ in ipcol.most_common():
+        both=[(v, ourip[code.lower()]) for code,r in rows.items()
+              if (v:=ip_class(r.get(k,""))) and code.lower() in ourip]
+        if len(both)>=50 and sum(v==s for v,s in both)>=0.95*len(both):
+            ipcols.append(k)
     ours=defaultdict(list)
     for code,r in rows.items():
         man=(r.get("IP_PROP22553") or "").strip()
@@ -358,7 +363,7 @@ def load_ours_all():
                             fl=fl, oil=oil_of(r.get("IP_PROP22583")), ff=ff, vsd=vsd, rv=rv,
                             name=nm or name, url=url, price=p,
                             ip=(ip_class(name+" "+code)
-                                or (ip_class(r.get(ipcol,"")) if ipcol else None)
+                                or next((v for k in ipcols if (v:=ip_class(r.get(k,"")))), None)
                                 or ourip.get(code.lower())),
                             cool=cool_class(name+" "+code, r.get("IP_PROP22669")),
                             we=(wev if wev and 1<=wev<=50000 else None), dr=drv))
