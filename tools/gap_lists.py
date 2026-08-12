@@ -71,10 +71,7 @@ def main() -> int:
         for c in cands[brand]:
             by[c["sn"]].append(c)
         for o in ours[brand]:
-            m = B.receiver_filter(o.get("rv"), B.ff_filter(o.get("ff"),
-                B.cool_filter(o.get("cool"), B.ip_filter(o.get("ip"),
-                S.match(o, by.get(o["sn"], [])))), o.get("name", "")))
-            m = B.variant_filter(o.get("name", ""), m, brand)
+            m = B.pick_cands(o, by.get(o["sn"], []), brand)
             if m:
                 per_brand_matched[brand] += 1
                 matched_urls.update(c["url"] for c in m)

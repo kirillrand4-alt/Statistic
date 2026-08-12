@@ -59,6 +59,11 @@ def text_flags(text):
                 or re.search(r'\bvs\b', tl) or re.search(r'\bi\.\d', tl)
                 or re.search(r'(?:genesis|formula)[\s.\-]*i\b', tl)
                 or re.search(r'\bmei\d', tl)) else None
+    # «Винтовой компрессор БЕЗ РЕСИВЕРА с осушителем FINI K-MAX 38-08 ES» — отрицание,
+    # а не признак ресивера. Вырезаем до поиска: иначе 1 102 карточки rutector (927),
+    # pnevmoteh (162) и compressortyt (13) получали rv=1, а receiver_filter при нашем
+    # молчаливом rv оставляет только молчаливых кандидатов — верная пара умирала.
+    tl = re.sub(r'без\s+ресивер\w*', ' ', tl)
     rv = None
     m = re.search(r'(?:ресивер\w*|resiver\w*|receiver\w*|\btm)[- ]?(\d{2,3})?\b', tl)
     if m: rv = num(m.group(1)) or 1

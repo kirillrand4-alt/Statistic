@@ -64,6 +64,9 @@ _STOPW = {"компрессор","компрессора","компрессор�
 # конкуренты — EKO/KM/VK/AA (латиница). Только «чистые» омофоны: в→v, н→n и визуальные
 # а/е/о/к/м/р/т/х. Исключены с→c/s (СБ=SB, неоднозначно) и буквы без аналога.
 _CYR2LAT = str.maketrans('аеокмртхвн', 'aeokmrtxvn')
+# Кириллические одиночки, которые НИКОГДА не бывают именем серии: предлоги и союзы из
+# маркетинговой части имени. «а» сюда не входит — это реальная серия Atom (А-11).
+_CYR_PREP = {"с","и","в","у","о","к","я","на","до","от","по","за","не","со","из"}
 
 def _with_variant(sn, text):
     """Метку исполнения (DF/ID/DRY) приклеить к имени семейства, ГДЕ БЫ она ни стояла.
@@ -114,7 +117,6 @@ def gen_series(text, brand):
     # FALLBACK: одно-буквенная серия (Atom А-11, Boge C 10, Comprag D-11, Dalgakiran F 11,
     # IR R110). Срабатывает ТОЛЬКО если основной проход вернул None — старые извлечения не
     # затрагиваются. Латиница всегда; кириллица — кроме предлогов/союзов.
-    _CYR_PREP={"с","и","в","у","о","к","я","на","до","от","по","за","не","со","из"}  # «а» = серия Atom
     for m in re.finditer(r"\b([a-zа-я])\s*[- ]?\s*(\d+(?:[.,]\d+)?)"
                          r"\s*([a-z]{1,4}(?![a-zа-я]))?(?!\d)", s):
         w=m.group(1)
@@ -143,6 +145,18 @@ def gen_series(text, brand):
 # пишет F, мы нет), Ekomak EKO 18G CR STD, Ceccato DRE 120/13 A CE, BERG ATOM (бренд
 # кириллицей у конкурента), Comaro MD-P 132 l/8 против их «132-08 I».
 # Выключение (вернуться к прежнему поведению): VARIANT_STRICT=0.
+#
+# ОТРИЦАТЕЛЬНЫЙ РЕЗУЛЬТАТ 12.08 — две попытки ослабить ff_filter, обе не берём:
+#   ff считать ПО САЙТУ («молчание v-p-k ≠ нет осушителя, он это слово вообще не
+#     пишет»)                          -> пар +1 139, но наш «VEGA 18 PLUS 10
+#     (с осушителем)» сцепляется с v-p-k «VEGA 18 10», хотя PLUS у них лежит рядом
+#     отдельной карточкой. ff — единственное, что их сейчас разводит;
+#   поблажка «молчун с той же меткой не режется» -> сматчено +2, но неоднозначных
+#     373 -> 523: та же беда, «plus» в метку не попадает (стоп-слово).
+#   держать «plus» в метке исполнения -> неоднозначных 373 -> 309 и пар −203, но
+#     16 наших карточек теряют матч целиком (Dalgakiran INVERSYS PLUS, Lupamat
+#     PREMIUM: конкурент слово не пишет). Идея рабочая, но требует отдельной
+#     проверки по живым страницам — в этот заход не берём.
 VARIANT_STRICT = os.getenv("VARIANT_STRICT", "1").strip() not in ("0", "false", "no")
 
 
@@ -152,9 +166,14 @@ def base_family(text, brand):
        их  «ET-Compressors SL 45 HAC (IP23) 10» -> ('sl', 45)"""
     sn = gen_series(text, brand)
     if not sn: return sn
+    # Предлоги отсекаем ТЕМ ЖЕ списком, что и fallback gen_series, иначе два места
+    # расходятся: у compressortyt имя вида «Винтовой компрессор С прямым приводом
+    # Harrison HRS-9510000», и одиночное «с» становилось именем семейства — 130 наших
+    # карточек уезжали в ('с', …) вместо ('hrs', …) и не сходились ни с чем.
     for t in model_code(text, brand)[0]:
-        if not re.fullmatch(r"[\d.]+", t):
-            return (t.translate(_CYR2LAT), sn[1])
+        if re.fullmatch(r"[\d.]+", t) or t in _CYR_PREP:
+            continue
+        return (t.translate(_CYR2LAT), sn[1])
     return sn
 
 
@@ -178,6 +197,25 @@ def variant_filter(o_name, cands, brand):
     if exact: return exact
     if ours and any(m for _, m in marks): return []
     return cands
+
+
+def pick_cands(o, pool, brand):
+    """Канонический порядок отбора кандидатов. Порядок ЗНАЧИМ, менять нельзя без замера.
+
+    метка исполнения -> ресивер -> осушитель, от самого твёрдого признака к самому мягкому:
+      * метка (ES/VS/PM/DF) стоит в заводском артикуле с обеих сторон — это факт;
+      * ресивер наш артикул кодирует всегда («K-MAX 1513-500 ES» = 500 л);
+      * ff — проп и слова в имени, размечен неровно от площадки к площадке.
+    Раньше ff шёл первым и выбивал верную пару чужой разметкой с ДРУГОГО сайта:
+    наш «FINI K-MAX 38-08 ES» уходил к pnevmoteh «38-08 ES VS» (там в имени написано
+    «с осушителем»), а молчаливые v-p-k/aerocompressors «38-08 ES» вылетали до того,
+    как метка VS успевала их развести. Замер 11.08: перестановка даёт +35 наших
+    карточек с матчем и +1 028 пар, ни одна карточка матч не теряет.
+    """
+    m = cool_filter(o.get("cool"), ip_filter(o.get("ip"), match(o, pool)))
+    m = (variant_filter(o.get("name", ""), m, brand) if VARIANT_STRICT
+         else prefer_exact_variant(o.get("name", ""), m))
+    return ff_filter(o.get("ff"), receiver_filter(o.get("rv"), m), o.get("name", ""))
 
 _DTAIL=re.compile(r'[\d\)лl]\s*[-–]?\s*([дd])\s*(?:\(.*)?$', re.I)   # «270L D», «500Д», «10Д (с осуш.)»
 _VSTAIL=re.compile(r'(?:\d|\))\s*(вс|bc)\s*$', re.I)                  # «ВК100Р-10ВС»
@@ -379,13 +417,9 @@ def build_brand(brand, title, ours, cands, po=None):
     for c in cands: by_sn[c["sn"]].append(c)
     clean=[]; ambig=[]; n0=0
     for o in ours:
-        m=receiver_filter(o.get("rv"), ff_filter(o.get("ff"),
-            cool_filter(o.get("cool"), ip_filter(o.get("ip"), match(o, by_sn.get(o["sn"], [])))),
-            o.get("name","")))
-        # Последним шагом — предпочесть кандидата с ТЕМ ЖЕ исполнением, если он есть
-        # у конкурента отдельным SKU (проверка 11.08: так было в 6 ложных матчах из 8).
-        m=(variant_filter(o.get("name",""), m, brand) if VARIANT_STRICT
-           else prefer_exact_variant(o.get("name",""), m))
+        # Исполнение сравнивается ПЕРВЫМ: кандидат с тем же SKU у конкурента есть в
+        # 6 ложных матчах из 8 (проверка 11.08), и метка разводит их до пропов.
+        m=pick_cands(o, by_sn.get(o["sn"], []), brand)
         per=defaultdict(dict); nexec=defaultdict(lambda: defaultdict(int))
         for c in m:
             k=(c["sn"],c["kw"],c["bar"],c["fl"],c["ff"] or 0,c["vsd"] or 0,c["rv"])
