@@ -231,6 +231,24 @@ def dr_name(n):
     return None
 
 
+# Марка дизельного двигателя: заводы дают разные SKU под разные моторы (ЗИФ-ПВ-16/0,7
+# на Д-260 ММЗ и на ЯМЗ — отдельные позиции с разными ценами, доказано 13.08). Д-2хх —
+# двигатели Минского моторного завода. Извлекается из имени и из спек/пропов.
+_ENG=(("ямз","ямз"),("cummins","cummins"),("камминз","cummins"),("deutz","deutz"),
+      ("дойц","deutz"),("kubota","kubota"),("yanmar","yanmar"),("perkins","perkins"),
+      ("caterpillar","cat"),("weichai","weichai"),("isuzu","isuzu"),
+      ("yamz","ямз"),("mmz","ммз"),("ммз","ммз"),("минск","ммз"))
+_ENG_D2=re.compile(r"д-?2\d\d", re.I)
+_ENG_CAT=re.compile(r"cat", re.I)
+def eng_make(*texts):
+    t=" ".join(str(x or "") for x in texts).lower()
+    for pat,mk in _ENG:
+        if pat in t: return mk
+    if _ENG_D2.search(t): return "ммз"
+    if _ENG_CAT.search(t): return "cat"
+    return None
+
+
 _EXEC_MNT=(("салазк","салазки"),("подвес","подвес"),("на скатах","скаты"),
            ("без шасси","рама"),("на раме","рама"),("шасси","шасси"))
 def exec_tags(name):
@@ -255,6 +273,10 @@ def exec_tags(name):
     # Сеть 60 Гц — по наличию: в РФ стандарт 50 Гц, «60 Hz» пишут только на экспортных
     # исполнениях (Atlas ZR 90 - 9 60 Hz FF — другой двигатель, доказано 13.08).
     tags["сеть"]="60" if re.search(r"\b60\s*(?:hz|гц)", t) else "50"
+    # Конфигурация модулей спиральных станций: «DS 15-10 (4x3.7)» и «(2x7,5)» — физически
+    # разные машины при одинаковой суммарной мощности (веса 695 vs 440 кг, доказано 12.08).
+    m=re.search(r"\((\d)\s*[xх×]\s*(\d+(?:[.,]\d+)?)\)", t)
+    if m: tags["модули"]=f"{m.group(1)}x{m.group(2).replace(',','.')}"
     return tags
 
 
@@ -266,7 +288,7 @@ def exec_filter(o_name, cands):
     out=[]
     for c in cands:
         ct=exec_tags((c.get("name") or "")+" "+(c.get("mnt") or ""))
-        if any(k in ot and k in ct and ot[k]!=ct[k] for k in ("кожух","монтаж","север","тормоз","сеть")):
+        if any(k in ot and k in ct and ot[k]!=ct[k] for k in ("кожух","монтаж","север","тормоз","сеть","модули")):
             continue
         out.append(c)
     return out
@@ -309,6 +331,10 @@ def pick_cands(o, pool, brand):
     od=o.get("dr") or dr_name(o.get("name"))
     if od:
         m=[c for c in m if (c.get("dr") or dr_name(c.get("name"))) in (None, od)]
+    # Марка дизеля — направленно: обе стороны знают и различаются -> разные SKU
+    # (ЗИФ-ПВ на ММЗ и на ЯМЗ — отдельные позиции, доказано 13.08).
+    if o.get("eng"):
+        m=[c for c in m if c.get("eng") in (None, o["eng"])]
     return ff_filter(o.get("ff"), m, o.get("name", ""))
 
 _DTAIL=re.compile(r'[\d\)лl]\s*[-–]?\s*([дd])\s*(?:\(.*)?$', re.I)   # «270L D», «500Д», «10Д (с осуш.)»
@@ -443,6 +469,12 @@ def load_ours_all():
         wev=num(r.get("IP_PROP22555")); drv=(r.get("IP_PROP22601") or "").strip().lower() or None
         if drv: drv="ремен" if "ремен" in drv else ("прямой" if "прям" in drv else None)
         if str(r.get("IP_PROP22565","")).strip().lower()=="да": ff=1   # проп «осушитель» (направл. флаг — безопасно)
+        cl=cool_class(name+" "+code, r.get("IP_PROP22669"))
+        # W-хвост после числа = водяное охлаждение — ТОЛЬКО у брендов с доказанным
+        # значением буквы (dalgakiran: живая страница «IMPETUS W — с водяным охлаждением»;
+        # ET: проверка 11.08). У Enger/Kraftmann/Spitzenreiter W не расшифрован — не трогаем.
+        if cl is None and b in ("dalgakiran","et") and re.search(r"\d\s?w\b", name, re.I):
+            cl="water"
         pv=str(r.get("IP_PROP22586","")).strip().lower()   # проп «частотник»: знание да/нет
         if vsd is None and pv:                             # имя-маркер приоритетнее пропа
             vsd = 1 if pv=="да" else (0 if pv=="нет" else None)
@@ -456,7 +488,7 @@ def load_ours_all():
                                 or ourip.get(code.lower())
                                 or next((v for k in ipopen
                                          if (v:=ip_class(r.get(k,""))) and _ip_open(v)), None)),
-                            cool=cool_class(name+" "+code, r.get("IP_PROP22669")),
+                            cool=cl, eng=eng_make(name, code, *r.values()),
                             we=(wev if wev and 1<=wev<=50000 else None), dr=drv))
     return ours
 
@@ -541,6 +573,9 @@ def load_comp_all():
         if bsuf is not None:   # ВК-схема Berg: Р в коде = ременный, отсутствие = прямой
             dr = "ремен" if "r" in bsuf else "прямой"
         mnt=next((str(v) for k,v in d.items() if k.strip().lower()=="исполнение"), None)
+        engsrc=[v for k,v in d.items()
+                if "двигат" in k.lower() and "элект" not in k.lower() and "защит" not in k.lower()]
+        ceng=eng_make(nm, slug(u), *engsrc)
         srv=None
         for k,v in d.items():
             if "ресивер" in k.lower():
@@ -564,7 +599,10 @@ def load_comp_all():
             cands[b].append(dict(brand=b, sn=sn, kw=kw, bar=bar or bar_from_text(text), fl=fl, oil=oil,
                                  ff=ff, vsd=vsd, rv=rv, name=nm or slug(u), url=u, site=dm(u),
                                  price=cp, status=status.get(u,""), ip=ip_class(text) or ip_from_specs(d),
-                                 cool=cool_class(text, cool_raw),
+                                 cool=(cool_class(text, cool_raw)
+                                       or ("water" if b in ("dalgakiran","et")
+                                           and re.search(r"\d\s?w\b", nm or "", re.I) else None)),
+                                 eng=ceng,
                                  we=we, dr=dr, sku=skus.get(u) or sku2, mnt=mnt))
     return cands
 

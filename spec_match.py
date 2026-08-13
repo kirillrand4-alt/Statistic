@@ -115,6 +115,11 @@ def cool_class(text, prop=None):
     """Тип охлаждения: 'water'/'air'/None. Сначала проп/спека, потом имя. «вод»/«жидк» =
     water, «возд»/«air» = air. Если в значении ОБА (воздушное/водяное, опционально) или
     масляное/неясное → None (любое, не фильтруем). Голый 'ac' НЕ трактуем (= Atlas Copco)."""
+    # «воздушное (водяное опционально)» — базовое исполнение ВОЗДУШНОЕ, опция не
+    # комплектация: конкурент так описывает воздушный IMPETUS 160, и двойное слово
+    # превращало знание в молчание — наша водяная 160W ложно липла к нему (13.08).
+    if "опцион" in str(prop).lower():
+        prop = str(prop).lower().split("опцион")[0].rsplit("(", 1)[0]
     s = (str(prop) + " " + str(text)).lower()
     water = bool(re.search(r'водян|жидкост|water[\s-]?cool|\bwc\b', s))
     air   = bool(re.search(r'воздушн\w*\s*охлажд|air[\s-]?cool', s))
@@ -122,7 +127,7 @@ def cool_class(text, prop=None):
     pl = str(prop).strip().lower()
     if pl in ("воздушное", "воздушный", "air"): air = True
     if pl in ("водяное", "водяной", "жидкостное", "water"): water = True
-    if water and air: return None     # «воздушное/водяное», «опционально» — подходит к любому
+    if water and air: return None     # «воздушное/водяное» без уточнений — подходит к любому
     if water: return "water"
     if air:   return "air"
     return None
