@@ -258,6 +258,11 @@ def exec_filter(o_name, cands):
     return out
 
 
+# (бренд, серия+номер), где наш каталог держит БЕЗресиверную карточку. Заполняется
+# в load_ours_all; нужен receiver-правилу ниже.
+OUR_BARE=set()
+
+
 def pick_cands(o, pool, brand):
     """Канонический порядок отбора кандидатов. Порядок ЗНАЧИМ, менять нельзя без замера.
 
@@ -275,7 +280,16 @@ def pick_cands(o, pool, brand):
     m = exec_filter(o.get("name", ""), m)
     m = (variant_filter(o.get("name", ""), m, brand) if VARIANT_STRICT
          else prefer_exact_variant(o.get("name", ""), m))
-    return ff_filter(o.get("ff"), receiver_filter(o.get("rv"), m), o.get("name", ""))
+    m = receiver_filter(o.get("rv"), m)
+    # Наш артикул кодирует ресивер всегда. Если у нашей карточки объём, а в каталоге
+    # РЯДОМ лежит безресиверная той же серии (мы сами различаем оба SKU) — молчаливый
+    # кандидат принадлежит базовой версии, а не нашей: aerocompressors «RSA 5.5-10»
+    # без ключа ресивера уже верно сцеплен с нашей «RSA 5.5 10 бар», но заодно ложно
+    # доставался нашей «RSA 5.5-10-500» (проверка разрывов цен 12.08, 2 пары).
+    rv=o.get("rv")
+    if rv and rv!=1 and (brand, o["sn"]) in OUR_BARE:
+        m=[c for c in m if c.get("rv") is not None]
+    return ff_filter(o.get("ff"), m, o.get("name", ""))
 
 _DTAIL=re.compile(r'[\d\)лl]\s*[-–]?\s*([дd])\s*(?:\(.*)?$', re.I)   # «270L D», «500Д», «10Д (с осуш.)»
 _VSTAIL=re.compile(r'(?:\d|\))\s*(вс|bc)\s*$', re.I)                  # «ВК100Р-10ВС»
@@ -389,6 +403,7 @@ def load_ours_all():
             # контрпример — KM18,5-13рВ (наш IP23 ошибочен) — принятая цена: 8 верных
             # отсевов против 1 ложного.
             ipopen.append(k)
+    OUR_BARE.clear()
     ours=defaultdict(list)
     for code,r in rows.items():
         man=(r.get("IP_PROP22553") or "").strip()
@@ -411,6 +426,7 @@ def load_ours_all():
         pv=str(r.get("IP_PROP22586","")).strip().lower()   # проп «частотник»: знание да/нет
         if vsd is None and pv:                             # имя-маркер приоритетнее пропа
             vsd = 1 if pv=="да" else (0 if pv=="нет" else None)
+        if rv in (None, 0): OUR_BARE.add((b, sn))
         ours[b].append(dict(brand=b, sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
                             bar=bar_value(r.get("IP_PROP22573")) or bar_from_text(name+" "+code),
                             fl=fl, oil=oil_of(r.get("IP_PROP22583")), ff=ff, vsd=vsd, rv=rv,
