@@ -12,7 +12,7 @@ from collections import defaultdict, Counter
 from matcher import brand_of, BRAND_ALIASES, brand_from_text
 from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value, bar_flow_pairs,
                         series_num, text_flags, is_compressor, match, receiver_filter, ff_filter,
-                        ip_filter, ip_class, cool_filter, cool_class, is_flow_key, card_issue,
+                        ip_filter, ip_class, _ip_open, cool_filter, cool_class, is_flow_key, card_issue,
                         prefer_exact_variant, VARIANT_MARKS, model_code,
                         variant_letters, same_variant)
 from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
@@ -234,6 +234,13 @@ def exec_tags(name):
     elif "кожух" in t: tags["кожух"]="да"
     for pat,val in _EXEC_MNT:
         if pat in t: tags["монтаж"]=val; break
+    # Тормоз шасси — двусторонний тег: Atmos продаёт «фикс. с тормозом» и «фикс. без
+    # тормозов» отдельными SKU с разницей ~240 тыс (2 доказанные ложные пары 13.08).
+    if re.search(r"без\s+тормоз", t): tags["тормоз"]="нет"
+    elif "тормоз" in t: tags["тормоз"]="да"
+    # Сеть 60 Гц — по наличию: в РФ стандарт 50 Гц, «60 Hz» пишут только на экспортных
+    # исполнениях (Atlas ZR 90 - 9 60 Hz FF — другой двигатель, доказано 13.08).
+    tags["сеть"]="60" if re.search(r"\b60\s*(?:hz|гц)", t) else "50"
     return tags
 
 
@@ -245,7 +252,7 @@ def exec_filter(o_name, cands):
     out=[]
     for c in cands:
         ct=exec_tags((c.get("name") or "")+" "+(c.get("mnt") or ""))
-        if any(k in ot and k in ct and ot[k]!=ct[k] for k in ("кожух","монтаж","север")):
+        if any(k in ot and k in ct and ot[k]!=ct[k] for k in ("кожух","монтаж","север","тормоз","сеть")):
             continue
         out.append(c)
     return out
@@ -367,12 +374,21 @@ def load_ours_all():
         for k,v in r.items():
             if k.startswith("IP_PROP") and re.fullmatch(r"\s*ip\s*[- ]?\d{2}\s*", str(v), re.I):
                 ipcol[k]+=1
-    ipcols=[]
+    ipcols=[]; ipopen=[]
     for k,_ in ipcol.most_common():
         both=[(v, ourip[code.lower()]) for code,r in rows.items()
               if (v:=ip_class(r.get(k,""))) and code.lower() in ourip]
         if len(both)>=50 and sum(v==s for v,s in both)>=0.95*len(both):
             ipcols.append(k)
+        else:
+            # У непроверяемой колонки берём ТОЛЬКО открытые значения (IP2x). Асимметрия
+            # доказана двумя проверками 12.08: 22959 врёт исключительно значением 54/55 —
+            # шаблонным (IP55 стоит на 9 790 карточках из 15 026, Magnus/ЗИФ/DAS/Cross),
+            # а редкое осознанное «IP23» (1 662) оказалось верным во всех восьми живых
+            # разборах (Berg x3, KraftMachine x2, CrossAir x2, ET). Единственный известный
+            # контрпример — KM18,5-13рВ (наш IP23 ошибочен) — принятая цена: 8 верных
+            # отсевов против 1 ложного.
+            ipopen.append(k)
     ours=defaultdict(list)
     for code,r in rows.items():
         man=(r.get("IP_PROP22553") or "").strip()
@@ -401,7 +417,9 @@ def load_ours_all():
                             name=nm or name, url=url, price=p,
                             ip=(ip_class(name+" "+code)
                                 or next((v for k in ipcols if (v:=ip_class(r.get(k,"")))), None)
-                                or ourip.get(code.lower())),
+                                or ourip.get(code.lower())
+                                or next((v for k in ipopen
+                                         if (v:=ip_class(r.get(k,""))) and _ip_open(v)), None)),
                             cool=cool_class(name+" "+code, r.get("IP_PROP22669")),
                             we=(wev if wev and 1<=wev<=50000 else None), dr=drv))
     return ours
