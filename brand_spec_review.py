@@ -249,8 +249,18 @@ def eng_make(*texts):
     return None
 
 
+# «стационарн» = класс неподвижных вместе с «на раме»: compressortyt зовёт бесшассийные
+# Atmos «Стационарный компрессор PDP 20» прямо в H1 — 6 доказанных ложных пар 13.08
+# против наших «на шасси». Порядок значим: «салазки» раньше «стационарн» — их
+# «стационарный на салазках» должен давать тег салазок, как и наша «на салазках».
 _EXEC_MNT=(("салазк","салазки"),("подвес","подвес"),("на скатах","скаты"),
-           ("без шасси","рама"),("на раме","рама"),("шасси","шасси"))
+           ("без шасси","рама"),("на раме","рама"),("стационарн","стационар"),("шасси","шасси"))
+# «стационарный» у Atmos — это ЕГО «на салазках»/«на раме» (h1 «Стационарный компрессор
+# PDP 20», в описании «шасси на салазках»): конфликтует только с «шасси», с прочими
+# неподвижными совместим. Доказано 13.08: 6 ложных пар стационар-vs-шасси и 2 верные
+# стационар-vs-салазки.
+_MNT_OK={frozenset({"стационар","рама"}), frozenset({"стационар","салазки"}),
+         frozenset({"стационар","подвес"}), frozenset({"стационар","скаты"})}
 def exec_tags(name):
     """Исполнение станции из русских слов имени. Проверка разрывов цен 12.08: из 27
     доказанных ложных пар 15 — ЗИФ, и почти все различаются именно этими словами
@@ -277,6 +287,14 @@ def exec_tags(name):
     # разные машины при одинаковой суммарной мощности (веса 695 vs 440 кг, доказано 12.08).
     m=re.search(r"\((\d)\s*[xх×]\s*(\d+(?:[.,]\d+)?)\)", t)
     if m: tags["модули"]=f"{m.group(1)}x{m.group(2).replace(',','.')}"
+    # Высота дышла у шассийных Atmos: «рег. высота» и «фиксированная» — отдельные SKU
+    # (PDP15 7: доказанная ложная пара 13.08). Двусторонний тег.
+    if re.search(r"\bрег\w*[.\s]+высот|регулируем", t): tags["дышло"]="рег"
+    elif re.search(r"\bфикс", t): tags["дышло"]="фикс"
+    # Диапазон давления в скобках: Renner RSF 355 DW-13 продаётся как «(6-13 бар)» и
+    # «(13-15 бар)» — отдельные SKU у конкурента (доказано 13.08). Двусторонний тег.
+    m=re.search(r"\((\d+(?:[.,]\d+)?)\s*[-–]\s*(\d+(?:[.,]\d+)?)\s*бар\)", t)
+    if m: tags["диапазон"]=f"{m.group(1)}-{m.group(2)}".replace(",",".")
     return tags
 
 
@@ -288,15 +306,30 @@ def exec_filter(o_name, cands):
     out=[]
     for c in cands:
         ct=exec_tags((c.get("name") or "")+" "+(c.get("mnt") or ""))
-        if any(k in ot and k in ct and ot[k]!=ct[k] for k in ("кожух","монтаж","север","тормоз","сеть","модули")):
-            continue
-        out.append(c)
+        bad=False
+        for k in ("кожух","монтаж","север","тормоз","сеть","модули","дышло","диапазон"):
+            if k not in ot or k not in ct or ot[k]==ct[k]: continue
+            if k=="монтаж" and frozenset({ot[k],ct[k]}) in _MNT_OK: continue
+            if k=="диапазон":
+                # Вложенный диапазон — не другой SKU: Renner RSF 200 D-13 «(6-13)» входит
+                # в «(6-15)» (объединённая карточка). Режем только НЕвложенные: «(6-13)»
+                # против «(13-15)» — доказанные отдельные позиции.
+                (a1,a2),(b1,b2)=(map(float,ot[k].split("-")), map(float,ct[k].split("-")))
+                if (a1>=b1 and a2<=b2) or (b1>=a1 and b2<=a2): continue
+            bad=True; break
+        if not bad: out.append(c)
     return out
 
 
 # (бренд, серия+номер), где наш каталог держит БЕЗресиверную карточку. Заполняется
-# в load_ours_all; нужен receiver-правилу ниже.
-OUR_BARE=set()
+# в load_ours_all; нужен receiver-правилу ниже. Той же природы OUR_IPBASE (есть наша
+# карточка с открытым/неуказанным IP) и OUR_NOVSD (есть наша без частотника): если мы
+# сами различаем исполнения, молчаливый кандидат принадлежит базовой версии.
+OUR_BARE=set(); OUR_IPBASE={}; OUR_NOVSD=set()
+_IPWORD=re.compile(r"[,(]?\s*ip\s*-?\s*\d{2}\)?", re.I)
+def _noip(name):
+    """Имя без IP-метки — для сравнения «отличаются ли карточки только классом защиты»."""
+    return re.sub(r"\s+", " ", _IPWORD.sub(" ", str(name).lower())).strip()
 
 
 def pick_cands(o, pool, brand):
@@ -335,6 +368,21 @@ def pick_cands(o, pool, brand):
     # (ЗИФ-ПВ на ММЗ и на ЯМЗ — отдельные позиции, доказано 13.08).
     if o.get("eng"):
         m=[c for c in m if c.get("eng") in (None, o["eng"])]
+    # Наш каталог сам различает исполнения -> молчаливый кандидат принадлежит базовой
+    # версии (образец — ресиверное правило выше). Доказано 13.08: их безымянный
+    # KM11-13рВ (292 кг) достался нашей «KM11-13рВ, IP54», хотя наша базовая IP23
+    # лежит рядом; их HRS-9513800 без VSD — нашей VSD-версии при нашей базовой рядом.
+    # ...и только когда карточки отличаются ИСКЛЮЧИТЕЛЬНО меткой IP: наша «KM11-13рВ,
+    # IP54» против нашей же базовой «KM11-13рВ». Harrison «HRS-941300T3» (IP54) при базе
+    # «HRS-941300» (IP23) сюда не попадает — их безымянная T3-карточка не базовая, её
+    # уже выбрала метка исполнения (замер 13.08: широкий вариант рвал эту верную пару).
+    if (o.get("ip") and not _ip_open(o["ip"])
+            and _noip(o.get("name")) in OUR_IPBASE.get((brand, o["sn"]), ())):
+        m=[c for c in m if c.get("ip") is not None]
+    # ОТРИЦАТЕЛЬНЫЙ РЕЗУЛЬТАТ 13.08 (проверено, откачено): то же правило для VSD
+    # («наша с частотником + у нас есть базовая -> молчаливых режем») стоило 11
+    # подтверждённых верных пар по четырём сотням: конкуренты слово VSD в спеках
+    # пишут неровно (Atlas GA-VSD, Boge C), и молчание там — не «базовая версия».
     return ff_filter(o.get("ff"), m, o.get("name", ""))
 
 _DTAIL=re.compile(r'[\d\)лl]\s*[-–]?\s*([дd])\s*(?:\(.*)?$', re.I)   # «270L D», «500Д», «10Д (с осуш.)»
@@ -449,7 +497,7 @@ def load_ours_all():
             # контрпример — KM18,5-13рВ (наш IP23 ошибочен) — принятая цена: 8 верных
             # отсевов против 1 ложного.
             ipopen.append(k)
-    OUR_BARE.clear()
+    OUR_BARE.clear(); OUR_IPBASE.clear(); OUR_NOVSD.clear()   # OUR_IPBASE: (b,sn) -> имена открытых карточек без IP-метки
     ours=defaultdict(list)
     for code,r in rows.items():
         man=(r.get("IP_PROP22553") or "").strip()
@@ -478,16 +526,21 @@ def load_ours_all():
         pv=str(r.get("IP_PROP22586","")).strip().lower()   # проп «частотник»: знание да/нет
         if vsd is None and pv:                             # имя-маркер приоритетнее пропа
             vsd = 1 if pv=="да" else (0 if pv=="нет" else None)
+        oip=(ip_class(name+" "+code)
+             or next((v for k in ipcols if (v:=ip_class(r.get(k,"")))), None)
+             or ourip.get(code.lower())
+             or next((v for k in ipopen
+                      if (v:=ip_class(r.get(k,""))) and _ip_open(v)), None))
+        # Базой считается только ЯВНО открытая карточка (IP2x): «ip неизвестен» — не база
+        # (17,5 тыс. наших карточек без ip делали правило тотальным и рвали верные пары).
+        if oip is not None and _ip_open(oip): OUR_IPBASE.setdefault((b, sn), set()).add(_noip(name))
         if rv in (None, 0): OUR_BARE.add((b, sn))
+        if not vsd: OUR_NOVSD.add((b, sn))
         ours[b].append(dict(brand=b, sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
                             bar=bar_value(r.get("IP_PROP22573")) or bar_from_text(name+" "+code),
                             fl=fl, oil=oil_of(r.get("IP_PROP22583")), ff=ff, vsd=vsd, rv=rv,
                             name=nm or name, url=url, price=p,
-                            ip=(ip_class(name+" "+code)
-                                or next((v for k in ipcols if (v:=ip_class(r.get(k,"")))), None)
-                                or ourip.get(code.lower())
-                                or next((v for k in ipopen
-                                         if (v:=ip_class(r.get(k,""))) and _ip_open(v)), None)),
+                            ip=oip,
                             cool=cl, eng=eng_make(name, code, *r.values()),
                             we=(wev if wev and 1<=wev<=50000 else None), dr=drv))
     return ours
