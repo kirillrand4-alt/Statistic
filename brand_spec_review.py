@@ -689,6 +689,13 @@ def learn_vsd_marks(ours, min_votes=6):
                 for y in g[i+1:]:
                     if x.get("vsd") is None or y.get("vsd") is None or x["vsd"] == y["vsd"]:
                         continue
+                    # Буква должна различать ТОЛЬКО частотник. Если вместе с ним разъезжается
+                    # и осушитель, она несёт два смысла сразу: у ATMOS «FD» — это фильтр плюс
+                    # осушитель, и вычитание такой буквы склеило нашу ST 55 Vario+ FD/13
+                    # (осушитель да, 1290 кг) с их ST 55 Vario+ без FD (осушителя нет, 1230 кг)
+                    # — доказанная ложная пара в адверсарной проверке 18.08. То же у ARIACOM,
+                    # где «VD» = частотник + осушитель против «V» = только частотник.
+                    if (x.get("ff") or 0) != (y.get("ff") or 0): continue
                     mx = variant_letters(x["name"], b); my = variant_letters(y["name"], b)
                     diff = (mx - my) | (my - mx)
                     if len(diff) != 1: continue
