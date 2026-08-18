@@ -236,9 +236,18 @@ def model_code(name, brand):
     # (номер модели + буква исполнения V — частотная серия ARIACOM), метка V пропадала,
     # и наш частотный NT15 V сцеплялся с их фиксированным NT15 — 2 доказанные ложные
     # пары в проверке разрывов цен 12.08.
+    # Обратный порядок «V400/50» пишут rutector и compressortyt (217 карточек): у Ceccato
+    # «CSL O 10 10 V400/50 270L» этот блок вставлен В СЕРЕДИНУ имени и разводил её с нашей
+    # «CSL O 10/10 270L» при совпадении спек до литра (802 л/мин). Однофазные 220/230 сюда
+    # НЕ берём: «ABAC SPINN 2.2-10 V220» — отдельное исполнение, у нас лежит своей карточкой.
     s = re.sub(r"(?i)\b(?:220|230|380|400|415|660|1140)\s*(?:в|v)\b"
+               r"|\bv\s?(?:380|400|415|660|1140)\b"
                r"|\b\d*\s*(?:ф|ph)\b|\b\d*\s*(?:гц|hz)\b", " ", s)
-    s = s.lower().replace("_"," ").replace("/"," ").replace("-"," ").replace(","," ")
+    # Десятичная запятая — в точку ДО того, как запятая станет пробелом: иначе наш
+    # «OZEN OBS 22 D 7,5» даёт код [obs,22,d,7,5], а их «OBS 22 D 7.5» — [obs,22,d,7.5],
+    # и полный код не сходится там, где стороны пишут одно число по-разному.
+    s = re.sub(r"(?<=\d),(?=\d)", ".", s.lower())
+    s = s.replace("_"," ").replace("/"," ").replace("-"," ").replace(","," ")
     from matcher import BRAND_ALIASES
     from brand_spec_review import _CYR2LAT
     btoks = {brand} | {a for a, c in BRAND_ALIASES.items() if c == brand}
@@ -465,6 +474,27 @@ def card_issue(o, same, fields=CHECK_FIELDS):
                 return (label, ov, v1, len(doms), max(ov,v1)/min(ov,v1), src)
     return None
 
+def bar_in_code(name, brand, bar):
+    """Рабочее давление стоит числом В САМОМ индексе модели.
+
+    Тогда совпадение полного кода (same_model) уже доказывает, что давление одно, а
+    расхождение поля «бар» — ошибка источника. Именно так у бустеров: Ozen OBS 22 D 10
+    — наш каталог пишет входные 10 бар, pnevmo-sklad максимальные выходные 35, хотя
+    в индексе у обоих «D 10». То же у Fini K-MAX 45-08 (7,5 против 8) и Atlas GX4 10FF
+    (9,75 против 10 — наша же карточка пишет «10 бар (9.75 бар)»).
+
+    Без этой проверки правило нельзя расширять на давление: у AIRMAN SASG19 VD код
+    модели давления не содержит, и 7 бар против 14 — это разные исполнения, а не
+    ошибка; то же у ARIACOM HCA+55 (8 против 10)."""
+    if not bar: return False
+    toks, _ = model_code(name or "", brand)
+    for t in toks:
+        try: v = float(t.replace(",", "."))
+        except ValueError: continue
+        if agree_num(v, bar, 0.04): return True
+    return False
+
+
 def same_model(a, b, brand):
     """Обозначение модели совпало ЦЕЛИКОМ — все токены кода, а не только серия+номер.
 
@@ -504,7 +534,10 @@ def match(o, cands):
     out = []
     for c in cands:
         if o["sn"] != c["sn"]: continue
-        if not (agree_num(o["kw"], c["kw"]) and agree_num(o["bar"], c["bar"], 0.04)): continue
+        if not agree_num(o["kw"], c["kw"]): continue
+        if not agree_num(o["bar"], c["bar"], 0.04) \
+           and not (same_model(o.get("name"), c.get("name") or c.get("url"), c.get("brand"))
+                    and bar_in_code(o.get("name"), c.get("brand"), o.get("bar"))): continue
         # производительность 4%, но НЕ режем, когда обозначение модели совпало
         # целиком — тогда расходятся паспорта источников, а не товары (см. same_model)
         if not agree_num(o.get("fl"), c.get("fl"), FLOW_TOL) \

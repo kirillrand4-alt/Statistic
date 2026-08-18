@@ -35,6 +35,11 @@ BRAND_ALIASES = {
     "aztec":"aztec","chkz":"chkz","hori":"hori","mig":"mig","mmz":"mmz","spr":"spr",
     "ir":"ir","ingersoll":"ir","rand":"ir",
     "ac":"atlas",   # «AC» = Atlas Copco (у нас: «AC GA22 VSD+», «AC ZR 110»; v-p-k: aq-…-ac-ff)
+    # Вторая половина имени бренда: без неё «copco» уходит в метку исполнения у 702 наших
+    # карточек из 714 и 3 341 конкурентской из 3 832. Пока обе стороны пишут бренд целиком,
+    # метки сходятся, но compressortyt даёт голый индекс («GA 18 13»), и верная пара с нашим
+    # «ATLAS COPCO GA18 13P/400В…» разводилась лишним токеном.
+    "copco":"atlas",
     # кириллические имена производителей (Битрикс-выгрузка пишет кириллицей)
     "зиф":"zif","ркз":"mig","бежецк":"aso","чкз":"chkz","минский":"mmz","ремеза":"remeza",
     # конкурентские бренды, которых нет у prokompressor (на рассмотрение)
@@ -61,17 +66,28 @@ def last_segment_tokens(u):
     seg = p.split("/")[-1] if p else ""
     return [t for t in re.split(r"[-_/.\s]+", seg) if t]
 
+# «buster» в слаге — почти всегда транслитерация слова «бустер» (тип машины), а не бренд:
+# pnevmo-sklad пишет «vintovoy-buster-kompressor-ozen-obs-22-d-10», и все 15 таких карточек
+# уезжали в бренд buster (своих карточек у него ноль), теряя настоящий Ozen. Берём его
+# только когда другого бренда в пути нет.
+_AMBIGUOUS_IN_URL = {"buster"}
+
+
 def find_brand(u):
     """Бренд ищем по всему пути (у части сайтов он отдельным сегментом)."""
     toks = path_tokens(u)
+    weak = None
     for i, t in enumerate(toks):
         b = BRAND_ALIASES.get(t)
         if not b: continue
         if t == "ac":      # «ac» = Atlas только если СЛЕДУЮЩИЙ токен — серия Atlas («ac ga22»);
             nxt = toks[i+1] if i+1 < len(toks) else ""   # иначе это air-cooled (slt…ac…ip23 и пр.)
             if not _is_atlas_series(nxt): continue
+        if t in _AMBIGUOUS_IN_URL:
+            weak = weak or b
+            continue
         return b
-    return None
+    return weak
 
 _ATLAS_SER = {"xahs","xrhs","xrvs","xrys","xrxs","xats","xavs","xas","ga","gx",
               "zr","zt","ze","za","aq","gv","le","lf","lt","sf"}
