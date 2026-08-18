@@ -309,7 +309,11 @@ def variant_letters(name, brand, drop_vsd=False):
     # 55 710 л/мин и 9 500 кг против 51 530 и 8 700 у DHK PLUS — и обе версии лежат на одной
     # площадке отдельными карточками. Слово в имени серии («Fini PLUS 11-08») это не задевает:
     # там plus стоит до числа и попадает в gen_series, а не в метку.
-    drop = (_STOPW - {"plus"}) | {"n","bar","atm","psi","l","kg","mm","db","hp","kw","cd","dd","yd"}
+    # «бара»/«бары» — падежи единицы, которых нет в _STOPW (там только «бар»): у Airpol
+    # конкурент пишет «BS1 110, 2 бара», и склеенный токен уезжал в метку исполнения,
+    # разводя 12 верных пар низкого давления.
+    drop = (_STOPW - {"plus"}) | {"n","bar","atm","psi","l","kg","mm","db","hp","kw","cd","dd","yd",
+                                  "бара","бары","бар","атм","атмосфер"}
     if drop_vsd:      # см. vsd_mark_fallback: только как фолбэк, не в общем пути
         drop = drop | VSD_MARK.get(brand, frozenset())
     toks, _ = model_code(name, brand)

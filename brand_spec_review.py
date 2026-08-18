@@ -222,8 +222,30 @@ def variant_filter(o_name, cands, brand, o_vsd=None):
     marks = [(c, variant_letters(cname(c), brand)) for c in cands]
     exact = [c for c, m in marks if same_variant(m, ours)]
     if exact: return exact
-    if ours and any(m for _, m in marks): return vsd_mark_fallback(o_name, cands, brand, o_vsd)
+    if ours and any(m for _, m in marks):
+        keep = vsd_mark_fallback(o_name, cands, brand, o_vsd)
+        return keep or alien_letter_fallback(ours, marks, brand)
     return cands
+
+
+_OUR_ALPHA = {}
+
+
+def alien_letter_fallback(ours_marks, marks, brand):
+    """ФОЛБЭК: метка конкурента = наша плюс буквы, которых НЕТ НИ В ОДНОЙ нашей карточке.
+
+    Такая буква не может различать наши исполнения — мы этот признак вообще не кодируем,
+    значит для нас это молчание, а не конфликт. Пример: compressortyt пишет «ET SL 90-16
+    VS PM Z (IP55)», у нас «ET SL 90 VS PM 16 бар, IP55»; буква Z не встречается ни у
+    одной из наших 863 карточек ET, а спеки совпадают полностью."""
+    alpha = _OUR_ALPHA.get(brand)
+    if not alpha: return []
+    out = []
+    for c, m in marks:
+        extra = m - ours_marks
+        if extra and (m & ours_marks) == ours_marks and not (extra & alpha):
+            out.append(c)
+    return out
 
 
 def vsd_mark_fallback(o_name, cands, brand, o_vsd):
@@ -584,8 +606,33 @@ def load_ours_all():
                             ip=oip,
                             cool=cl, eng=eng_make(name, code, *r.values()),
                             we=(wev if wev and 1<=wev<=50000 else None), dr=drv))
+    unglue_code(ours)
     learn_vsd_marks(ours)
+    _OUR_ALPHA.clear()
+    for b, lst in ours.items():        # алфавит меток нашего каталога — см. alien_letter_fallback
+        _OUR_ALPHA[b] = set().union(*(variant_letters(o["name"], b) for o in lst)) if lst else set()
     return ours
+
+
+def unglue_code(cat):
+    """Слитный код «кВт+бар» в номере серии свести к одному киловатту.
+
+    Заводы пишут одну и ту же модель двумя способами: наш «FINI K-MAX 1110 ES VS» и их
+    «K-MAX 11-10 ES VS», наш «Comprag FR1108-270» и их «FR-11 (270л) - 8 бар». В первом
+    случае номер серии выходит 1110, во втором 11 — ключ не совпадает, и пара не
+    рассматривается вовсе. Затронуто 186 наших карточек: comprag 124, fini 62.
+
+    Разбираем ТОЛЬКО когда число сходится точно: номер == кВт*100 + бар. Так «1110» при
+    11 кВт и 10 бар раскладывается, а модель, у которой 1110 — это собственный индекс
+    (или литры в минуту), остаётся нетронутой. Схлопывание 1108 и 1110 в один ключь
+    безопасно: давление после этого сравнивается отдельным полем и разводит их обратно."""
+    for lst in cat.values():
+        for o in lst:
+            n = o["sn"][1] if o.get("sn") else None
+            kw, bar = o.get("kw"), o.get("bar")
+            if not (n and kw and bar and n > 100): continue
+            if abs(n - (kw * 100 + bar)) < 0.51:
+                o["sn"] = (o["sn"][0], kw)
 
 
 def learn_vsd_marks(ours, min_votes=6):
@@ -738,6 +785,7 @@ def load_comp_all():
                                            and re.search(r"\d\s?w\b", nm or "", re.I) else None)),
                                  eng=ceng,
                                  we=we, dr=dr, sku=skus.get(u) or sku2, mnt=mnt))
+    unglue_code(cands)          # тот же слитный код бывает и у конкурентов
     mark_weak_drive(cands, load_ours_all())
     return cands
 
