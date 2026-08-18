@@ -197,6 +197,9 @@ def receiver_filter(o_rv, cands):
 # Поэтому метка сравнивается КАК МЕТКА («у нас DF — и у него DF»), а вывод
 # «это осушитель» из неё не делается: ff остаётся за пропами и suffix_flags.
 VARIANT_MARKS = re.compile(r'(?<![a-zа-яё])(df|id|dry)(?![a-zа-яё])', re.I)
+# бренд -> буквы метки, которыми он кодирует частотник. Заполняется из нашего каталога
+# (brand_spec_review.learn_vsd_marks), пустой до первой загрузки — тогда правило молчит.
+VSD_MARK: dict[str, set] = {}
 
 # --- код модели: имя без бренда, маркетинга и электрики ------------------------------------
 # Нужен, чтобы метку исполнения считать по СТРОКЕ, а не по хвостовому суффиксу серии.
@@ -288,7 +291,7 @@ def model_code(name, brand):
     return out, (ip[0] if ip else None)
 
 
-def variant_letters(name, brand):
+def variant_letters(name, brand, drop_vsd=False):
     """Буквенные токены обозначения = метка исполнения. Смысл букв брендозависим
     (W=водяное охлаждение и H AB/AC=винтовой блок у ET, K=осушитель у Renner,
     ID=осушитель у Dalgakiran, DF=частотник у Spitzenreiter, HH=высокое давление
@@ -307,6 +310,8 @@ def variant_letters(name, brand):
     # площадке отдельными карточками. Слово в имени серии («Fini PLUS 11-08») это не задевает:
     # там plus стоит до числа и попадает в gen_series, а не в метку.
     drop = (_STOPW - {"plus"}) | {"n","bar","atm","psi","l","kg","mm","db","hp","kw","cd","dd","yd"}
+    if drop_vsd:      # см. vsd_mark_fallback: только как фолбэк, не в общем пути
+        drop = drop | VSD_MARK.get(brand, frozenset())
     toks, _ = model_code(name, brand)
     return frozenset(t.translate(_CYR2LAT) for t in toks
                      if not re.fullmatch(r"[\d.]+", t) and len(t) <= 5
@@ -461,6 +466,11 @@ def card_issue(o, same, fields=CHECK_FIELDS):
     for label,key,tol in fields:
         ov=o.get(key)
         if not ov: continue
+        # Значение, стоящее В САМОМ артикуле, подтверждено заводом — спорить с ним нельзя,
+        # иначе флагуются соседние SKU одной серии. Проверка 18.08 на 30 карточках: все 7
+        # ложных срабатываний были именно такими — «ABAC FORMULA MEI37-10» сравнивался с
+        # их MEI37-13, «Dalgakiran TIDY-N 25-10» с их 25-13, «Atmos PDP 190-14» с PDP 190-12.
+        if key in ("bar","kw") and bar_in_code(o.get("name"), o.get("brand"), ov): continue
         others=[(k2,t2) for (l2,k2,t2) in fields if k2!=key]
         variant=[c for c in same if c.get(key)
                  and (c.get("ff") or 0)==(o.get("ff") or 0) and (c.get("vsd") or 0)==(o.get("vsd") or 0)

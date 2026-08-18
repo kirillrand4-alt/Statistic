@@ -14,7 +14,7 @@ from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value, bar_
                         series_num, text_flags, is_compressor, match, receiver_filter, ff_filter,
                         ip_filter, ip_class, _ip_open, cool_filter, cool_class, is_flow_key, card_issue,
                         prefer_exact_variant, VARIANT_MARKS, model_code,
-                        variant_letters, same_variant)
+                        variant_letters, same_variant, VSD_MARK)
 from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
 from scrape_files import U, OURS_DIR, find_ours
 
@@ -210,7 +210,7 @@ def ser_of(text, brand):
     return _with_variant(gen_series(text, brand), text)
 
 
-def variant_filter(o_name, cands, brand):
+def variant_filter(o_name, cands, brand, o_vsd=None):
     """Направленное правило исполнения — в форме receiver_filter/ff_filter.
 
     Если среди кандидатов есть карточка с ТОЙ ЖЕ меткой — оставляем только такие.
@@ -218,12 +218,34 @@ def variant_filter(o_name, cands, brand):
     различает, а нашего не возит: режем. Если ни у кого меток нет — молчание,
     совместимо. Работает только при VARIANT_STRICT."""
     ours = variant_letters(o_name, brand)
-    marks = [(c, variant_letters(c.get("name") or slug(c["url"]).replace("_"," "), brand))
-             for c in cands]
+    cname = lambda c: c.get("name") or slug(c["url"]).replace("_"," ")
+    marks = [(c, variant_letters(cname(c), brand)) for c in cands]
     exact = [c for c, m in marks if same_variant(m, ours)]
     if exact: return exact
-    if ours and any(m for _, m in marks): return []
+    if ours and any(m for _, m in marks): return vsd_mark_fallback(o_name, cands, brand, o_vsd)
     return cands
+
+
+def vsd_mark_fallback(o_name, cands, brand, o_vsd):
+    """ФОЛБЭК: метки разошлись только буквой частотника, а сам частотник совпал явно.
+
+    Заводы кодируют частотник то буквой в индексе, то словом: наш «Hansmann RS11E» и
+    «BERG ВК-160 Е» против их «RS11A VSD» и «ВК-160 16 с частотником». Буква известна из
+    нашего же каталога (learn_vsd_marks), но вычитать её из метки ВСЕГДА нельзя — замер
+    18.08: +57 матчей ценой 6 подтверждённых верных пар на проверочных наборах и роста
+    неоднозначных с 379 до 879, потому что без буквы сливаются соседние исполнения.
+
+    Поэтому послабление действует только когда старый путь не дал НИЧЕГО и обе стороны
+    ЯВНО размечены одинаковым частотником — тогда признак уже доказан полем vsd, а метка
+    считала бы его второй раз."""
+    if o_vsd is None or not VSD_MARK.get(brand): return []
+    ours = variant_letters(o_name, brand, drop_vsd=True)
+    out = []
+    for c in cands:
+        if c.get("vsd") != o_vsd: continue
+        nm = c.get("name") or slug(c["url"]).replace("_"," ")
+        if same_variant(variant_letters(nm, brand, drop_vsd=True), ours): out.append(c)
+    return out
 
 
 # Привод из ИМЕНИ — запасной источник, когда проп/спека молчат: aerocompressors
@@ -356,7 +378,7 @@ def pick_cands(o, pool, brand):
     """
     m = cool_filter(o.get("cool"), ip_filter(o.get("ip"), match(o, pool), o))
     m = exec_filter(o.get("name", ""), m)
-    m = (variant_filter(o.get("name", ""), m, brand) if VARIANT_STRICT
+    m = (variant_filter(o.get("name", ""), m, brand, o.get("vsd")) if VARIANT_STRICT
          else prefer_exact_variant(o.get("name", ""), m))
     m = receiver_filter(o.get("rv"), m)
     # Наш артикул кодирует ресивер всегда. Если у нашей карточки объём, а в каталоге
@@ -553,7 +575,47 @@ def load_ours_all():
                             ip=oip,
                             cool=cl, eng=eng_make(name, code, *r.values()),
                             we=(wev if wev and 1<=wev<=50000 else None), dr=drv))
+    learn_vsd_marks(ours)
     return ours
+
+
+def learn_vsd_marks(ours, min_votes=6):
+    """Выучить по НАШЕМУ каталогу буквы метки, которыми бренд кодирует частотник.
+
+    Заводы пишут частотник по-разному: у нас «Hansmann RS11E» и «BERG ВК-160 Е», у
+    конкурента то же самое — «RS11A VSD» и «ВК-160 16 с частотником». Метка исполнения
+    расходится, и verный матч рвался, хотя признак уже сравнивается отдельным тристейтом
+    vsd — то есть считался ДВАЖДЫ (та же причина, по которой из метки вычтены FF, TM/FM
+    и Pack, см. variant_letters).
+
+    Букву берём не из словаря, а из улики: внутри одной нашей модели (серия+номер+кВт+бар)
+    лежат две карточки, метки которых отличаются РОВНО на одну букву, и та, у которой эта
+    буква есть, размечена частотником. Тогда буква и есть кодировка. Замер 18.08: 130
+    подтверждений у berg «e», 170 у ariacom «v», 116 у enger «pm», 100 у remeza «вс»,
+    78 у atmos «vario». Порог в 6 голосов отсекает случайные совпадения (ironmac «df» — 2).
+
+    Atlas «vsd+» правило не ломает: плюс-версия теряет метку, но остаётся с vsd=1 против
+    vsd=0 у базовой, а от простой VSD-версии её по-прежнему отделяет метка «vsd»."""
+    votes = defaultdict(Counter)
+    for b, lst in ours.items():
+        grp = defaultdict(list)
+        for o in lst:
+            grp[(o["sn"], o.get("kw"), o.get("bar"))].append(o)
+        for g in grp.values():
+            for i, x in enumerate(g):
+                for y in g[i+1:]:
+                    if x.get("vsd") is None or y.get("vsd") is None or x["vsd"] == y["vsd"]:
+                        continue
+                    mx = variant_letters(x["name"], b); my = variant_letters(y["name"], b)
+                    diff = (mx - my) | (my - mx)
+                    if len(diff) != 1: continue
+                    letter = next(iter(diff))
+                    if letter in variant_letters((x if x["vsd"] == 1 else y)["name"], b):
+                        votes[b][letter] += 1
+    VSD_MARK.clear()
+    for b, c in votes.items():
+        marks = {t for t, n in c.items() if n >= min_votes}
+        if marks: VSD_MARK[b] = marks
 
 # --- конкуренты по брендам ----------------------------------------------------------------
 def load_comp_all():
