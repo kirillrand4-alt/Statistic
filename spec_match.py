@@ -319,7 +319,21 @@ def variant_letters(name, brand, drop_vsd=False):
     toks, _ = model_code(name, brand)
     return frozenset(t.translate(_CYR2LAT) for t in toks
                      if not re.fullmatch(r"[\d.]+", t) and len(t) <= 5
-                     and t not in drop and t.translate(_CYR2LAT) not in drop)
+                     and t not in drop and t.translate(_CYR2LAT) not in drop
+                     and _visual(t) not in drop)
+
+
+# Смесь алфавитов ВНУТРИ одного токена — всегда опечатка раскладки, а не обозначение:
+# у нас «ЕКО 110 СD VST» набрано с кириллической «С», у конкурента «EKO 110 CD VST» —
+# латинской. Стоп-лист меток убивает «cd» у него и не узнаёт «сd» у нас, метки
+# расходятся на пустом месте. Свёртку делаем ВИЗУАЛЬНУЮ (с->c), а не фонетическую
+# (_CYR2LAT дал бы «sd»), и только для смешанных токенов: чисто кириллическое «РН» у
+# ЗИФ визуально даёт «ph», который лежит в стоп-словах, и 74 пары «в кожухе» против
+# «без кожуха» слиплись бы через одну карточку. Замер 18.08: +45 наших карточек с
+# матчем, 210 пар, все Ekomak ЕКО СD VST, ни одной потерянной пары.
+_MIXED = re.compile(r"(?=.*[а-яё])(?=.*[a-z])")
+def _visual(t):
+    return t.translate(_HOMOGLYPH) if _MIXED.match(t) else t
 
 
 # Визуальные омоглифы: в коде модели одну и ту же букву набирают то латиницей, то
