@@ -240,7 +240,15 @@ def model_code(name, brand):
                r"|\b\d*\s*(?:ф|ph)\b|\b\d*\s*(?:гц|hz)\b", " ", s)
     s = s.lower().replace("_"," ").replace("/"," ").replace("-"," ").replace(","," ")
     from matcher import BRAND_ALIASES
+    from brand_spec_review import _CYR2LAT
     btoks = {brand} | {a for a, c in BRAND_ALIASES.items() if c == brand}
+    # Завод-изготовитель рядом с именем линейки — тоже не код модели. Наш каталог пишет
+    # «BERG ATOM А-22Е», конкуренты просто «ATOM А-22Е», и «berg» уезжал в метку
+    # исполнения, разводя верную пару. Отсекаем чужое брендовое имя ТОЛЬКО когда в той
+    # же строке стоит имя собственного бренда — иначе можно снести серию, совпадающую
+    # с чужим брендом по написанию.
+    if any(re.search(rf"(?<![0-9a-zа-яё]){re.escape(t)}(?![0-9a-zа-яё])", s) for t in btoks):
+        btoks |= set(BRAND_ALIASES) | set(BRAND_ALIASES.values())
     out = []
     for t in re.split(r"[^0-9a-zа-яё.+]+", s):
         t = t.strip(".")
@@ -249,7 +257,11 @@ def model_code(name, brand):
         # «на ресивере») уже срезаны хвостовым правилом выше. Без этого сравнение
         # разъезжалось на пустом месте: отдельное «C» отсекалось, а такое же «C»,
         # вынутое из слитного «400C», — нет.
-        if not t or (len(t) > 1 and t in _DESCR) or t in btoks: continue
+        # Имя бренда сверяем и в транслите: «АТОМ А-22» (кириллица) иначе оставляет
+        # токен «атом», и метка исполнения расходится с нашей латинской «ATOM А-22» —
+        # бренд не матчился целиком (0 из 86 карточек).
+        if not t or (len(t) > 1 and t in _DESCR) or t in btoks \
+           or t.translate(_CYR2LAT) in btoks: continue
         if re.fullmatch(r"ip\d+", t): continue
         # Длинное КИРИЛЛИЧЕСКОЕ слово — это проза, а не код: кириллические коды всегда
         # короткие (ВК, КС, ЗИФ, ПВ, ДК, СБ), а «низкого»/«давления» из «Компрессор
@@ -453,6 +465,33 @@ def card_issue(o, same, fields=CHECK_FIELDS):
                 return (label, ov, v1, len(doms), max(ov,v1)/min(ov,v1), src)
     return None
 
+def same_model(a, b, brand):
+    """Обозначение модели совпало ЦЕЛИКОМ — все токены кода, а не только серия+номер.
+
+    Нужно ровно для одного случая: производительность расходится, а товар один и тот
+    же. Comprag F-0710 у нас 900 л/мин, у v-p-k и compressortyt — 800 (12.5%), и пара
+    рвалась допуском 4%, хотя это одна карточка на трёх сайтах. У ЗИФ-ПВ-24/1,6 и
+    ATMOS ST 55 Vario/10 расхождение ровно в 10 раз — источник печатает л/с или м³/мин.
+
+    Ослаблять сам допуск нельзя, это проверено на данных: внутри ОДНОЙ площадки 8-24%
+    групп с общим ключом серия+номер+кВт+бар различаются именно производительностью, и
+    там это разные модели — REMEZA СБ4-24.OLD15С (115) против OLD20С (160), ABAC
+    GENESIS 15/55 против 15/77, ASO ВК 5,5/10 против 5,5/8. Полный код их разводит:
+    отличается цифра ВНУТРИ обозначения, а не только приписка.
+
+    «+» берём отдельным признаком: model_code его отбрасывает, а Atlas GA 45 VSD+ даёт
+    9280 л/мин против 8690 у GA 45 VSD — это разные машины."""
+    ka, kb = _mkey(a, brand), _mkey(b, brand)
+    return bool(ka) and ka == kb
+
+
+def _mkey(name, brand):
+    toks, _ = model_code(name or "", brand)
+    if not toks: return None
+    from brand_spec_review import _CYR2LAT
+    return tuple(t.translate(_CYR2LAT) for t in toks), "+" in (name or "")
+
+
 def match(o, cands):
     """o, cands: dict с ключами sn,kw,bar,fl,oil,vsd,ff,rv. Возврат: список подходящих.
     Масло НЕ сравниваем: серия+номер обязаны совпасть, а внутри одной модели масляность
@@ -466,7 +505,10 @@ def match(o, cands):
     for c in cands:
         if o["sn"] != c["sn"]: continue
         if not (agree_num(o["kw"], c["kw"]) and agree_num(o["bar"], c["bar"], 0.04)): continue
-        if not agree_num(o.get("fl"), c.get("fl"), FLOW_TOL): continue   # производительность 4%
+        # производительность 4%, но НЕ режем, когда обозначение модели совпало
+        # целиком — тогда расходятся паспорта источников, а не товары (см. same_model)
+        if not agree_num(o.get("fl"), c.get("fl"), FLOW_TOL) \
+           and not same_model(o.get("name"), c.get("name") or c.get("url"), c.get("brand")): continue
         # частотник (+35% к цене): есть=есть, нет=нет — режем только ЯВНЫЙ конфликт.
         # Тристейт: 1=знаем-да (имя/проп/спек-ключ), 0=знаем-нет (проп/спек «нет»),
         # None=не указано (матчится с пометкой «частотник не подтверждён» в отчёте).
@@ -474,7 +516,7 @@ def match(o, cands):
         if ov is not None and cv is not None and ov != cv: continue
         # привод: только если ИЗВЕСТЕН с обеих сторон (наш — проп Битрикса, их — спека/схема
         # имени Berg). Молчание совместимо. Ловит ВК-18.5Р (ремен) vs ВК-18.5 (прямой).
-        if o.get("dr") and c.get("dr") and o["dr"] != c["dr"]: continue
+        if o.get("dr") and c.get("dr") and o["dr"] != c["dr"] and not c.get("dr_weak"): continue
         if (o.get("ff") or 0)==1 and (c.get("ff") or 0)==1: pass        # оба размечены FF — ок
         elif (o.get("ff") or 0)!=(c.get("ff") or 0) and (c.get("ff") or 0)==1:
             # У конкурента осушитель, у нас проп пустой — обычно это конфликт. Но если в

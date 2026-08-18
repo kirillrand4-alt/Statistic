@@ -94,6 +94,11 @@ def _with_variant(sn, text):
 def gen_series(text, brand):
     s=" "+str(text).lower().replace("_"," ")+" "
     s=re.sub(r"\b(new|новый|новая|нов)\b"," ",s)         # маркетинг-слова не серия (COMARO MD NEW 55)
+    # Класс защиты — не номер модели. У pnevmoteh хвост URL «...-22-kvt-ip23» давал
+    # ('kvtip', 23), номер 23 доезжал до ключа даже после подмены серии в base_family,
+    # и ATOM А-22Е уходил в ('a', 23) против нашего ('a', 22) — бренд не матчился вовсе
+    # (0 из 86 карточек). model_code это уже снимает, gen_series — нет.
+    s=re.sub(r"(?i)\bip\s*[- ]?\d+"," ",s)
     s=re.sub(r"(?<=[a-zа-я])[\-.](?=[a-zа-я])","",s)     # k-max -> kmax, dr.sonic -> drsonic
     s=re.sub(r"(?<=[a-zа-я])\.(?=\d)"," ",s)             # genesis i.18,5 -> i 18,5 (десятичные 18.5 целы)
     s=s.replace("-"," ").replace("/"," ")
@@ -188,8 +193,12 @@ def base_family(text, brand):
     # расходятся: у compressortyt имя вида «Винтовой компрессор С прямым приводом
     # Harrison HRS-9510000», и одиночное «с» становилось именем семейства — 130 наших
     # карточек уезжали в ('с', …) вместо ('hrs', …) и не сходились ни с чем.
+    # Имя бренда, написанное кириллицей, тоже отсекаем: model_code сверяет токен с
+    # brand/aliases ДО транслитерации, поэтому «АТОМ А-22» у aerocompressors давало
+    # семейство ('atom', 22) против нашего ('a', 22) — та же поломка бренда, что и с IP.
+    btoks={brand}|{a for a,c in BRAND_ALIASES.items() if c==brand}
     for t in model_code(text, brand)[0]:
-        if re.fullmatch(r"[\d.]+", t) or t in _CYR_PREP:
+        if re.fullmatch(r"[\d.]+", t) or t in _CYR_PREP or t.translate(_CYR2LAT) in btoks:
             continue
         return (t.translate(_CYR2LAT), sn[1])
     return sn
@@ -363,7 +372,8 @@ def pick_cands(o, pool, brand):
     # в 21 495 парах привод совпадает, 6 711 односторонних молчаливо совместимы.
     od=o.get("dr") or dr_name(o.get("name"))
     if od:
-        m=[c for c in m if (c.get("dr") or dr_name(c.get("name"))) in (None, od)]
+        m=[c for c in m if c.get("dr_weak")
+           or (c.get("dr") or dr_name(c.get("name"))) in (None, od)]
     # Марка дизеля — направленно: обе стороны знают и различаются -> разные SKU
     # (ЗИФ-ПВ на ММЗ и на ЯМЗ — отдельные позиции, доказано 13.08).
     if o.get("eng"):
@@ -657,7 +667,43 @@ def load_comp_all():
                                            and re.search(r"\d\s?w\b", nm or "", re.I) else None)),
                                  eng=ceng,
                                  we=we, dr=dr, sku=skus.get(u) or sku2, mnt=mnt))
+    mark_weak_drive(cands, load_ours_all())
     return cands
+
+
+def mark_weak_drive(cands, cross=None):
+    """Пометить привод, о котором источники СПОРЯТ, как ненадёжный (dr_weak).
+
+    Привод конкуренты берут из шаблона рубрики, а не из паспорта: pnevmoteh пишет
+    «ременной» всем 128 карточкам Atlas GA, rutector тем же GA — «прямой» всем 10,
+    хотя GA заводом сделан с прямым приводом. По всем моделям, размеченным двумя
+    площадками, расхождение в 934 случаях из 5 437 (17%) — на таком признаке резать
+    в одиночку нельзя: замер 13.08 показал 214 наших товаров, теряющих ЕДИНСТВЕННЫЙ
+    матч из-за привода, и все конфликты приходят из спек-пропа, ни одного из имени.
+
+    Наш каталог тоже спорит сам с собой: «ATLAS COPCO GA 11 10P FM» размечена ременной,
+    а «Atlas Copco GA11 10P/400В 3ф 50 Гц/СЕ/FM» — прямой, хотя это один товар. Поэтому
+    источником спора считаем и нашу выгрузку: cross отдаёт наши карточки той же модели.
+
+    Метку в ИМЕНИ («ВК-18.5Р» = ременная) это не трогает: она заводская, стоит в
+    артикуле и остаётся твёрдым признаком — dr_name читается в pick_cands отдельно."""
+    for brand, lst in cands.items():
+        by = defaultdict(list)
+        for c in lst:
+            by[(c["sn"], c.get("kw"), c.get("bar"))].append(c)
+        for o in (cross or {}).get(brand, []):
+            if o.get("dr"): by[(o["sn"], o.get("kw"), o.get("bar"))].append(
+                dict(dr=o["dr"], site="ours", name=o.get("name"), _ours=True))
+        for grp in by.values():
+            drs = {c["dr"] for c in grp if c.get("dr")}
+            if len(drs) > 1 and len({c["site"] for c in grp if c.get("dr")}) > 1:
+                for c in grp:
+                    # Привод, вынесенный в ИМЯ карточки («ЗИФ-СВЭ-1,0/1,0 ШМ ременная»),
+                    # спорным не считаем: это заводская метка, а не поле рубрики. Она
+                    # разводит доказанную ложную пару — наша ЗИФ ШМ прямого привода
+                    # (155 кг) против их ременной (290 кг).
+                    if not dr_name(c.get("name")):
+                        c["dr_weak"] = True
 
 # --- стили --------------------------------------------------------------------------------
 def _styles():

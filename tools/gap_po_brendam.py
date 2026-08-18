@@ -38,9 +38,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import brand_spec_review as B
 import spec_match as S
 
-HDRS = ["№", "Товар у конкурентов (у нас нет)", "Площадок", "Где есть",
-        "Цена мин", "Цена макс", "кВт", "бар", "л/мин", "Ресивер", "Серия у нас"]
-WIDTHS = [5, 62, 10, 34, 12, 12, 8, 7, 9, 9, 22]
+# Колонка на площадку, а не одна «Где есть» строкой: в строке схлопнуты карточки
+# нескольких сайтов, и по текстовому перечислению нельзя открыть карточку каждого —
+# ссылка была только на самой дешёвой. Формат повторяет основной отчёт, чтобы
+# сравнение цен читалось одинаково в обоих файлах.
+HDRS = ["№", "Товар у конкурентов (у нас нет)", "Площадок"] + B.COMPETITORS + \
+       ["Цена мин", "Цена макс", "кВт", "бар", "л/мин", "Ресивер", "Серия у нас"]
+WIDTHS = [5, 62, 10] + [13] * len(B.COMPETITORS) + [12, 12, 8, 7, 9, 9, 22]
 
 
 def cname(c) -> str:
@@ -83,7 +87,7 @@ def collect(ours: dict, cands: dict):
                 sites = sorted({c["site"] for c in grp})
                 pr = [c["price"] for c in grp if c.get("price")]
                 best = min(grp, key=lambda c: c.get("price") or 10**12)
-                row = (best, len(sites), ", ".join(sites),
+                row = (best, len(sites), grp,
                        min(pr) if pr else None, max(pr) if pr else None,
                        "да, линейка есть" if x["sn"] in our_sn else "нет ни серии, ни бренда")
                 (many if len(sites) >= 2 else single)[brand].append(row)
@@ -98,20 +102,41 @@ def write(brand: str, rows: list, path: Path) -> int:
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Нет у нас"
     B._hdr(ws, HDRS, st)
     r = 1
-    for best, nsites, where, pmin, pmax, ser in rows:
+    ns = len(B.COMPETITORS)
+    for best, nsites, grp, pmin, pmax, ser in rows:
         r += 1
         ws.cell(r, 1, r - 1)
         nm = ws.cell(r, 2, cname(best)[:70]); nm.hyperlink = best["url"]; nm.font = st["blue"]
-        ws.cell(r, 3, nsites); ws.cell(r, 4, where)
-        for col, v in ((5, pmin), (6, pmax)):
+        ws.cell(r, 3, nsites)
+        by_site = defaultdict(list)
+        for c in grp:
+            by_site[c["site"]].append(c)
+        for ci, site in enumerate(B.COMPETITORS):
+            cell = ws.cell(r, 4 + ci); cards = by_site.get(site)
+            if not cards:
+                cell.fill = st["nomatch"]; continue
+            # показываем самую дешёвую живую карточку площадки: у части сайтов один
+            # товар лежит в двух рубриках, и по цене видно, какую брать за ориентир
+            priced = [c for c in cards if c.get("price") and c.get("status") != "снято"]
+            show = min(priced, key=lambda c: c["price"]) if priced else cards[0]
+            if show.get("price"):
+                cell.value = show["price"]; cell.number_format = "# ##0"
+                cell.font = st["strike"] if show.get("status") == "снято" else st["blue"]
+            else:
+                cell.value = "снято" if show.get("status") == "снято" else "По запросу"
+                cell.font = st["strike"] if show.get("status") == "снято" else st["blue"]
+            cell.hyperlink = show["url"]
+            if len(cards) > 1:
+                cell.fill = st["warn"]
+        for col, v in ((4 + ns, pmin), (5 + ns, pmax)):
             if v:
                 ws.cell(r, col, v).number_format = "# ##0"
-        ws.cell(r, 7, best.get("kw")); ws.cell(r, 8, best.get("bar"))
-        ws.cell(r, 9, best.get("fl")); ws.cell(r, 10, best.get("rv"))
-        ws.cell(r, 11, ser)
+        ws.cell(r, 6 + ns, best.get("kw")); ws.cell(r, 7 + ns, best.get("bar"))
+        ws.cell(r, 8 + ns, best.get("fl")); ws.cell(r, 9 + ns, best.get("rv"))
+        ws.cell(r, 10 + ns, ser)
     for i, w in enumerate(WIDTHS, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
-    ws.freeze_panes = "B2"
+    ws.freeze_panes = "C2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(HDRS))}{r}"
     wb.save(path)
     return len(rows)
