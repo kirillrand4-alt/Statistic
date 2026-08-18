@@ -420,14 +420,23 @@ def pick_cands(o, pool, brand):
 _DTAIL=re.compile(r'[\d\)лl]\s*[-–]?\s*([дd])\s*(?:\(.*)?$', re.I)   # «270L D», «500Д», «10Д (с осуш.)»
 _VSTAIL=re.compile(r'(?:\d|\))\s*(вс|bc)\s*$', re.I)                  # «ВК100Р-10ВС»
 _OTAIL=re.compile(r'/[oо][w2]?\s*$', re.I)                            # Zammer «…-500/O», /OW, /O2 = осушитель
-def suffix_flags(name, brand, ff, rv):
+# Dali: хвостовое «-F» = частотный преобразователь (Schneider Electric — так пишет наша
+# же карточка в блоке «Модификации»). У 41 нашей карточки из 132 с этим суффиксом проп
+# частотника стоял «нет», и матчер цеплял нашу F-версию к их безчастотной: 4 ложные пары
+# из 40 в адверсарной проверке 18.08 — EN-250/8 II-F, EN-185/7 II-F, EN-200/10 II-F,
+# EN-315/8 II-F. Вес и габариты тут не спасают: корпус один, отличается комплектация,
+# а цена не-F карточки совпадает с ценой конкурента до рубля.
+_FTAIL=re.compile(r'[\d)\sII]\s*[-–]\s*f\s*$', re.I)
+def suffix_flags(name, brand, ff, rv, vsd=None):
     """Хвостовые маркеры НЕ-Atlas брендов (у Atlas 'Dd'=дизель, не трогаем):
-    Д/D после числа/л = осушитель; ВС = воздухосборник (ресивер упомянут)."""
-    if brand=="atlas": return ff, rv
+    Д/D после числа/л = осушитель; ВС = воздухосборник (ресивер упомянут);
+    у Dali «-F» = частотник (см. _FTAIL — там же почему он перебивает проп)."""
+    if brand=="atlas": return ff, rv, vsd
     nm=str(name).strip()
     if ff is None and (_DTAIL.search(nm) or _OTAIL.search(nm) or "с осушителем" in nm.lower()): ff=1
     if rv is None and _VSTAIL.search(nm): rv=1
-    return ff, rv
+    if brand=="dali" and _FTAIL.search(nm): vsd=1
+    return ff, rv, vsd
 
 # --- Berg: суффикс-схема заводских кодов ВК (ПОДТВЕРЖДЕНА пропами нашего каталога):
 # Р=ременный привод, Е=частотник(VSD), О=осушитель; комбинации РЕ/РО/РЕО. Буквы клеятся
@@ -540,7 +549,7 @@ def load_ours_all():
         sn=ser_of(name+" "+code, b)
         if not sn: continue
         ff,vsd,rv = text_flags(name+" "+code)
-        ff,rv = suffix_flags(name, b, ff, rv)
+        ff,rv,vsd = suffix_flags(name, b, ff, rv, vsd)
         if rv is None:
             if num(r.get("IP_PROP22564")): rv=num(r.get("IP_PROP22564"))
             elif str(r.get("IP_PROP22574","")).strip().lower() in ("да","есть"): rv=1
@@ -661,7 +670,7 @@ def load_comp_all():
             if oil is None and "безмасл" in kl: oil=oil_of(v)
             if not cool_raw and "охлажд" in kl: cool_raw=str(v)
         ff,vsd,rv = text_flags(nm) if nm else text_flags(slug(u))
-        ff,rv = suffix_flags(nm or slug(u), b, ff, rv)
+        ff,rv,vsd = suffix_flags(nm or slug(u), b, ff, rv, vsd)
         bsuf = berg_suffix(text) if b=="berg" else None
         if bsuf is not None:           # заводская схема ВК: код модели ПОЛНЫЙ, отсутствие
             # буквы = знаем-нет (не «не указано»). НО схему перебивает прямое слово в имени:
