@@ -567,6 +567,14 @@ def load_ours_all():
         b=brand_from_text(man) or BRAND_ALIASES.get(man.lower().split()[0] if man else "", None)
         if not b: continue
         name=r.get("IE_NAME","")
+        # Один завод — две торговые марки. В поле «Производитель» у нас стоит «РКЗ»
+        # (Рязанский компрессорный завод), и все 136 карточек AIRRUS уезжали в бренд mig,
+        # тогда как конкуренты держат 148 карточек под маркой AIRRUS — бренды не
+        # пересекались, и товар не матчился вовсе. Правило узкое, по улике: доверяем имени
+        # ТОЛЬКО когда завод известен как выпускающий обе марки. Расширять до «имя всегда
+        # важнее пропа» нельзя — сломается «BERG ATOM А-11Е» (проп atom верен, имя врёт),
+        # «WIS 40V A» (проп ekomak) и «SIGMA PET AIR» (проп kaeser).
+        if b=="mig" and brand_from_text(name)=="airrus": b="airrus"
         if not is_compressor(name+" "+code): continue
         sn=ser_of(name+" "+code, b)
         if not sn: continue
@@ -576,6 +584,7 @@ def load_ours_all():
             if num(r.get("IP_PROP22564")): rv=num(r.get("IP_PROP22564"))
             elif str(r.get("IP_PROP22574","")).strip().lower() in ("да","есть"): rv=1
         fl = flow_value(r.get("IP_PROP22571"), "л/мин") or flow_value(r.get("IP_PROP22658"), "м3/мин")
+        fl = fix_flow_scale(fl, sane_kw(num(r.get("IP_PROP22562"))))
         nm,url,p = price.get(code.lower(), (name, f"https://prokompressor.ru/catalog/{code}/", None))
         wev=num(r.get("IP_PROP22555")); drv=(r.get("IP_PROP22601") or "").strip().lower() or None
         if drv: drv="ремен" if "ремен" in drv else ("прямой" if "прям" in drv else None)
@@ -612,6 +621,24 @@ def load_ours_all():
     for b, lst in ours.items():        # алфавит меток нашего каталога — см. alien_letter_fallback
         _OUR_ALPHA[b] = set().union(*(variant_letters(o["name"], b) for o in lst)) if lst else set()
     return ours
+
+
+def fix_flow_scale(fl, kw):
+    """Производительность, записанная в м3/мин с множителем 100 вместо 1000.
+
+    В свойстве 22571 «л/мин» у части каталога лежат сотни: ATMOS ST 110 Vario/13 — 1310
+    вместо 13100, ST 75/8,5 — 1200 вместо 12000, AIRMAN PDSF830S-W — 2350 вместо 23500.
+    Агенты 18.08 сверили 15 таких карточек с паспортами заводов и с НАШЕЙ ЖЕ живой
+    страницей: страница показывает верное число, расходится только выгрузка. Всего 207
+    карточек, из них 172 ATMOS — 47% бренда; ATMOS ST 90/7,5 из-за этого не матчился
+    ни с одной из четырёх площадок, хотя карточка есть у всех.
+
+    Критерий физический, а не брендовый: винтовой компрессор даёт 100-170 литров в
+    минуту на киловатт, ниже 40 не бывает ни у одного исполнения. Правим, только если
+    умножение на 10 возвращает значение в разумный коридор — иначе оставляем как есть
+    (мало ли что за машина)."""
+    if not (fl and kw) or fl / kw >= 40: return fl
+    return fl * 10 if 40 <= fl * 10 / kw <= 260 else fl
 
 
 def unglue_code(cat):
