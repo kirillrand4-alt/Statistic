@@ -28,6 +28,14 @@ specs-JSON, product_url…), и кладётся рядом с остальны�
 
     python tools/dobor_konkurenta.py --razdel coaire ultratech -o parser_all/dobor.csv
     python tools/dobor_konkurenta.py --razdel coaire --limit 5 -o /tmp/proba.csv
+
+Режим --iz-json собирает тот же CSV из файлов, снятых через WebFetch: массив объектов
+{"url","name","price","price_on_request","sku","specs":{"Ключ":"значение"}}, где specs —
+характеристики ДОСЛОВНО со страницы, без перевода и пересчёта (матчер разбирает их сам,
+теми же правилами, что и остальной снимок).
+
+    python tools/dobor_konkurenta.py --iz-json dobor_coaire1.json dobor_coaire2.json \
+        -o parser_all/dobor_20260819.csv
 """
 from __future__ import annotations
 
@@ -131,12 +139,47 @@ def parse_card(url: str, page: str) -> dict | None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--razdel", nargs="+", choices=sorted(RAZDELY), required=True)
+    ap.add_argument("--razdel", nargs="+", choices=sorted(RAZDELY))
+    ap.add_argument("--iz-json", nargs="+", metavar="FILE",
+                    help="собрать CSV из JSON-файлов, снятых WebFetch (см. шапку)")
     ap.add_argument("-o", "--out", default="dobor_konkurenta.csv")
     ap.add_argument("--limit", type=int, default=0, help="снять не больше N карточек")
     ap.add_argument("--direct", action="store_true",
                     help="ходить напрямую, без зеркала (на сервере с рабочим прокси)")
     a = ap.parse_args()
+
+    if a.iz_json:
+        rows = []
+        for f in a.iz_json:
+            for c in json.load(open(f, encoding="utf-8")):
+                specs = c.get("specs") or {}
+                if len(specs) < 3:
+                    continue
+                brand = specs.get("Бренд") or specs.get("Производитель") or ""
+                row = {k: "" for k in COLS}
+                row.update(site="pnevmo-sklad.ru", brand=brand, name=c.get("name", ""),
+                           model=c.get("sku", ""), sku=c.get("sku", ""),
+                           price=re.sub(r"\D", "", str(c.get("price") or "")),
+                           currency="RUB",
+                           price_on_request="1" if c.get("price_on_request") else "",
+                           availability=c.get("availability", ""),
+                           specs=json.dumps(specs, ensure_ascii=False),
+                           product_url=c.get("url", ""),
+                           normalized_key=re.sub(r"[^A-Za-zА-Яа-я0-9]", "",
+                                                 brand + c.get("name", "")).upper(),
+                           scraped_at=datetime.now(timezone.utc).isoformat())
+                rows.append(row)
+        out = Path(a.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "w", encoding="utf-8-sig", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=COLS)
+            w.writeheader()
+            for r in rows:
+                w.writerow(r)
+        print(f"из JSON собрано {len(rows)} карточек -> {out.resolve()}")
+        return 0
+    if not a.razdel:
+        sys.exit("нужен --razdel или --iz-json")
 
     todo: list[str] = []
     for r in a.razdel:
