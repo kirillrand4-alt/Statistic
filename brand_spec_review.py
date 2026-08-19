@@ -746,7 +746,9 @@ def load_ours_all():
             if num(r.get("IP_PROP22564")): rv=num(r.get("IP_PROP22564"))
             elif rv is None and str(r.get("IP_PROP22574","")).strip().lower() in ("да","есть"): rv=1
         fl = flow_value(r.get("IP_PROP22571"), "л/мин") or flow_value(r.get("IP_PROP22658"), "м3/мин")
-        fl = fix_flow_scale(fl, sane_kw(num(r.get("IP_PROP22562"))))
+        fl = fix_flow_scale(fl, sane_kw(num(r.get("IP_PROP22562"))),
+                            num(r.get("IP_PROP22555")),
+                            bar_value(r.get("IP_PROP22573")), name)
         nm,url,p = price.get(code.lower(), (name, f"https://prokompressor.ru/catalog/{code}/", None))
         wev=num(r.get("IP_PROP22555")); drv=(r.get("IP_PROP22601") or "").strip().lower() or None
         if drv: drv="ремен" if "ремен" in drv else ("прямой" if "прям" in drv else None)
@@ -789,7 +791,7 @@ def load_ours_all():
     return ours
 
 
-def fix_flow_scale(fl, kw):
+def fix_flow_scale(fl, kw, we=None, bar=None, name=""):
     """Производительность, записанная в м3/мин с множителем 100 вместо 1000.
 
     В свойстве 22571 «л/мин» у части каталога лежат сотни: ATMOS ST 110 Vario/13 — 1310
@@ -804,6 +806,19 @@ def fix_flow_scale(fl, kw):
     умножение на 10 возвращает значение в разумный коридор — иначе оставляем как есть
     (мало ли что за машина)."""
     if not (fl and kw) or fl / kw >= 40: return fl
+    # Три предохранителя — все из проверки живьём 19.08, каждый снимает доказанный
+    # ложный случай. Правило чинит МАСШТАБ производительности, а когда в поле лежит
+    # вообще другая величина, умножение делает только хуже:
+    #   * значение равно весу карточки — в поле затекла масса: ЗИФ ПВ-6/1,3 (1170 = вес
+    #     1170 при верных 6000), ПВ-24/1,6, ПВ-28/1,0, Atmos PDP 190-14, Dalgakiran DVK 125-10;
+    #   * давление 25 бар и выше — дыхательные и дожимные машины законно дают 20-40 л/мин
+    #     на киловатт (SPITZENREITER SWH-100 C: 100 л/мин при 300 бар — это норма);
+    #   * значение равно объёму ресивера из имени — FINI VISION 1108-270-ES, где в поле
+    #     попало «270» вместо 1650.
+    if we and abs(fl - we) < 1: return fl
+    if bar and bar >= 25: return fl
+    m = re.search(r"[-\s(](\d{2,4})\s*(?:л|l)\b", str(name or ""), re.I)
+    if m and abs(fl - float(m.group(1))) < 1: return fl
     return fl * 10 if 40 <= fl * 10 / kw <= 260 else fl
 
 
