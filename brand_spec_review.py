@@ -229,23 +229,55 @@ def variant_filter(o_name, cands, brand, o_vsd=None):
 
 
 _OUR_ALPHA = {}
+SKU_LETTER = {}
 
 
 def alien_letter_fallback(ours_marks, marks, brand):
     """ФОЛБЭК: метка конкурента = наша плюс буквы, которых НЕТ НИ В ОДНОЙ нашей карточке.
 
-    Такая буква не может различать наши исполнения — мы этот признак вообще не кодируем,
-    значит для нас это молчание, а не конфликт. Пример: compressortyt пишет «ET SL 90-16
-    VS PM Z (IP55)», у нас «ET SL 90 VS PM 16 бар, IP55»; буква Z не встречается ни у
-    одной из наших 863 карточек ET, а спеки совпадают полностью."""
+    Такая буква не может различать НАШИ исполнения — мы этот признак вообще не кодируем,
+    значит для нас это молчание, а не конфликт. Работает на буквах-шуме: OZEN «EN 11 TD
+    500 л.» (литры), MARK «MSS-45A/10 380V3PH50HZ» (напряжение) — 18 пар держатся на этом.
+
+    Но «нет у нас» не значит «ничего не значит у них»: проверка агентами 18.08 по живым
+    карточкам вскрыла 9 ложных пар KraftMachine, где хвост «АВ» = винтовой блок Hanbell AB
+    вместо базового AC и стоит на 31-38% дороже (KM11-10 пВ 272 809 против пВ АВ 377 800).
+    Туда же ушёл наш собственный пример из прошлой версии этого комментария — ET «Z»:
+    у compressortyt рядом с Z-карточкой лежит не-Z с ценой копейка в копейку нашей, то
+    есть Z у них тоже отдельный SKU, и обоснование было ошибочным (вывод отозван).
+
+    Поэтому буквы, которыми конкурент САМ разводит два своих SKU одного ключа на одной
+    площадке (SKU_LETTER), из фолбэка исключены. Замер: убирает 20 пар, из них 12
+    доказанно ложные (KraftMachine AB/AV, «MAS+» — морское исполнение Atlas, ARIACOM
+    «winter pack», DALGAKIRAN Eagle-H)."""
     alpha = _OUR_ALPHA.get(brand)
     if not alpha: return []
+    theirs = SKU_LETTER.get(brand) or frozenset()
     out = []
     for c, m in marks:
         extra = m - ours_marks
-        if extra and (m & ours_marks) == ours_marks and not (extra & alpha):
+        if extra and (m & ours_marks) == ours_marks and not (extra & alpha) and not (extra & theirs):
             out.append(c)
     return out
+
+
+def learn_sku_letters(cands):
+    """Буквы, которыми конкурент разводит СВОИ SKU: тот же ключ серия+номер, та же
+    площадка, у одной карточки метка = метка другой плюс буква. Раз он держит обе
+    карточки отдельно — буква несёт исполнение, а не написание."""
+    SKU_LETTER.clear()
+    for b, lst in cands.items():
+        by = defaultdict(list)
+        for c in lst: by[(c["sn"], c["site"])].append(c)
+        acc = set()
+        for grp in by.values():
+            if len(grp) < 2: continue
+            ms = [variant_letters(c.get("name") or slug(c["url"]).replace("_"," "), b) for c in grp]
+            for a in ms:
+                for d in ms:
+                    if a is d or not a: continue
+                    if (a & d) == d and (a - d): acc |= (a - d)
+        if acc: SKU_LETTER[b] = acc
 
 
 def vsd_mark_fallback(o_name, cands, brand, o_vsd):
@@ -820,6 +852,7 @@ def load_comp_all():
                                  eng=ceng,
                                  we=we, dr=dr, sku=skus.get(u) or sku2, mnt=mnt))
     unglue_code(cands)          # тот же слитный код бывает и у конкурентов
+    learn_sku_letters(cands)    # буквы, которыми конкурент сам разводит свои SKU
     mark_weak_drive(cands, load_ours_all())
     return cands
 
