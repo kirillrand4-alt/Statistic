@@ -212,6 +212,31 @@ _RC_DASH = re.compile(r"(\d{2,5})\s*[-–]\s*(\d{2})\s*/\s*(\d{1,2})")  # АСО
 _RC_BASE = re.compile(r"(\d{2,5})\s*/\s*(\d{1,2})(?![\d.])")        # АСО базовое: объём/бар
 
 
+# Среда установки — исполнение корпуса, а не описание места: у DNT «РВ 500-10.600-1
+# (уличное исполнение)» это 09Г2С на -40…+50 °C, диаметр 600, 127 кг, а «РВ 500-10 для
+# помещения» — Ст3пс на -20…+50 °C, диаметр 680, 180 кг; у продавца обе карточки лежат
+# в РАЗНЫХ разделах. Проверка агентом 19.08 по живым страницам поймала на этом ложную
+# пару, и правильный кандидат был у него же рядом.
+#
+# Правило строго двустороннее (правило №4): режем, только когда обе стороны сказали, и
+# сказали РАЗНОЕ. Одностороннее «уличного исполнения» в имени продавца — молчание нашей
+# стороны, а не конфликт: у Бежецкого АСО уличное исполнение закодировано суффиксом
+# «-01», слова в имени нет, и такая пара (проверена, верная) обязана выжить.
+# Замер: метка есть с обеих сторон у 4 пар, конфликтуют 2 — обе DNT, обе доказанно ложные.
+_ENV_OUT = re.compile(r"уличн|наружн|морозостойк", re.I)
+_ENV_IN  = re.compile(r"для\s+помещен|в\s+помещени|внутренн\w*\s+(?:монтаж|установ|исполнен)", re.I)
+
+
+def mount_env(name):
+    t = str(name or "")
+    o, i = bool(_ENV_OUT.search(t)), bool(_ENV_IN.search(t))
+    return "улиц" if o and not i else ("помещ" if i and not o else None)
+
+
+def mount_env_ok(a, b):
+    return not a or not b or a == b
+
+
 def rcv_exec(name):
     t = str(name or "")
     m = _RC_DOT.search(t)
@@ -794,6 +819,8 @@ def pick_cands(o, pool, brand):
         m = [c for c in m if dry_exec_ok(dry_exec(o.get("name")), dry_exec(c.get("name")))]
     elif o.get("kind") == "рес":
         m = rcv_exec_filter(o, m, brand)
+        m = [c for c in m if mount_env_ok(mount_env(o.get("name")),
+                                          mount_env(c.get("name") or slug(c["url"]).replace("-", " ")))]
     m = exec_filter(o.get("name", ""), m)
     m = (variant_filter(o.get("name", ""), m, brand, o.get("vsd")) if VARIANT_STRICT
          else prefer_exact_variant(o.get("name", ""), m))
