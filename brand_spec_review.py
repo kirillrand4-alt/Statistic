@@ -15,7 +15,7 @@ from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value, bar_
                         ip_filter, ip_class, _ip_open, cool_filter, cool_class, is_flow_key, card_issue,
                         prefer_exact_variant, VARIANT_MARKS, model_code,
                         variant_letters, same_variant, VSD_MARK, dim_value,
-                        FAMILY_WEIGHT)
+                        FAMILY_WEIGHT, OUR_FAMWEIGHT)
 from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
 from scrape_files import U, OURS_DIR, find_ours
 
@@ -346,6 +346,19 @@ def learn_family_weights(cands):
             if c.get("we"): seen[(c["site"], b, round(c["we"]))].add(c["sn"])
     FAMILY_WEIGHT.clear()
     FAMILY_WEIGHT.update(k for k, v in seen.items() if len(v) > 1)
+    # Наша сторона заливает вес шаблоном не реже: у KraftMachine 41 карточка носит вес
+    # 195/292/306 при мощности от 5,5 до 315 кВт, у ARIACOM 47 карточек — 290/300, у FIAC
+    # AIRBLOK 280 кг стоит на 27 карточках от 2,2 до 15 кВт. Без этой половины
+    # weight_confirms подтверждал бы чужую мощность нашей же константой: 49 пар, где вес
+    # совпал до 1%, а мощность расходится больше чем на 6%. Порог 3 модели, а не 2 —
+    # у линеек давлений один корпус и один честный вес (замер 19.08: при пороге 2
+    # правило гасло там, где резало верно).
+    ours_seen = defaultdict(set)
+    for b, lst in load_ours_all().items():
+        for o in lst:
+            if o.get("we"): ours_seen[(b, round(o["we"]))].add(o["sn"])
+    OUR_FAMWEIGHT.clear()
+    OUR_FAMWEIGHT.update(k for k, v in ours_seen.items() if len(v) >= 3)
 
 
 def learn_sku_letters(cands):

@@ -590,6 +590,8 @@ def _mkey(name, brand):
 # (площадка, бренд, вес) с более чем одной моделью: такой вес продавец раздаёт по
 # семейству, и доказательством он быть не может. Заполняется в load_comp_all.
 FAMILY_WEIGHT = set()
+# То же с НАШЕЙ стороны: (бренд, вес), стоящий у трёх и более наших моделей.
+OUR_FAMWEIGHT = set()
 
 
 def weight_confirms(o, c):
@@ -612,6 +614,7 @@ def weight_confirms(o, c):
     a, b = o.get("we"), c.get("we")
     if not (a and b) or abs(a - b) / max(a, b) > 0.01: return False
     if (c.get("site"), c.get("brand"), round(b)) in FAMILY_WEIGHT: return False
+    if (o.get("brand"), round(a)) in OUR_FAMWEIGHT: return False
     da, db = o.get("dim"), c.get("dim")
     return not (da and db and max(abs(x - y) / max(x, y) for x, y in zip(da, db)) > 0.20)
 

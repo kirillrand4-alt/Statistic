@@ -136,13 +136,26 @@ def parse_card(url: str, page: str) -> dict | None:
     return row
 
 
+def warn_name(out: Path) -> None:
+    """Матчер ищет файлы по маске prices_<дата>_<время>.csv (scrape_files._TS). Файл с
+    другим именем он просто не увидит — собранные 241 карточка так и не подхватились,
+    пока файл назывался dobor_20260819.csv."""
+    if not re.match(r"(?:all_)?prices(?:_checked)?_\d{8}", out.name):
+        print("  ВНИМАНИЕ: имя файла не подходит под маску scrape_files — матчер его не "
+              "увидит. Переименуйте в prices_<ГГГГММДД>_<ЧЧММСС>.csv", file=sys.stderr)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--razdel", nargs="+", choices=sorted(RAZDELY))
     ap.add_argument("--iz-json", nargs="+", metavar="FILE",
                     help="собрать CSV из JSON-файлов, снятых WebFetch (см. шапку)")
-    ap.add_argument("-o", "--out", default="dobor_konkurenta.csv")
+    # Имя по умолчанию подходит под маску, которую ищет scrape_files (prices_<дата>_<время>).
+    # Файл с любым другим именем матчер просто не увидит: собранные 241 карточка сначала
+    # так и не подхватились, пока файл назывался dobor_20260819.csv.
+    ap.add_argument("-o", "--out",
+                    default=f"prices_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.csv")
     ap.add_argument("--limit", type=int, default=0, help="снять не больше N карточек")
     ap.add_argument("--direct", action="store_true",
                     help="ходить напрямую, без зеркала (на сервере с рабочим прокси)")
@@ -177,6 +190,7 @@ def main() -> int:
             for r in rows:
                 w.writerow(r)
         print(f"из JSON собрано {len(rows)} карточек -> {out.resolve()}")
+        warn_name(out)
         return 0
     if not a.razdel:
         sys.exit("нужен --razdel или --iz-json")
@@ -214,6 +228,7 @@ def main() -> int:
         for r in rows:
             w.writerow(r)
     print(f"\nзаписано {len(rows)} карточек -> {out.resolve()}")
+    warn_name(out)
     return 0
 
 
