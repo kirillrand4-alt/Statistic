@@ -173,6 +173,30 @@ def pustye_polya(ours):
     return out
 
 
+def kopipast_gabaritov(ours, min_kw_diff=0.25):
+    """Одни габариты на карточках, которые физически не могут быть одного размера.
+
+    Габариты заполняют копированием соседней карточки: ATLAS COPCO XAVS 330 E и XAVS
+    336 E стоят с одним весом 4193 кг и одним корпусом, хотя дают 18 600 и 20 000 л/мин,
+    а те же габариты повторены у XATS 900 E при весе 3511 кг. Ловим только грубый
+    случай — разброс мощности внутри группы больше четверти: линейка давлений одного
+    типоразмера (7,5/8,5/10/13 бар) корпус и правда делит, и это не ошибка."""
+    grp = defaultdict(list)
+    for b, lst in ours.items():
+        for o in lst:
+            if o.get("dim") and o.get("kw"):
+                grp[(b, o["dim"])].append(o)
+    out = []
+    for (b, dim), lst in grp.items():
+        kws = sorted({o["kw"] for o in lst})
+        if len(lst) < 2 or len(kws) < 2 or kws[-1] / kws[0] - 1 < min_kw_diff:
+            continue
+        out.append(dict(brand=b, gabarity="×".join(f"{x:g}" for x in dim),
+                        kartochek=len(lst), kvt=" / ".join(f"{k:g}" for k in kws),
+                        imena=" || ".join(o["name"] for o in lst[:3]), url=lst[0]["url"]))
+    return sorted(out, key=lambda r: -r["kartochek"])
+
+
 def _sheet(wb, title, rows, headers, widths, link_key="url"):
     ws = wb.create_sheet(title)
     st = B._styles()
@@ -241,6 +265,12 @@ def main() -> int:
         wb, "Пустые поля", pustye_polya(ours),
         dict(brand="Бренд", name="Наш товар", pusto="Не заполнено", url="Ссылка"),
         [14, 60, 18, 60])))
+
+    itog.append(("Копипаст габаритов", _sheet(
+        wb, "Копипаст габаритов", kopipast_gabaritov(ours),
+        dict(brand="Бренд", gabarity="Габариты, мм", kartochek="Карточек",
+             kvt="Мощности в группе", imena="Карточки", url="Ссылка"),
+        [14, 20, 11, 22, 90, 60])))
 
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)

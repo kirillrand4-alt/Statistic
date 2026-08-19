@@ -14,7 +14,8 @@ from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value, bar_
                         series_num, text_flags, is_compressor, match, receiver_filter, ff_filter,
                         ip_filter, ip_class, _ip_open, cool_filter, cool_class, is_flow_key, card_issue,
                         prefer_exact_variant, VARIANT_MARKS, model_code,
-                        variant_letters, same_variant, VSD_MARK)
+                        variant_letters, same_variant, VSD_MARK, dim_value,
+                        FAMILY_WEIGHT)
 from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
 from scrape_files import U, OURS_DIR, find_ours
 
@@ -261,6 +262,18 @@ def alien_letter_fallback(ours_marks, marks, brand):
     return out
 
 
+def learn_family_weights(cands):
+    """Вес, который продавец ставит нескольким моделям бренда сразу, — не доказательство.
+    Таких (площадка, бренд, вес) 4 475 из 17 357: Comaro LB 5,5-10/270 и LB 7,5-10/270
+    оба 400 кг, ЗИФ ПВ-16/1,6 и ПВ-18/1,6 оба 3800 кг. См. weight_confirms."""
+    seen = defaultdict(set)
+    for b, lst in cands.items():
+        for c in lst:
+            if c.get("we"): seen[(c["site"], b, round(c["we"]))].add(c["sn"])
+    FAMILY_WEIGHT.clear()
+    FAMILY_WEIGHT.update(k for k, v in seen.items() if len(v) > 1)
+
+
 def learn_sku_letters(cands):
     """Буквы, которыми конкурент разводит СВОИ SKU: тот же ключ серия+номер, та же
     площадка, у одной карточки метка = метка другой плюс буква. Раз он держит обе
@@ -374,8 +387,21 @@ def exec_tags(name):
     if m: tags["модули"]=f"{m.group(1)}x{m.group(2).replace(',','.')}"
     # Высота дышла у шассийных Atmos: «рег. высота» и «фиксированная» — отдельные SKU
     # (PDP15 7: доказанная ложная пара 13.08). Двусторонний тег.
-    if re.search(r"\bрег\w*[.\s]+высот|регулируем", t): tags["дышло"]="рег"
+    # «изменяемая высота буксира» — то же самое словами aerocompressors.
+    if re.search(r"\bрег\w*[.\s]+высот|регулируем|изменяем\w*\s+высот", t): tags["дышло"]="рег"
     elif re.search(r"\bфикс", t): tags["дышло"]="фикс"
+    # Заводская схема Atmos в артикуле: A = регулируемая высота буксира, F = фиксированная,
+    # B = с тормозом, U = без тормоза; SKID = на салазках, BOX = в кожухе. Расшифровка снята
+    # агентами 18.08 с pnevmo-sklad («PDP20 10 F/U», поле «Комплектация: Фиксированный без
+    # тормоза») и подтверждена ценами: у одного продавца на PDP 15-7 живут ШЕСТЬ карточек —
+    # F/U 1 926 485, A/U 1 991 681, F/B 2 008 496, A/B 2 104 668, SKID 1 923 142, Box
+    # 1 883 807 руб. Три наши шассийные карточки без этого сцеплялись с одной чужой.
+    m=re.search(r"\b([af])\s*/\s*([ub])\b", t)
+    if m:
+        tags["дышло"]="рег" if m.group(1)=="a" else "фикс"
+        tags["тормоз"]="да" if m.group(2)=="b" else "нет"
+    if re.search(r"\bskid\b", t): tags["монтаж"]="салазки"
+    elif re.search(r"\bbox\b", t): tags["кожух"]="да"
     # Диапазон давления в скобках: Renner RSF 355 DW-13 продаётся как «(6-13 бар)» и
     # «(13-15 бар)» — отдельные SKU у конкурента (доказано 13.08). Двусторонний тег.
     m=re.search(r"\((\d+(?:[.,]\d+)?)\s*[-–]\s*(\d+(?:[.,]\d+)?)\s*бар\)", t)
@@ -646,7 +672,8 @@ def load_ours_all():
                             name=nm or name, url=url, price=p,
                             ip=oip,
                             cool=cl, eng=eng_make(name, code, *r.values()),
-                            we=(wev if wev and 1<=wev<=50000 else None), dr=drv))
+                            we=(wev if wev and 1<=wev<=50000 else None), dr=drv,
+                            dim=dim_value(r.get("IP_PROP22556"), "мм")))
     unglue_code(ours)
     learn_vsd_marks(ours)
     _OUR_ALPHA.clear()
@@ -794,12 +821,21 @@ def load_comp_all():
             if not (vsd and re.search(r"частотн|инвертор|vsd", text, re.I)):
                 vsd = 1 if "e" in bsuf else 0
             if "o" in bsuf: ff=1
-        we=dr=sku2=None
+        we=dr=sku2=dim=None; lwh={}
         for k,v in d.items():
             kl=k.lower()
             if we is None and ("вес" in kl or "масса" in kl) and "кг" not in str(v).lower()[:0]:
                 n=num(v)
                 if n and 1<=n<=50000: we=n
+            # Габариты: сначала одной строкой («габариты», «габариты (дхшхв), мм»,
+            # «габаритные размеры, см» — 60 тыс. карточек), иначе собираем из трёх
+            # отдельных ключей длина/ширина/высота (ещё 21 тыс., так пишет pnevmoteh).
+            # «присоединительный размер» исключён: там дюймы резьбы, а не корпус.
+            if dim is None and "габарит" in kl and "присоед" not in kl: dim=dim_value(v, kl)
+            for nm_,ax in (("длина","l"),("ширина","w"),("высота","h")):
+                if kl.startswith(nm_) and ax not in lwh:
+                    n=num(v)
+                    if n: lwh[ax]=n
             if dr is None and "привод" in kl:
                 vl=str(v).lower()
                 dr="ремен" if "ремен" in vl else ("прямой" if "прям" in vl else None)
@@ -819,7 +855,13 @@ def load_comp_all():
                 elif vl in ("нет","no"): vsd=0
         if bsuf is not None:   # ВК-схема Berg: Р в коде = ременный, отсутствие = прямой
             dr = "ремен" if "r" in bsuf else "прямой"
-        mnt=next((str(v) for k,v in d.items() if k.strip().lower()=="исполнение"), None)
+        # «Исполнение» — основной ключ (37 157 карточек), но pnevmo-sklad зовёт то же поле
+        # «Комплектация» (1 653) и пишет туда «на шасси»; без него наши шассийные Atmos
+        # сравнивались с его карточками вслепую (3 ложные пары, проверка агентами 18.08).
+        # Артикул нужен там же: у него исполнение закодировано в нём — «PDP20 10 F/U».
+        mnt=next((str(v) for k,v in d.items()
+                  if k.strip().lower() in ("исполнение","комплектация")), None)
+        mnt=" ".join(x for x in (mnt, sku2) if x) or None
         engsrc=[v for k,v in d.items()
                 if "двигат" in k.lower() and "элект" not in k.lower() and "защит" not in k.lower()]
         ceng=eng_make(nm, slug(u), *engsrc)
@@ -850,9 +892,12 @@ def load_comp_all():
                                        or ("water" if b in ("dalgakiran","et")
                                            and re.search(r"\d\s?w\b", nm or "", re.I) else None)),
                                  eng=ceng,
-                                 we=we, dr=dr, sku=skus.get(u) or sku2, mnt=mnt))
+                                 we=we, dr=dr, sku=skus.get(u) or sku2, mnt=mnt,
+                                 dim=dim or (dim_value(f"{lwh['l']}x{lwh['w']}x{lwh['h']}", "мм")
+                                             if len(lwh)==3 else None)))
     unglue_code(cands)          # тот же слитный код бывает и у конкурентов
     learn_sku_letters(cands)    # буквы, которыми конкурент сам разводит свои SKU
+    learn_family_weights(cands) # веса, раздаваемые продавцом по всему семейству
     mark_weak_drive(cands, load_ours_all())
     return cands
 

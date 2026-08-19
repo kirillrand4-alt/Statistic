@@ -454,6 +454,24 @@ def bar_value(raw):
     vals = [v for v in vals if v]
     return max(vals) if vals else None
 
+def dim_value(raw, key=""):
+    """Габариты «1345*880*1612» -> отсортированный кортеж в мм. Сортируем, потому что
+    порядок осей у источников разный: наша карточка ЗИФ пишет ДхШхВ, pnevmo-sklad той
+    же машине — ШхДхВ («1600x2965x1920» против «2965x1600x1920»), и сравнение по
+    позициям давало бы ложное расхождение.
+
+    Разделители х/x/×/*, единицы из ключа; когда единиц нет, а все три числа меньше
+    400 — это сантиметры (aerocompressors пишет «на шасси 215,9х100,3х98,8»), потому
+    что компрессора шириной 21 см не бывает. Санити 50..25000 мм отсекает
+    присоединительные размеры и мусор."""
+    nums = [float(x.replace(",", ".")) for x in re.findall(r"\d+(?:[.,]\d+)?", str(raw or ""))]
+    if len(nums) != 3: return None
+    kl = (key or "").lower()
+    if "см" in kl or ("мм" not in kl and max(nums) < 400): nums = [n * 10 for n in nums]
+    if not all(50 <= n <= 25000 for n in nums): return None
+    return tuple(sorted(round(n) for n in nums))
+
+
 def bar_flow_pairs(raw_bar, raw_flow, flow_key=""):
     """Сдвоенные карточки конкурентов («8/10» давление + «1,665/1,435» произв.) = ПЕРЕЧЕНЬ
     вариантов на одной странице -> по паре (8,1665),(10,1435), каждая матчит свой SKU.
@@ -553,6 +571,35 @@ def _mkey(name, brand):
     return tuple(t.translate(_CYR2LAT) for t in toks), "+" in (name or "")
 
 
+# (площадка, бренд, вес) с более чем одной моделью: такой вес продавец раздаёт по
+# семейству, и доказательством он быть не может. Заполняется в load_comp_all.
+FAMILY_WEIGHT = set()
+
+
+def weight_confirms(o, c):
+    """Масса совпала настолько точно, что расхождение кВт — ошибка данных, не другая машина.
+
+    Проверка агентами 36 пар по живым карточкам (18.08): 31 верная, 5 ложных. Правило
+    вытягивает целый класс, где мощность врёт с одной из сторон: индекс модели пишут в
+    поле кВт (CrossAir Borey 102 = 102 л.с. = 75 кВт, у конкурента в поле «кВт» стоит 102),
+    путают л.с. с киловаттами (ABAC MICRON 3.0 л.с. = 2,2 кВт), теряют запятую (Fiac AX
+    703BD: 55 вместо 5,5), берут gross двигателя вместо вала (Atmos PDP 15: 17 против 15,3),
+    складывают блоки по-разному (Remeza КС 7-8: «5,5+5,5» против 11).
+
+    Две защиты — обе из тех же 5 опровержений:
+      * масса, которую продавец раздаёт всему семейству, ничего не доказывает (Comaro LB 5,5
+        и LB 7,5 — оба 400 кг; ЗИФ ПВ-16/1,6 и ПВ-18/1,6 — оба 3800 кг);
+      * габариты, разошедшиеся больше чем на 20% по любой оси, перебивают совпадение массы
+        (Atmos PDP 65 на салазках 2690 мм против 4223 мм на шасси — масса у обоих 1570 кг).
+    После них из 5 ложных пар живы 2, обе — карточки, где конкурент исполнение вообще не
+    указывает; это молчание, а не конфликт, и кодом оно не лечится."""
+    a, b = o.get("we"), c.get("we")
+    if not (a and b) or abs(a - b) / max(a, b) > 0.01: return False
+    if (c.get("site"), c.get("brand"), round(b)) in FAMILY_WEIGHT: return False
+    da, db = o.get("dim"), c.get("dim")
+    return not (da and db and max(abs(x - y) / max(x, y) for x, y in zip(da, db)) > 0.20)
+
+
 def match(o, cands):
     """o, cands: dict с ключами sn,kw,bar,fl,oil,vsd,ff,rv. Возврат: список подходящих.
     Масло НЕ сравниваем: серия+номер обязаны совпасть, а внутри одной модели масляность
@@ -565,7 +612,7 @@ def match(o, cands):
     out = []
     for c in cands:
         if o["sn"] != c["sn"]: continue
-        if not agree_num(o["kw"], c["kw"]): continue
+        if not agree_num(o["kw"], c["kw"]) and not weight_confirms(o, c): continue
         if not agree_num(o["bar"], c["bar"], 0.04) \
            and not (same_model(o.get("name"), c.get("name") or c.get("url"), c.get("brand"))
                     and bar_in_code(o.get("name"), c.get("brand"), o.get("bar"))): continue
