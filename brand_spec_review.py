@@ -15,7 +15,7 @@ from spec_match import (PARTS_RE, num, sane_kw, bar_value, bar_from_text, flow_v
                         ip_filter, ip_class, _ip_open, cool_filter, cool_class, is_flow_key, card_issue,
                         prefer_exact_variant, VARIANT_MARKS, model_code,
                         variant_letters, same_variant, VSD_MARK, dim_value,
-                        FAMILY_WEIGHT, OUR_FAMWEIGHT, sn_kind)
+                        FAMILY_WEIGHT, OUR_FAMWEIGHT, sn_kind, agree_num)
 from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
 from scrape_files import U, OURS_DIR, find_ours
 
@@ -1606,12 +1606,52 @@ def build_brand(brand, title, ours, cands, po=None):
     n_other=len(other)
     # 3: GAP
     our_sn={o["sn"] for o in ours}
+    # Наш собственный товар, у которого просто не совпал ключ, в GAP не место: это не
+    # дырка в ассортименте, а дефект извлечения серии. Улика жёсткая — ПОЛНОЕ совпадение
+    # кода модели (model_code, тот же разбор, что у матчера): их «Винтовой компрессор
+    # Airpol 4, 8 бар» и наш «Airpol 4/8» дают один и тот же кортеж токенов, и это один
+    # товар. 102 группы по каталогу.
+    #
+    # Более мягкие признаки ПРОВЕРЕНЫ И ОТВЕРГНУТЫ (19.08), скрывать по ним нельзя:
+    #   * «наш код целиком внутри их + те же числа» (152 группы) — под это подходит
+    #     «Airrus KT 11 PR 8 бар» против нашего «AIRRUS 11 8 бар», а PR у AIRRUS это
+    #     частотник (learn_vsd_marks, 130 подтверждений), то есть отдельный SKU;
+    #   * «совпали кВт + бар + производительность» (1 475 групп) — под это подходит их
+    #     Airman PDSG1400LVR против нашего PDSG750S-W: 206 кВт / 13 бар / 21 200 л/мин
+    #     у обоих, а машины разные (и, вероятно, врут наши данные).
+    # Поэтому мягкий признак не прячет строку, а помечает её колонкой «Возможно, наш
+    # товар» со ссылкой: спрятать реальный GAP дороже, чем показать лишнюю строку.
+    our_codes={}
+    for o in ours:
+        k=tuple(model_code(o["name"], brand)[0])
+        if k: our_codes.setdefault(k, o)
     groups=defaultdict(lambda: defaultdict(list))
+    n_mine=0
     for c in cands:
         if c["sn"] in our_sn: continue
         gk=(c["sn"], round(c["kw"]) if c["kw"] else None, round(c["bar"]) if c["bar"] else None,
             c["ff"] or 0, c["vsd"] or 0, c["rv"], c.get("cool"))   # возд/вод = разные товары
         groups[gk][c["site"]].append(c)
+    for gk in [g for g in groups
+               if any(tuple(model_code(c.get("name") or slug(c["url"]).replace("_"," "), brand)[0])
+                      in our_codes
+                      for cs in groups[g].values() for c in cs)]:
+        del groups[gk]; n_mine+=1
+
+    def _maybe_ours(cards):
+        """Мягкий признак: у нашей карточки того же бренда сошлись кВт, бар И
+        производительность при одинаковых FF/VSD. Не доказательство (см. Airman выше),
+        поэтому только пометка."""
+        for c in cards:
+            if not (c.get("kw") and c.get("fl")): continue
+            for o in ours:
+                if not (o.get("kw") and o.get("fl")): continue
+                if (o.get("ff") or 0)!=(c.get("ff") or 0) or (o.get("vsd") or 0)!=(c.get("vsd") or 0):
+                    continue
+                if agree_num(o["kw"], c["kw"]) and agree_num(o.get("bar"), c.get("bar"), 0.04) \
+                   and agree_num(o["fl"], c["fl"], 0.04):
+                    return o
+        return None
     # Два листа, а не один. GAP на 2+ площадках — это позиция, которую рынок реально
     # возит: две независимые карточки подтверждают и модель, и порядок цены. GAP на
     # ОДНОЙ площадке — гипотеза: там же сидят опечатки в названии, штучные заказы и
@@ -1621,7 +1661,7 @@ def build_brand(brand, title, ours, cands, po=None):
         gap=sorted(gap, key=lambda t:-len(t[1]))
         ws=wb.create_sheet(sheet)
         HDR=["№","Модель (у конкурентов, нас нет)","Категория","Серия","кВт","бар","Сайтов"]\
-            +COMPETITORS+["min конк."]
+            +COMPETITORS+["min конк.","Возможно, наш товар"]
         _hdr(ws, HDR, st); r=1
         for gk,sites in gap:
             r+=1; allc=[c for cs in sites.values() for c in cs]
@@ -1644,7 +1684,10 @@ def build_brand(brand, title, ours, cands, po=None):
                     cell.hyperlink=show["url"]; cell.font=st["strike"] if show["status"]=="снято" else st["blue"]
                 if len(cs)>1: cell.fill=st["warn"]
             if prices: ws.cell(r,14,min(prices)).number_format="# ##0"
-        widths=[5,52,12,10,7,7,8]+[13]*6+[11]
+            mine=_maybe_ours(allc)
+            if mine:
+                mc=ws.cell(r,15, mine["name"][:56]); mc.hyperlink=mine["url"]; mc.font=st["orange"]
+        widths=[5,52,12,10,7,7,8]+[13]*6+[11,50]
         for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
         ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
         return len(gap)
@@ -1785,7 +1828,8 @@ def build_brand(brand, title, ours, cands, po=None):
     path=os.path.join(OUTDIR, f"{title}_spec_review.xlsx")
     wb.save(path)
     return dict(clean=len(clean), ambig=len(ambig), no=n0, gap=n_gap, gap1=n_gap1,
-                other=n_other, chk=n_chk, sny=len(sny), dead=n_dead, po=n_po, path=path)
+                mine=n_mine, other=n_other, chk=n_chk, sny=len(sny), dead=n_dead,
+                po=n_po, path=path)
 
 def build_all(only=None, min_ours=5, min_cands=5):
     os.makedirs(OUTDIR, exist_ok=True)
@@ -1803,7 +1847,7 @@ def build_all(only=None, min_ours=5, min_cands=5):
         r=build_brand(b, title, ours_all.get(b,[]), cands_all.get(b,[]), po=po)
         res[b]=r
         print(f"{b:<14} матч {r['clean']:>4} | неодн {r['ambig']:>3} | ост.товары {r['other']:>4} | "
-              f"без {r['no']:>4} | GAP2+ {r['gap']:>4} | GAP1 {r['gap1']:>4} | "
+              f"без {r['no']:>4} | GAP2+ {r['gap']:>4} | GAP1 {r['gap1']:>4} (наших убрано {r['mine']:>3}) | "
               f"ложн.данные {r['chk']:>3} | снятые {r['sny']:>4} | снят.серии {r['dead']:>3} | "
               f"без серии {r['po']:>3}")
     return res
