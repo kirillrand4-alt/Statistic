@@ -320,9 +320,22 @@ def variant_letters(name, brand, drop_vsd=False):
     if drop_vsd:      # см. vsd_mark_fallback: только как фолбэк, не в общем пути
         drop = drop | VSD_MARK.get(brand, frozenset())
     toks, _ = model_code(name, brand)
-    if brand == "boge":      # «CD 4-10» -> метка {c,d}, как у нашего «C 4 D 10» (см. boge_split)
+    if brand == "boge":
+        # «CD 4-10» -> метка {c,d}, как у нашего «C 4 D 10» (см. boge_split). Буквы у BOGE
+        # держим ПРИНУДИТЕЛЬНО, мимо стоп-листа: «l» там значится литром, и без этого метка
+        # «CL 4-10» схлопывалась в {c} — то есть в базовую клиноремённую C. А C и C…L у BOGE
+        # физически разные машины: завод даёт C 4-10 — 190 кг, корпус 480x907x955, привод
+        # клиноремённый; C 4 L 10 — 110 кг, 776x496x496, прямой через муфту. На этом
+        # получились 2 ложные пары из 20 (проверка агентом по заводской таблице 19.08).
         from brand_spec_review import boge_split
+        keep = {t for x in toks if not re.fullmatch(r"[\d.]+", x)
+                for t in (boge_split(x)[1],) if t}
+        keep |= {t for t in toks if t in ("l", "d", "f", "r")}
         toks = [x for t in toks for x in (boge_split(t) if not re.fullmatch(r"[\d.]+", t) else (t,)) if x]
+        return frozenset(t.translate(_CYR2LAT) for t in toks
+                         if not re.fullmatch(r"[\d.]+", t) and len(t) <= 5
+                         and (t in keep or (t not in drop and t.translate(_CYR2LAT) not in drop
+                                            and _visual(t) not in drop)))
     return frozenset(t.translate(_CYR2LAT) for t in toks
                      if not re.fullmatch(r"[\d.]+", t) and len(t) <= 5
                      and t not in drop and t.translate(_CYR2LAT) not in drop
