@@ -567,7 +567,13 @@ def pick_cands(o, pool, brand):
     return ff_filter(o.get("ff"), m, o.get("name", ""))
 
 _DTAIL=re.compile(r'[\d\)лl]\s*[-–]?\s*([дd])\s*(?:\(.*)?$', re.I)   # «270L D», «500Д», «10Д (с осуш.)»
-_VSTAIL=re.compile(r'(?:\d|\))\s*(вс|bc)\s*$', re.I)                  # «ВК100Р-10ВС»
+# ОТРИЦАТЕЛЬНЫЙ РЕЗУЛЬТАТ 19.08: хвост «ВС» у Remeza читался как воздухосборник (ресивер).
+# На деле это Variable Speed — частотник: из 105 наших карточек Remeza с «ВС» у 104 стоит
+# vsd=1, а rutector те же модели прямо называет «Винтовой компрессор БЕЗ РЕСИВЕРА REMEZA
+# ВК40-15ДВС». Настоящий ресивер Remeza пишет числом («ВК100-10-500ВС»), и такие карточки
+# правило не задевало. Срабатывало оно только на Remeza (78 наших, 415 чужих), поэтому
+# снято целиком, а не сужено.
+_VSTAIL=None
 _OTAIL=re.compile(r'/[oо][w2]?\s*$', re.I)                            # Zammer «…-500/O», /OW, /O2 = осушитель
 # Dali: хвостовое «-F» = частотный преобразователь (Schneider Electric — так пишет наша
 # же карточка в блоке «Модификации»). У 41 нашей карточки из 132 с этим суффиксом проп
@@ -578,12 +584,12 @@ _OTAIL=re.compile(r'/[oо][w2]?\s*$', re.I)                            # Zammer 
 _FTAIL=re.compile(r'[\d)\sII]\s*[-–]\s*f\s*$', re.I)
 def suffix_flags(name, brand, ff, rv, vsd=None):
     """Хвостовые маркеры НЕ-Atlas брендов (у Atlas 'Dd'=дизель, не трогаем):
-    Д/D после числа/л = осушитель; ВС = воздухосборник (ресивер упомянут);
+    Д/D после числа/л = осушитель;
     у Dali «-F» = частотник (см. _FTAIL — там же почему он перебивает проп)."""
     if brand=="atlas": return ff, rv, vsd
     nm=str(name).strip()
     if ff is None and (_DTAIL.search(nm) or _OTAIL.search(nm) or "с осушителем" in nm.lower()): ff=1
-    if rv is None and _VSTAIL.search(nm): rv=1
+    # «ВС» больше не читаем ресивером — см. _VSTAIL выше
     if brand=="dali" and _FTAIL.search(nm): vsd=1
     return ff, rv, vsd
 
@@ -714,9 +720,16 @@ def load_ours_all():
         if not sn: continue
         ff,vsd,rv = text_flags(name+" "+code)
         ff,rv,vsd = suffix_flags(name, b, ff, rv, vsd)
-        if rv is None:
+        # rv==1 значит «ресивер упомянут, объём неизвестен» (хвост TM в имени), а не знание
+        # объёма — проп 22564 знает его точно и обязан перебивать единицу. Ровно так уже
+        # устроен загрузчик конкурентов ниже. Без этого наша «CECCATO CSM 21/10 D TM CE»
+        # (ресивер 500 л, 588 кг) не могла сойтись с их же TM-карточкой, где rv=500:
+        # agree(1, 500) ложно, кандидат гибнул на первом шаге, а проходила базовая версия
+        # без ресивера (362 кг) — и становилась парой. 58 наших карточек, 120 пар, и ВСЕ
+        # 120 вели на карточку без ресивера (проверка агентом, 9 опровержений из 12 живьём).
+        if rv is None or rv==1:
             if num(r.get("IP_PROP22564")): rv=num(r.get("IP_PROP22564"))
-            elif str(r.get("IP_PROP22574","")).strip().lower() in ("да","есть"): rv=1
+            elif rv is None and str(r.get("IP_PROP22574","")).strip().lower() in ("да","есть"): rv=1
         fl = flow_value(r.get("IP_PROP22571"), "л/мин") or flow_value(r.get("IP_PROP22658"), "м3/мин")
         fl = fix_flow_scale(fl, sane_kw(num(r.get("IP_PROP22562"))))
         nm,url,p = price.get(code.lower(), (name, f"https://prokompressor.ru/catalog/{code}/", None))
