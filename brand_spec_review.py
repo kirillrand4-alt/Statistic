@@ -262,6 +262,49 @@ def alien_letter_fallback(ours_marks, marks, brand):
     return out
 
 
+def exec_weight_pick(o, cands, brand):
+    """Молчаливый по исполнению кандидат достаётся ОДНОЙ нашей карточке — по массе.
+
+    Та же логика, что у OUR_BARE: если мы сами держим исполнения отдельными SKU, а
+    конкурент — одной карточкой, отдавать её всем нашим нельзя. Замер 19.08: 175 карточек
+    конкурентов размазаны по нескольким нашим исполнениям (ЗИФ 111, ARIACOM 24, Atlas 15,
+    Chicago 15, Atmos 6) — это 196 заведомо лишних пар, потому что верной может быть
+    только одна.
+
+    Разводит масса, и она у этих исполнений честная: ARIACOM SAX 110 «на шасси» весит
+    1650 кг против 1400 у стационарного, и карточка конкурента с 1400 кг — это ровно
+    стационар, а с 1680 — шасси. Проверено: в 124 группах из 175 массы наших исполнений
+    различаются, в остальных 51 совпадают или пусты — там молчание, режем не мы.
+
+    Правило срабатывает ТОЛЬКО когда у конкурента признака исполнения нет вовсе: если он
+    его пишет, работает exec_filter, а он строже и точнее."""
+    if not cands: return cands
+    ot={k:v for k,v in exec_tags(o.get("name","")).items() if k in _EXEC_KEYS}
+    if not ot: return cands
+    sibs=[(t,w) for t,w in OUR_EXEC.get((brand, o["sn"]), ())
+          if t and w and t!=tuple(sorted(ot.items()))]
+    if not sibs: return cands
+    mine=o.get("we")
+    # ОТРИЦАТЕЛЬНЫЙ РЕЗУЛЬТАТ 19.08 (проверено, откачено): гасить правило, когда наш вес
+    # стоит у нескольких моделей бренда («константа, а не измерение»). Цель была спасти
+    # 13 карточек с копипастом веса — Chicago Pneumatic пишет 650 кг семи типоразмерам
+    # CPS 90G..160. Но у ЗИФ веса честно повторяются между типоразмерами (ПВ-16/1,0 и
+    # ПВ-18/1,0 оба 3800 кг), и правило гасло там, где резало верно: на проверочном
+    # наборе «разр2» возвращались 2 доказанно ложные пары при пороге и 2, и 3 модели.
+    # Те 13 карточек — не дефект правила, а битый вес в нашей выгрузке.
+    if not mine: return cands
+    others=[w for _,w in sibs if abs(w-mine)/max(w,mine) > 0.01]   # реально другая масса
+    if not others: return cands
+    out=[]
+    for c in cands:
+        ct=exec_tags((c.get("name") or "")+" "+(c.get("mnt") or ""))
+        cw=c.get("we")
+        if any(k in ct for k in _EXEC_KEYS) or not cw:
+            out.append(c); continue                    # исполнение размечено или веса нет
+        if abs(cw-mine) <= min(abs(cw-w) for w in others): out.append(c)
+    return out
+
+
 def learn_family_weights(cands):
     """Вес, который продавец ставит нескольким моделям бренда сразу, — не доказательство.
     Таких (площадка, бренд, вес) 4 475 из 17 357: Comaro LB 5,5-10/270 и LB 7,5-10/270
@@ -437,6 +480,10 @@ def exec_filter(o_name, cands):
 # карточка с открытым/неуказанным IP) и OUR_NOVSD (есть наша без частотника): если мы
 # сами различаем исполнения, молчаливый кандидат принадлежит базовой версии.
 OUR_BARE=set(); OUR_IPBASE={}; OUR_NOVSD=set()
+# (бренд, серия+номер) -> [(теги исполнения, масса)] по НАШИМ карточкам. Нужен правилу
+# exec_weight_pick ниже. Заполняется в load_ours_all.
+OUR_EXEC=defaultdict(list)
+_EXEC_KEYS=("дышло","тормоз","монтаж","кожух")
 _IPWORD=re.compile(r"[,(]?\s*ip\s*-?\s*\d{2}\)?", re.I)
 # «AC» + серия Atlas Copco в начале обозначения = Atlas Copco. Одиночное «AC» в общий
 # распознаватель брендов не добавить (это же «air cooled»: у нас 116 карточек вида
@@ -474,6 +521,7 @@ def pick_cands(o, pool, brand):
     rv=o.get("rv")
     if rv and rv!=1 and (brand, o["sn"]) in OUR_BARE:
         m=[c for c in m if c.get("rv") is not None]
+    m=exec_weight_pick(o, m, brand)
     # Привод: режем только явный конфликт обеих сторон (проп/спека, потом имя). На всех
     # данных 13.08 это ровно ОДНА пара — та самая доказанная ложная ЗИФ ШМ «ременная»;
     # в 21 495 парах привод совпадает, 6 711 односторонних молчаливо совместимы.
@@ -623,7 +671,7 @@ def load_ours_all():
             # контрпример — KM18,5-13рВ (наш IP23 ошибочен) — принятая цена: 8 верных
             # отсевов против 1 ложного.
             ipopen.append(k)
-    OUR_BARE.clear(); OUR_IPBASE.clear(); OUR_NOVSD.clear()   # OUR_IPBASE: (b,sn) -> имена открытых карточек без IP-метки
+    OUR_BARE.clear(); OUR_IPBASE.clear(); OUR_NOVSD.clear(); OUR_EXEC.clear()   # OUR_IPBASE: (b,sn) -> имена открытых карточек без IP-метки
     ours=defaultdict(list)
     for code,r in rows.items():
         man=(r.get("IP_PROP22553") or "").strip()
@@ -676,6 +724,9 @@ def load_ours_all():
         # Базой считается только ЯВНО открытая карточка (IP2x): «ip неизвестен» — не база
         # (17,5 тыс. наших карточек без ip делали правило тотальным и рвали верные пары).
         if oip is not None and _ip_open(oip): OUR_IPBASE.setdefault((b, sn), set()).add(_noip(name))
+        et={k:v for k,v in exec_tags(name).items() if k in _EXEC_KEYS}
+        if et: OUR_EXEC[(b, sn)].append((tuple(sorted(et.items())),
+                                         wev if wev and 1<=wev<=50000 else None))
         if rv in (None, 0): OUR_BARE.add((b, sn))
         if not vsd: OUR_NOVSD.add((b, sn))
         ours[b].append(dict(brand=b, sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
