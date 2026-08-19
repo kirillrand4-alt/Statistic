@@ -129,6 +129,16 @@ def gen_series(text, brand):
         if w in btoks or (re.match(r"[а-я]", w) and w in _CYR_PREP): continue
         suf=m.group(3) if (m.group(3) and m.group(3) not in UNITS and m.group(3) not in _STOPW) else ""
         return ((w+suf).translate(_CYR2LAT), float(m.group(2).replace(",",".")))
+    # ФОЛБЭК ВТОРОГО УРОВНЯ: серии в имени нет вовсе, только бренд и число — «Airpol 11/10»,
+    # «MIG 45», «ZUV – 250 VSD 8 бар». Это законная безбуквенная линейка, а не мусор: у нас
+    # 331 такая карточка-компрессор (zuv 202, kraftmann 48, airpol 45, mig 28) и 873 у
+    # конкурентов, причём пишут их обе стороны одинаково. Раньше они отбрасывались целиком —
+    # ser_of возвращал None, и карточка не доходила до матчера.
+    # Срабатывает ТОЛЬКО когда оба прохода выше вернули None, поэтому старые ключи целы.
+    m=re.search(r"\b(\d+(?:[.,]\d+)?)\b", s)
+    if m:
+        n=float(m.group(1).replace(",","."))
+        if 2<=n<=2000: return ("", n)
     return None
 
 # Режим ВКЛЮЧЁН (откат: VARIANT_STRICT=0). Буквы уходят из ключа семейства в метку
