@@ -1416,7 +1416,10 @@ FIELDS=[("кВт","kw",0.06),("бар","bar",0.10),("произв","fl",0.04)]
 
 def why(o, c):
     f=lambda v: ("%g"%v) if v is not None else "—"
-    parts=[f"{str(o['sn'][0]).upper()}{o['sn'][1]:g}", f"кВт {f(o['kw'])}≈{f(c['kw'])}",
+    # приставку категории («осш:oh») в тексте не показываем: она служебная, для читателя
+    # категория уже стоит отдельной колонкой
+    fam=str(o['sn'][0]).split(":",1)[-1].upper()
+    parts=[f"{fam}{o['sn'][1]:g}", f"кВт {f(o['kw'])}≈{f(c['kw'])}",
            f"бар {f(o['bar'])}≈{f(c['bar'])}", f"произв {f(o['fl'])}≈{f(c['fl'])}"]
     if o.get("ff"): parts.append("FF")
     if o.get("vsd"): parts.append("VSD")
@@ -1498,6 +1501,16 @@ def build_brand(brand, title, ours, cands, po=None):
         (ambig if any(len(v)>1 for v in per.values()) else clean).append((o, per, nexec))
     clean, ambig = drop_back_forks(clean, brand, cands), drop_back_forks(ambig, brand, cands)
     matched={id(o) for o,_,_ in clean+ambig}
+    # Компрессоры и «остальные товары» (осушители, ресиверы) — разные листы. В одной
+    # таблице их держать нельзя: у компрессора ключевые поля кВт/бар/производительность,
+    # у осушителя — пропускная способность и точка росы, у ресивера — объём и класс
+    # давления; колонки «кВт» и «бар» для половины строк были бы пустыми, а закупка
+    # эти категории ведёт отдельно. Категория берётся из ключа серии (kind_key).
+    _kd=lambda t: t[0].get("kind") or ""
+    other=[t for t in clean+ambig if _kd(t)]
+    clean=[t for t in clean if not _kd(t)]
+    ambig=[t for t in ambig if not _kd(t)]
+    KINDNAME={"осш":"осушитель","рес":"ресивер"}
 
     st=_styles()
     wb=openpyxl.Workbook(); wb.remove(wb.active)
@@ -1545,6 +1558,52 @@ def build_brand(brand, title, ours, cands, po=None):
         widths=[5,46,12]+[13]*6+[11,10,46,30,22]
         for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
         ws.freeze_panes="C2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
+    # 2б: Остальные товары — осушители и ресиверы. Отдельным листом и со своими
+    # колонками: у осушителя решают пропускная способность и точка росы, у ресивера —
+    # объём и класс давления, а кВт/бар для них либо пусты, либо значат другое.
+    # Своей цены у этих карточек в выгрузке нет (прайс-фид покрывает только компрессоры,
+    # 16 130 строк на 27 434 карточки каталога) — поэтому колонки «Δ к min» тут нет,
+    # сравнивать не с чем; лист показывает, ЧТО и ПОЧЁМ возят конкуренты.
+    ws=wb.create_sheet("Остальные товары")
+    HDR=["№","Наш товар","Категория","Ваша цена"]+COMPETITORS+["min конк.","Ключевые поля","Почему сцепилось"]
+    _hdr(ws, HDR, st)
+    r=1
+    for o,per,nexec in sorted(other, key=lambda t:(t[0].get("kind"), t[0]["name"])):
+        r+=1
+        ws.cell(r,1,r-1); ws.cell(r,2,o["name"])
+        ws.cell(r,3, KINDNAME.get(o.get("kind") or "", "компрессор"))
+        c4=ws.cell(r,4, o["price"] if o.get("price") else "нет цены")
+        if o.get("price"): c4.number_format="# ##0"
+        c4.hyperlink=o["url"]; c4.font=st["blue"]
+        prices=[]; first=None
+        for ci,site in enumerate(COMPETITORS):
+            cell=ws.cell(r,5+ci); cards=list(per.get(site,{}).values())
+            if not cards: cell.fill=st["nomatch"]; continue
+            priced=[c for c in cards if c["price"] and c["status"]!="снято"]
+            show=min(priced,key=lambda c:c["price"]) if priced else cards[0]
+            first=first or show
+            if show["price"]:
+                cell.value=show["price"]; cell.number_format="# ##0"; cell.hyperlink=show["url"]
+                if show["status"]=="снято": cell.font=st["strike"]
+                else: cell.font=st["blue"]; prices.append(show["price"])
+            else:
+                cell.value="снято" if show["status"]=="снято" else "По запросу"
+                cell.hyperlink=show["url"]
+                cell.font=st["strike"] if show["status"]=="снято" else st["blue"]
+            if len(cards)>1 or any(n>1 for n in nexec.get(site,{}).values()): cell.fill=st["warn"]
+        if prices: ws.cell(r,11,min(prices)).number_format="# ##0"
+        if o.get("kind")=="осш":
+            key=f"{o['fl']:g} л/мин" if o.get("fl") else "пропускная не указана"
+            if o.get("dew"): key+=" / точка росы " + "/".join(f"{v:g}" for v in sorted(o["dew"])) + " °C"
+        else:
+            key=f"{o['rv']:g} л" if o.get("rv") else "объём не указан"
+        if o.get("bar"): key+=f" / {o['bar']:g} бар"
+        ws.cell(r,12, key)
+        ws.cell(r,13, why(o, first))
+    widths=[5,52,12,12]+[13]*6+[11,38,44]
+    for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
+    ws.freeze_panes="C2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
+    n_other=len(other)
     # 3: GAP
     our_sn={o["sn"] for o in ours}
     groups=defaultdict(lambda: defaultdict(list))
@@ -1553,37 +1612,56 @@ def build_brand(brand, title, ours, cands, po=None):
         gk=(c["sn"], round(c["kw"]) if c["kw"] else None, round(c["bar"]) if c["bar"] else None,
             c["ff"] or 0, c["vsd"] or 0, c["rv"], c.get("cool"))   # возд/вод = разные товары
         groups[gk][c["site"]].append(c)
-    gap=[(gk,s) for gk,s in groups.items() if len(s)>=2]
-    gap.sort(key=lambda t:-len(t[1]))
-    ws=wb.create_sheet("GAP — нет у нас")
-    HDR=["№","Модель (у конкурентов, нас нет)","Серия","кВт","бар","Сайтов"]+COMPETITORS+["min конк."]
-    _hdr(ws, HDR, st); r=1
-    for gk,sites in gap:
-        r+=1; allc=[c for cs in sites.values() for c in cs]
-        ws.cell(r,1,r-1); ws.cell(r,2, max(allc,key=lambda c:len(c["name"]))["name"])
-        ws.cell(r,3, f"{str(gk[0][0]).upper()}{gk[0][1]:g}"); ws.cell(r,4,gk[1] or ""); ws.cell(r,5,gk[2] or "")
-        ws.cell(r,6,len(sites)); prices=[]
-        for ci,site in enumerate(COMPETITORS):
-            cell=ws.cell(r,7+ci); cs=sites.get(site)
-            if not cs: cell.fill=st["nomatch"]; continue
-            priced=[c for c in cs if c["price"] and c["status"]!="снято"]
-            show=min(priced,key=lambda c:c["price"]) if priced else cs[0]
-            if show["price"]:
-                cell.value=show["price"]; cell.number_format="# ##0"; cell.hyperlink=show["url"]
-                cell.font=st["strike"] if show["status"]=="снято" else st["blue"]
-                if show["status"]!="снято": prices.append(show["price"])
-            else:
-                cell.value="снято" if show["status"]=="снято" else "По запросу"
-                cell.hyperlink=show["url"]; cell.font=st["strike"] if show["status"]=="снято" else st["blue"]
-            if len(cs)>1: cell.fill=st["warn"]
-        if prices: ws.cell(r,13,min(prices)).number_format="# ##0"
-    widths=[5,52,10,7,7,8]+[13]*6+[11]
-    for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
-    ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
-    n_gap=len(gap)
+    # Два листа, а не один. GAP на 2+ площадках — это позиция, которую рынок реально
+    # возит: две независимые карточки подтверждают и модель, и порядок цены. GAP на
+    # ОДНОЙ площадке — гипотеза: там же сидят опечатки в названии, штучные заказы и
+    # наши же товары, у которых просто не совпал ключ. Смешивать их в одной таблице
+    # значит топить надёжную половину в шуме, поэтому лист разный и приоритет разный.
+    def _gap_sheet(gap, sheet, note):
+        gap=sorted(gap, key=lambda t:-len(t[1]))
+        ws=wb.create_sheet(sheet)
+        HDR=["№","Модель (у конкурентов, нас нет)","Категория","Серия","кВт","бар","Сайтов"]\
+            +COMPETITORS+["min конк."]
+        _hdr(ws, HDR, st); r=1
+        for gk,sites in gap:
+            r+=1; allc=[c for cs in sites.values() for c in cs]
+            ws.cell(r,1,r-1); ws.cell(r,2, max(allc,key=lambda c:len(c["name"]))["name"])
+            ws.cell(r,3, KINDNAME.get(sn_kind(gk[0]), "компрессор"))
+            fam=str(gk[0][0]).split(":",1)[-1].upper()
+            ws.cell(r,4, f"{fam}{gk[0][1]:g}"); ws.cell(r,5,gk[1] or ""); ws.cell(r,6,gk[2] or "")
+            ws.cell(r,7,len(sites)); prices=[]
+            for ci,site in enumerate(COMPETITORS):
+                cell=ws.cell(r,8+ci); cs=sites.get(site)
+                if not cs: cell.fill=st["nomatch"]; continue
+                priced=[c for c in cs if c["price"] and c["status"]!="снято"]
+                show=min(priced,key=lambda c:c["price"]) if priced else cs[0]
+                if show["price"]:
+                    cell.value=show["price"]; cell.number_format="# ##0"; cell.hyperlink=show["url"]
+                    cell.font=st["strike"] if show["status"]=="снято" else st["blue"]
+                    if show["status"]!="снято": prices.append(show["price"])
+                else:
+                    cell.value="снято" if show["status"]=="снято" else "По запросу"
+                    cell.hyperlink=show["url"]; cell.font=st["strike"] if show["status"]=="снято" else st["blue"]
+                if len(cs)>1: cell.fill=st["warn"]
+            if prices: ws.cell(r,14,min(prices)).number_format="# ##0"
+        widths=[5,52,12,10,7,7,8]+[13]*6+[11]
+        for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
+        ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(len(HDR))}{r}"
+        return len(gap)
+    n_gap =_gap_sheet([(gk,x) for gk,x in groups.items() if len(x)>=2],
+                      "GAP 2+ сайтов", "подтверждено двумя площадками")
+    n_gap1=_gap_sheet([(gk,x) for gk,x in groups.items() if len(x)==1],
+                      "GAP 1 сайт", "гипотеза, требует проверки")
     # 4: Проверить карточку — наша спека против конкурентов ТОЙ ЖЕ модели (по полю, см. card_issue)
-    ws=wb.create_sheet("Проверить карточку")
-    _hdr(ws, ["№","Наш товар","Ваша цена","Что не так (спека)","Подтверждение (конкурент)"], st)
+    ws=wb.create_sheet("Ложные данные у нас")
+    # Поле и «как должно быть» — ОТДЕЛЬНЫМИ колонками, а не одной фразой: строку из
+    # прошлой версии («мощность: у нас 33, у конкур. 16,1 (2 сайт.)») нельзя ни
+    # отсортировать, ни выгрузить на правку в Битрикс. Правое значение — то, на котором
+    # сошлись ≥2 независимые площадки на карточках ТОЙ ЖЕ модели (см. card_issue),
+    # поэтому колонка «Подтверждений» и ссылка на источник обязательны: это не мнение
+    # матчера, а улика, и правщик должен видеть, чем она подкреплена.
+    _hdr(ws, ["№","Наш товар","Категория","Ваша цена","Поле","У нас","Как должно быть",
+              "Расхождение","Подтверждений (сайтов)","Источник"], st)
     r=1
     for o in sorted(ours, key=lambda o:o["name"]):
         iss=card_issue(o, by_sn.get(o["sn"], []))
@@ -1591,15 +1669,20 @@ def build_brand(brand, title, ours, cands, po=None):
         label,ov,v1,nd,ratio,src=iss
         r+=1
         ws.cell(r,1,r-1); ws.cell(r,2,o["name"])
-        c3=ws.cell(r,3, o["price"] if o["price"] else "нет цены")
-        if o["price"]: c3.number_format="# ##0"
-        c3.hyperlink=o["url"]; c3.font=st["blue"]
-        ws.cell(r,4, f"{label}: у нас {ov:g}, у конкур. {v1:g} ({nd} сайт.)").font=st["orange"]
-        lk=ws.cell(r,5, f"[{src['site']}] {src['name'][:50]}")
+        ws.cell(r,3, KINDNAME.get(o.get("kind") or "", "компрессор"))
+        c4=ws.cell(r,4, o["price"] if o["price"] else "нет цены")
+        if o["price"]: c4.number_format="# ##0"
+        c4.hyperlink=o["url"]; c4.font=st["blue"]
+        ws.cell(r,5, label)
+        ws.cell(r,6, ov).font=st["orange"]
+        ws.cell(r,7, v1)
+        ws.cell(r,8, f"×{ratio:.2g}" if ratio>=1.5 else f"{(ratio-1)*100:.0f}%")
+        ws.cell(r,9, nd)
+        lk=ws.cell(r,10, f"[{src['site']}] {src['name'][:50]}")
         lk.hyperlink=src["url"]; lk.font=st["blue"]
-    widths=[5,46,12,40,52]
+    widths=[5,46,12,12,16,12,16,12,10,52]
     for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
-    ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(5)}{r}"
+    ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(10)}{r}"
     n_chk=r-1
     # 5: Снятые у конкурентов (карточки компрессоров со статусом «снято»)
     ws=wb.create_sheet("Снятые у конкурентов")
@@ -1625,6 +1708,42 @@ def build_brand(brand, title, ours, cands, po=None):
     widths=[5,60,18,12,10,50,12]
     for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
     ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(7)}{r}"
+    # 5б: Снятые СЕРИИ — не отдельная карточка, а весь ряд ушёл с рынка.
+    # Отличать от снятой карточки обязательно: одна снятая карточка у одного продавца
+    # чаще значит «кончилось на складе» или «переехало на новый слаг», а вот когда ВСЕ
+    # карточки ключа у ВСЕХ продавцов помечены снятыми — это конец жизни серии. Если мы
+    # такую серию ещё продаём, это прямой повод пересмотреть закупку, поэтому колонка
+    # «у нас» тут главная. Порог — 2 карточки: одна снятая карточка на весь ключ не
+    # доказывает ничего, кроме того, что у продавца её нет.
+    by_key=defaultdict(list)
+    for c in cands: by_key[c["sn"]].append(c)
+    dead=[(k, cs) for k, cs in by_key.items()
+          if len(cs) >= 2 and all(c["status"] == "снято" for c in cs)]
+    dead.sort(key=lambda t: (-len({c["site"] for c in t[1]}), -len(t[1])))
+    ws=wb.create_sheet("Снятые серии")
+    _hdr(ws, ["№","Серия","Категория","Карточек","Сайтов","Пример карточки",
+              "Была цена","У нас в продаже","Наша цена"], st)
+    r=1
+    for k, cs in dead:
+        r+=1
+        ws.cell(r,1,r-1)
+        ws.cell(r,2, f"{str(k[0]).split(':',1)[-1].upper()}{k[1]:g}")
+        ws.cell(r,3, KINDNAME.get(sn_kind(k), "компрессор"))
+        ws.cell(r,4, len(cs)); ws.cell(r,5, len({c["site"] for c in cs}))
+        ex=max(cs, key=lambda c: len(c["name"] or ""))
+        nm=ws.cell(r,6, (ex["name"] or "")[:70]); nm.hyperlink=ex["url"]; nm.font=st["strike"]
+        pr=[c["price"] for c in cs if c["price"]]
+        if pr: ws.cell(r,7, min(pr)).number_format="# ##0"
+        oo=our_by_sn.get(k, [])
+        if oo:
+            o=oo[0]
+            l=ws.cell(r,8, f"{o['name'][:46]}" + (f" (+{len(oo)-1})" if len(oo)>1 else ""))
+            l.hyperlink=o["url"]; l.font=st["blue"]
+            if o.get("price"): ws.cell(r,9, o["price"]).number_format="# ##0"
+    widths=[5,14,12,10,8,60,12,50,12]
+    for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
+    ws.freeze_panes="B2"; ws.auto_filter.ref=f"A1:{get_column_letter(9)}{r}"
+    n_dead=len(dead)
     # 6: Особо проверить — НЕТ СЕРИИ в названии (power-only: kw+bar+fl равны, power_only.py)
     n_po=0
     if po:
@@ -1665,8 +1784,8 @@ def build_brand(brand, title, ours, cands, po=None):
         n_po=r-1
     path=os.path.join(OUTDIR, f"{title}_spec_review.xlsx")
     wb.save(path)
-    return dict(clean=len(clean), ambig=len(ambig), no=n0, gap=n_gap, chk=n_chk, sny=len(sny),
-                po=n_po, path=path)
+    return dict(clean=len(clean), ambig=len(ambig), no=n0, gap=n_gap, gap1=n_gap1,
+                other=n_other, chk=n_chk, sny=len(sny), dead=n_dead, po=n_po, path=path)
 
 def build_all(only=None, min_ours=5, min_cands=5):
     os.makedirs(OUTDIR, exist_ok=True)
@@ -1683,8 +1802,9 @@ def build_all(only=None, min_ours=5, min_cands=5):
         title=b.capitalize() if b!="ir" else "IngersollRand"
         r=build_brand(b, title, ours_all.get(b,[]), cands_all.get(b,[]), po=po)
         res[b]=r
-        print(f"{b:<14} матч {r['clean']:>4} | неодн {r['ambig']:>3} | без {r['no']:>4} | "
-              f"GAP {r['gap']:>4} | карточки {r['chk']:>3} | снятые {r['sny']:>4} | "
+        print(f"{b:<14} матч {r['clean']:>4} | неодн {r['ambig']:>3} | ост.товары {r['other']:>4} | "
+              f"без {r['no']:>4} | GAP2+ {r['gap']:>4} | GAP1 {r['gap1']:>4} | "
+              f"ложн.данные {r['chk']:>3} | снятые {r['sny']:>4} | снят.серии {r['dead']:>3} | "
               f"без серии {r['po']:>3}")
     return res
 
