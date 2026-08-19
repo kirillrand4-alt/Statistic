@@ -589,6 +589,14 @@ def _mkey(name, brand):
 
 # (площадка, бренд, вес) с более чем одной моделью: такой вес продавец раздаёт по
 # семейству, и доказательством он быть не может. Заполняется в load_comp_all.
+def sn_kind(sn):
+    """Категория, зашитая приставкой в ключ серии: '' компрессор, 'осш', 'рес'.
+    См. kind_key() в brand_spec_review — ключ там и собирается."""
+    try: head = sn[0]
+    except (TypeError, IndexError): return ""
+    return head.split(":", 1)[0] if ":" in head else ""
+
+
 FAMILY_WEIGHT = set()
 # То же с НАШЕЙ стороны: (бренд, вес), стоящий у трёх и более наших моделей.
 OUR_FAMWEIGHT = set()
@@ -613,8 +621,14 @@ def weight_confirms(o, c):
     указывает; это молчание, а не конфликт, и кодом оно не лечится."""
     a, b = o.get("we"), c.get("we")
     if not (a and b) or abs(a - b) / max(a, b) > 0.01: return False
-    if (c.get("site"), c.get("brand"), round(b)) in FAMILY_WEIGHT: return False
-    if (o.get("brand"), round(a)) in OUR_FAMWEIGHT: return False
+    # Категория входит в ключ: 19.08, когда в матчер завели осушители и ресиверы, вес
+    # 400 кг у осушителя и у компрессора одного бренда стали «одним весом на две модели»
+    # — семейным, и правило гасло там, где раньше работало (−2 карточки, 5 разъехавшихся
+    # наборов пар). Категорию берём из самого ключа серии (kind_key), поэтому вызывающим,
+    # которые про категории не знают, ничего менять не надо: у них префикса нет и ключ
+    # получается прежним.
+    if (c.get("site"), c.get("brand"), sn_kind(c.get("sn")), round(b)) in FAMILY_WEIGHT: return False
+    if (o.get("brand"), sn_kind(o.get("sn")), round(a)) in OUR_FAMWEIGHT: return False
     da, db = o.get("dim"), c.get("dim")
     return not (da and db and max(abs(x - y) / max(x, y) for x, y in zip(da, db)) > 0.20)
 

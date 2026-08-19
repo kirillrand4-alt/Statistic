@@ -10,12 +10,12 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from collections import defaultdict, Counter
 from matcher import brand_of, BRAND_ALIASES, brand_from_text
-from spec_match import (num, sane_kw, bar_value, bar_from_text, flow_value, bar_flow_pairs,
+from spec_match import (PARTS_RE, num, sane_kw, bar_value, bar_from_text, flow_value, bar_flow_pairs,
                         series_num, text_flags, is_compressor, match, receiver_filter, ff_filter,
                         ip_filter, ip_class, _ip_open, cool_filter, cool_class, is_flow_key, card_issue,
                         prefer_exact_variant, VARIANT_MARKS, model_code,
                         variant_letters, same_variant, VSD_MARK, dim_value,
-                        FAMILY_WEIGHT, OUR_FAMWEIGHT)
+                        FAMILY_WEIGHT, OUR_FAMWEIGHT, sn_kind)
 from atlas_need_specs import is_product_url, slug, dm, best_name, load_universe
 from scrape_files import U, OURS_DIR, find_ours
 
@@ -51,6 +51,141 @@ def cat_hint(url: str) -> str:
     if _CAT_PARTS.search(path):
         return ""
     return "компрессор " if _CAT_COMPR.search(path) else ""
+
+
+# --- категория товара: компрессор / осушитель / ресивер ----------------------------------
+# До 19.08 матчер видел ТОЛЬКО компрессоры: и наш загрузчик, и загрузчик конкурентов
+# резали всё, на чём is_compressor вернул False. Мимо проходило 2 865 наших осушителей,
+# 312 наших ресиверов и 9 826 + 399 карточек конкурентов — сцепка по ним была ровно 0.
+#
+# Почему категория уезжает В КЛЮЧ СЕРИИ, а не в отдельное поле кандидата. Ключ (серия,
+# номер) вырожден настолько, что осушитель и компрессор одного бренда сталкиваются
+# регулярно: Remeza «РС-500» (ресивер 500 л) и Remeza ВК-500 дают соседние ключи, ATS
+# «DGO 150» — тот же ('dgo', 150), что мог бы дать блок компрессора. Отдельным полем
+# пришлось бы править и match(), и receiver_filter, и OUR_BARE, и семейные веса, и
+# SKU_LETTER — шесть мест, каждое со своим риском. Префикс в ключе разводит категории
+# ОДНИМ действием во всех шести сразу, а для компрессоров ключ остаётся байт в байт
+# прежним (kind_of отдаёт им пустой префикс) — регрессии быть не может по построению.
+_DRY_RE = re.compile(r"осушител|осушк|osushitel|dryer|рефрижератор|адсорбцион", re.I)
+_RCV_RE = re.compile(r"ресивер|resiver|receiver|воздухосборник", re.I)
+
+
+def kind_of(text, hint=""):
+    """'' = компрессор, 'осш' = осушитель, 'рес' = ресивер, None = не наш товар.
+
+    Порядок проверок значим: is_compressor ПЕРВЫМ. «Винтовой компрессор с осушителем
+    на ресивере 500 л» — это компрессор, а слова «осушитель» и «ресивер» в нём атрибуты
+    комплектации; на них же держатся ff_filter и receiver_filter. Поменяй порядок — и
+    сотни компрессоров уедут в чужую категорию, потеряв все свои пары."""
+    t = str(text)
+    if is_compressor(hint + t): return ""
+    k = "рес" if _RCV_RE.search(t) else ("осш" if _DRY_RE.search(t) else None)
+    #  ^ ресивер проверяем раньше осушителя: «ресивера с осушителем» не бывает, а вот
+    #    «осушитель на ресивере 500 л» в именах встречается.
+    if k is None: return None
+    # Запчасть К осушителю — не осушитель. Слова категории из строки вырезаем (в PARTS_RE
+    # «осушител» стоит именно как part-маркер — до этого захода осушители были для матчера
+    # запчастями), и если остаток ВСЁ РАВНО part — это «фильтр для осушителя», «картридж
+    # ресивера», «сепаратор». «для компрессор» из проверки исключаем: осушитель законно
+    # называют «осушителем для компрессора», и это товар, а не деталь.
+    rest = _DRY_RE.sub(" ", _RCV_RE.sub(" ", t))
+    rest = re.sub(r"для\s+компрессор\w*", " ", rest, flags=re.I)
+    if PARTS_RE.search(" " + rest.replace("_", "-") + " "): return None
+    # PARTS_RE писан под компрессор и «комплект»/«ЗИП» по-русски не ловит (только латиницей
+    # komplekt/nabor). Для этих двух категорий это как раз частый вид запчасти: «Комплект ЗИП
+    # ресивера». Проверяем ТОЛЬКО начало строки: «Осушитель ... в комплекте с фильтрами» —
+    # законный товар, и вырезать его нельзя.
+    return None if re.match(r"\s*(комплект|зип|kit)\b", t, re.I) else k
+
+
+def kind_key(sn, kind):
+    """Ключ серии с приставкой категории. Компрессор ('' ) — ключ без изменений."""
+    return sn if not kind else (kind + ":" + sn[0], sn[1])
+
+
+def num_dew(raw):
+    """Точка росы -> frozenset значений °C, или None если не указана.
+
+    Именно МНОЖЕСТВО, а не число: у переключаемых машин в поле стоит «-40/-70», и это
+    не диапазон и не «примерно -55», а два паспортных режима одной машины. Такая карточка
+    обязана сходиться и с «-40», и с «-70» у конкурента — по пересечению множеств.
+    Плюс — знак: «-» здесь несёт весь смысл (+3 рефрижераторный против -40 адсорбционный),
+    поэтому обычный num() тут не годится, он знак теряет."""
+    vals = {int(float(x)) for x in re.findall(r"[-+]?\d+(?:[.,]\d+)?",
+                                              str(raw or "").replace(",", "."))}
+    vals = {v for v in vals if -100 <= v <= 60}       # санити: артикулы и годы мимо
+    return frozenset(vals) or None
+
+
+def dew_ok(a, b):
+    """Точка росы совместима? Молчание любой стороны = совместимо (правило тристейта)."""
+    return not a or not b or bool(a & b)
+
+
+# Точка росы, записанная В ИМЕНИ: «ALM-CD 430 (-70°С)», «КМ-АДСГ-110 (-40°С)», «PH120HE -70С».
+# Проверка агентами 19.08 поймала на этом ложную пару: наш ALM-CD 430 (-70°С), 4100 л/мин
+# сцепился с их ALM-CD 430 (-40С), 6700 л/мин — корпус один (430 кг, 16 бар), спек-таблицы
+# точки росы у продавца нет вовсе, а расхождение производительности в 63% прошло потому,
+# что код модели совпал побуквенно (same_model снимает проверку производительности именно
+# на такой случай). Имя — единственный источник, который знает разницу, и знает её у обеих
+# сторон. Требуем минус и букву C: «160/10/45» (температура воздуха на входе) сюда не
+# попадёт, там знака нет.
+_DEW_NAME = re.compile(r"[-−]\s?(\d{1,2})\s*°?\s*[cсCС](?![a-zа-яё])")
+
+
+def dew_from_name(text):
+    v = {-int(x) for x in _DEW_NAME.findall(str(text or ""))}
+    v = {x for x in v if -100 <= x <= 0}
+    return frozenset(v) or None
+
+
+# Класс давления ресивера стоит в коде модели, а не только в таблице: «Ресивер РВ 500/16»
+# (16 бар) против нашего «Бежецк РВ 500-02/10» (10 бар) — доказанная ложная пара 19.08,
+# объём совпал (500 л), а спека давления у продавца пустая, и молчание пропустило пару.
+# Хвост читаем в двух единицах, потому что заводы пишут по-разному: DNT «РВ-10,0-1,6» —
+# это 1,6 МПа = 16 бар, Бежецк «РВ 500-02/10» — сразу бары. Разбор одинаковый с обеих
+# сторон, поэтому правило может только сойтись или явно разойтись, но не перекосить.
+# Два хвоста, а не один: бары пишут ПОСЛЕ КОСОЙ и целым («500/16», «500-02/10»), МПа —
+# после дефиса и всегда с десятичной запятой («РВ-10,0-1,6» = 16 бар). Разделять их
+# обязательно: «Ресивер РВ 900.800-04» — это ревизия исполнения, и общий хвостовой
+# разбор превращал её в 40 бар (0,4 МПа), то есть выдумывал давление на пустом месте.
+_RCV_BAR = re.compile(r"/(\d{1,2})\s*$")
+_RCV_MPA = re.compile(r"-(\d[.,]\d)\s*$")
+
+
+# Числовой код модели «160/10/45»: производительность / давление / макс. температура
+# воздуха на входе. Все три сегмента — заводской SKU, а не описание: у ЗИФ мы САМИ держим
+# /45 и /80 отдельными карточками в 35 базах моделей из 35, где такой код встречается.
+# Проверка агентами 19.08 нашла на этом ложную пару: наш АРМ-ОРМ-160/10/45 (2200 кг)
+# сцепился с их АРМ-ОРМ-160/10/80 (2600 кг). Средний сегмент — давление, и оно тоже
+# перекрещивалось (11,5/10 против 11,5/16), потому что спека давления у продавца пустая
+# и bar молчал с одной стороны. Правило направленное: код нужен ОБЕИМ сторонам, иначе
+# молчание (кодом такого вида размечены 71 наша карточка из 2 850).
+_NUMCODE = re.compile(r"\b\d+(?:[.,]\d+)?(?:/\d+(?:[.,]\d+)?){2,}")
+
+
+def num_code(text):
+    m = _NUMCODE.search(str(text or ""))
+    return m.group(0).replace(",", ".") if m else None
+
+
+def num_code_ok(a, b):
+    """Числовые коды моделей совместимы? Молчание любой стороны = совместимо."""
+    ca, cb = num_code(a), num_code(b)
+    return not ca or not cb or ca == cb
+
+
+def rcv_bar(text):
+    t = str(text or "").strip().rstrip(")").strip()
+    m = _RCV_BAR.search(t)
+    if m:
+        v = float(m.group(1))
+        return v if 6 <= v <= 40 else None
+    m = _RCV_MPA.search(t)
+    if m:
+        v = float(m.group(1).replace(",", ".")) * 10
+        return v if 6 <= v <= 40 else None
+    return None
 
 
 # --- дженерик-серия: первое «слово+число» после чистки -----------------------------------
@@ -97,7 +232,7 @@ def _with_variant(sn, text):
         if mk not in fam: fam += mk
     return (fam, n)
 
-def gen_series(text, brand):
+def gen_series(text, brand, kind=""):
     s=" "+str(text).lower().replace("_"," ")+" "
     s=re.sub(r"\b(new|новый|новая|нов)\b"," ",s)         # маркетинг-слова не серия (COMARO MD NEW 55)
     # Класс защиты — не номер модели. У pnevmoteh хвост URL «...-22-kvt-ip23» давал
@@ -115,7 +250,13 @@ def gen_series(text, brand):
         w=m.group(1)
         # «plus» сразу после бренда перед числом = РЕАЛЬНАЯ серия (Fini PLUS 11-08), не маркетинг.
         # В «VEGA 11 R PLUS» серией становится vega (раньше в строке) — plus туда не попадёт.
-        if (w in _STOPW and w!="plus") or w in btoks: continue
+        # Стоп-слово, ПРИКЛЕЕННОЕ к числу без пробела, стоп-словом не является: у
+        # Pneumatech серия так и пишется — «PH120HE», «PH140S», и токен ph (он в списке
+        # как маркер фазы «3 PH 50 HZ») убивал 54 наших осушителя и 417 карточек
+        # конкурентов. Послабление действует ТОЛЬКО вне компрессоров: у компрессоров
+        # ключ вылизан замерами, и трогать его ради чужой категории нельзя.
+        glued = kind and not re.search(r"\s", m.group(0)[len(w):m.group(0).find(m.group(4))])
+        if ((w in _STOPW and w!="plus") and not glued) or w in btoks: continue
         # одиночная ЛАТИНСКАЯ буква между серией и числом = вариант линейки (GENESIS I = инвертор);
         # кириллические одиночки (предлоги «с»/«и») игнорируются.
         # «+» приклеенный к числу (ARIACOM HCA+110) = часть имени серии (HCA+ ≠ HCA), пишется
@@ -213,11 +354,11 @@ def boge_split(tok):
     return (m.group(1), m.group(2)) if m else (tok, "")
 
 
-def base_family(text, brand):
+def base_family(text, brand, kind=""):
     """Семейство без буквенного хвоста: первый буквенный токен кода модели + номер.
        наш «ET SL 45 H AC 10 бар»               -> ('sl', 45)
        их  «ET-Compressors SL 45 HAC (IP23) 10» -> ('sl', 45)"""
-    sn = gen_series(text, brand)
+    sn = gen_series(text, brand, kind)
     if not sn: return sn
     # Предлоги отсекаем ТЕМ ЖЕ списком, что и fallback gen_series, иначе два места
     # расходятся: у compressortyt имя вида «Винтовой компрессор С прямым приводом
@@ -236,10 +377,14 @@ def base_family(text, brand):
     return sn
 
 
-def ser_of(text, brand):
-    if brand=="atlas": return series_num(text)
-    if VARIANT_STRICT: return base_family(text, brand)
-    return _with_variant(gen_series(text, brand), text)
+def ser_of(text, brand, kind=""):
+    # Atlas разбирается ОТДЕЛЬНОЙ схемой (SER_ATLAS: GA/ZR/ZT/G/XA…), и она компрессорная:
+    # на «CD110+», «FD 260», «FX 7» она возвращает None, поэтому 148 наших осушителей
+    # Atlas Copco и 818 карточек конкурентов не доходили до матчера вовсе. У осушителей
+    # заводская схема обычная «буквы+число», её разбирает общий gen_series — ('cd', 110).
+    if brand=="atlas" and not kind: return series_num(text)
+    if VARIANT_STRICT: return base_family(text, brand, kind)
+    return _with_variant(gen_series(text, brand, kind), text)
 
 
 def variant_filter(o_name, cands, brand, o_vsd=None):
@@ -282,9 +427,10 @@ def alien_letter_fallback(ours_marks, marks, brand):
     площадке (SKU_LETTER), из фолбэка исключены. Замер: убирает 20 пар, из них 12
     доказанно ложные (KraftMachine AB/AV, «MAS+» — морское исполнение Atlas, ARIACOM
     «winter pack», DALGAKIRAN Eagle-H)."""
-    alpha = _OUR_ALPHA.get(brand)
+    kd = sn_kind(marks[0][0].get("sn")) if marks else ""
+    alpha = _OUR_ALPHA.get((brand, kd))
     if not alpha: return []
-    theirs = SKU_LETTER.get(brand) or frozenset()
+    theirs = SKU_LETTER.get((brand, kd)) or frozenset()
     out = []
     for c, m in marks:
         extra = m - ours_marks
@@ -343,7 +489,7 @@ def learn_family_weights(cands):
     seen = defaultdict(set)
     for b, lst in cands.items():
         for c in lst:
-            if c.get("we"): seen[(c["site"], b, round(c["we"]))].add(c["sn"])
+            if c.get("we"): seen[(c["site"], b, sn_kind(c["sn"]), round(c["we"]))].add(c["sn"])
     FAMILY_WEIGHT.clear()
     FAMILY_WEIGHT.update(k for k, v in seen.items() if len(v) > 1)
     # Наша сторона заливает вес шаблоном не реже: у KraftMachine 41 карточка носит вес
@@ -356,7 +502,7 @@ def learn_family_weights(cands):
     ours_seen = defaultdict(set)
     for b, lst in load_ours_all().items():
         for o in lst:
-            if o.get("we"): ours_seen[(b, round(o["we"]))].add(o["sn"])
+            if o.get("we"): ours_seen[(b, sn_kind(o["sn"]), round(o["we"]))].add(o["sn"])
     OUR_FAMWEIGHT.clear()
     OUR_FAMWEIGHT.update(k for k, v in ours_seen.items() if len(v) >= 3)
 
@@ -369,15 +515,16 @@ def learn_sku_letters(cands):
     for b, lst in cands.items():
         by = defaultdict(list)
         for c in lst: by[(c["sn"], c["site"])].append(c)
-        acc = set()
-        for grp in by.values():
+        acc = defaultdict(set)         # по категориям: буквы осушителей ничего не говорят
+        for grp in by.values():        # про исполнения компрессоров, и наоборот
             if len(grp) < 2: continue
             ms = [variant_letters(c.get("name") or slug(c["url"]).replace("_"," "), b) for c in grp]
             for a in ms:
                 for d in ms:
                     if a is d or not a: continue
-                    if (a & d) == d and (a - d): acc |= (a - d)
-        if acc: SKU_LETTER[b] = acc
+                    if (a & d) == d and (a - d): acc[sn_kind(grp[0]["sn"])] |= (a - d)
+        for kd, v in acc.items():
+            if v: SKU_LETTER[(b, kd)] = v
 
 
 def vsd_mark_fallback(o_name, cands, brand, o_vsd):
@@ -553,6 +700,13 @@ def pick_cands(o, pool, brand):
     карточек с матчем и +1 028 пар, ни одна карточка матч не теряет.
     """
     m = cool_filter(o.get("cool"), ip_filter(o.get("ip"), match(o, pool), o))
+    # Точка росы — паспортный класс осушителя, а не опция: -20 °C (рефрижераторный) и
+    # -40 °C (адсорбционный) при одной пропускной способности это разные машины и разные
+    # деньги. Правило направленное, как все остальные: молчание любой стороны совместимо
+    # (dew_ok), режем только явный конфликт двух заполненных значений.
+    if o.get("kind") == "осш":
+        m = [c for c in m if dew_ok(o.get("dew"), c.get("dew"))]
+        m = [c for c in m if num_code_ok(o.get("name"), c.get("name") or slug(c["url"]))]
     m = exec_filter(o.get("name", ""), m)
     m = (variant_filter(o.get("name", ""), m, brand, o.get("vsd")) if VARIANT_STRICT
          else prefer_exact_variant(o.get("name", ""), m))
@@ -743,10 +897,16 @@ def load_ours_all():
         # важнее пропа» нельзя — сломается «BERG ATOM А-11Е» (проп atom верен, имя врёт),
         # «WIS 40V A» (проп ekomak) и «SIGMA PET AIR» (проп kaeser).
         if b=="mig" and brand_from_text(name)=="airrus": b="airrus"
-        if not is_compressor(name+" "+code): continue
-        sn=ser_of(name+" "+code, b)
+        kind = kind_of(name+" "+code)
+        if kind is None: continue
+        sn=ser_of(name+" "+code, b, kind)
         if not sn: continue
+        sn=kind_key(sn, kind)
         ff,vsd,rv = text_flags(name+" "+code)
+        # У осушителя слово «осушитель» в имени — это КАТЕГОРИЯ, а не комплектация, и
+        # ff=1 с обеих сторон было бы шумом, а не признаком. Ресивер такой же: rv у него
+        # заполняется ниже из пропа объёма, а не из хвоста имени компрессора.
+        if kind: ff=None
         ff,rv,vsd = suffix_flags(name, b, ff, rv, vsd)
         # rv==1 значит «ресивер упомянут, объём неизвестен» (хвост TM в имени), а не знание
         # объёма — проп 22564 знает его точно и обязан перебивать единицу. Ровно так уже
@@ -762,10 +922,25 @@ def load_ours_all():
         fl = fix_flow_scale(fl, sane_kw(num(r.get("IP_PROP22562"))),
                             num(r.get("IP_PROP22555")),
                             bar_value(r.get("IP_PROP22573")), name)
+        dew=None
+        if kind=="осш":
+            # Объём ресивера у осушителя — всегда мусор: text_flags берёт число из хвоста
+            # кода модели («ATS DSI 150» -> rv=150 л), а ресивера у осушителя нет вовсе.
+            # Найдено проверкой агентами 19.08; на верные пары не влияло, но при живых
+            # ресиверах рядом такое поле начнёт склеивать осушитель с объёмом ресивера.
+            rv=None
+            # Главное число осушителя — ПРОПУСКНАЯ способность (23035, заполнена у 2 675
+            # из 2 795), а не производительность: 22571 стоит всего у 92 карточек. 22572
+            # называется так же, как 23035, но заполнена у 140 — только фолбэком.
+            # fix_flow_scale тут не применяем: он калибрует л/мин по кВт компрессора
+            # (100-170 л/мин на кВт), а у осушителя 4,5 кВт на 11 000 л/мин — своя физика.
+            fl = (flow_value(r.get("IP_PROP23035"), "л/мин")
+                  or flow_value(r.get("IP_PROP22572"), "л/мин") or fl)
+            dew = num_dew(r.get("IP_PROP22585")) or dew_from_name(name)
         nm,url,p = price.get(code.lower(), (name, f"https://prokompressor.ru/catalog/{code}/", None))
         wev=num(r.get("IP_PROP22555")); drv=(r.get("IP_PROP22601") or "").strip().lower() or None
         if drv: drv="ремен" if "ремен" in drv else ("прямой" if "прям" in drv else None)
-        if str(r.get("IP_PROP22565","")).strip().lower()=="да": ff=1   # проп «осушитель» (направл. флаг — безопасно)
+        if not kind and str(r.get("IP_PROP22565","")).strip().lower()=="да": ff=1   # проп «осушитель» (направл. флаг — безопасно)
         cl=cool_class(name+" "+code, r.get("IP_PROP22669"))
         # W-хвост после числа = водяное охлаждение — ТОЛЬКО у брендов с доказанным
         # значением буквы (dalgakiran: живая страница «IMPETUS W — с водяным охлаждением»;
@@ -789,18 +964,22 @@ def load_ours_all():
         if rv in (None, 0): OUR_BARE.add((b, sn))
         if not vsd: OUR_NOVSD.add((b, sn))
         ours[b].append(dict(brand=b, sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
-                            bar=bar_value(r.get("IP_PROP22573")) or bar_from_text(name+" "+code),
+                            bar=(bar_value(r.get("IP_PROP22573")) or bar_from_text(name+" "+code)
+                                 or (rcv_bar(name) if kind=="рес" else None)),
                             fl=fl, oil=oil_of(r.get("IP_PROP22583")), ff=ff, vsd=vsd, rv=rv,
                             name=nm or name, url=url, price=p,
                             ip=oip,
                             cool=cl, eng=eng_make(name, code, *r.values()),
                             we=(wev if wev and 1<=wev<=50000 else None), dr=drv,
-                            dim=dim_value(r.get("IP_PROP22556"), "мм")))
+                            dim=dim_value(r.get("IP_PROP22556"), "мм"),
+                            kind=kind, dew=dew))
     unglue_code(ours)
     learn_vsd_marks(ours)
     _OUR_ALPHA.clear()
     for b, lst in ours.items():        # алфавит меток нашего каталога — см. alien_letter_fallback
-        _OUR_ALPHA[b] = set().union(*(variant_letters(o["name"], b) for o in lst)) if lst else set()
+        for kd in {sn_kind(o["sn"]) for o in lst}:
+            sub = [o for o in lst if sn_kind(o["sn"]) == kd]
+            _OUR_ALPHA[(b, kd)] = set().union(*(variant_letters(o["name"], b) for o in sub))
     return ours
 
 
@@ -901,6 +1080,14 @@ def learn_vsd_marks(ours, min_votes=6):
         marks = {t for t, n in c.items() if n >= min_votes}
         if marks: VSD_MARK[b] = marks
 
+# ОТРИЦАТЕЛЬНЫЙ РЕЗУЛЬТАТ 19.08 (проверено, не делаем): развести VSD_MARK по категориям,
+# как разведены SKU_LETTER и _OUR_ALPHA. Ключ (бренд, категория) ослепляет variant_letters
+# — она вычитает буквы частотника, читая таблицу по ОДНОМУ бренду, и молча перестаёт их
+# вычитать. Замер: −48 карточек, целиком ATMOS ST Vario+ и COMARO MD-P (там пара держится
+# ровно на этом вычитании). А развод при этом ничего не даёт: осушители и ресиверы не
+# вносят в таблицу НИ ОДНОЙ буквы (21 бренд, все — категория «компрессор»), потому что
+# порог в 6 голосов набирается только внутри пар наших карточек с разным частотником.
+
 # --- конкуренты по брендам ----------------------------------------------------------------
 def load_comp_all():
     names, specs, _ = load_universe()
@@ -932,9 +1119,12 @@ def load_comp_all():
         b=brand_of(u, nm)
         if not b: continue
         text=(nm or "")+" "+slug(u)
-        if not any(ch.isdigit() for ch in text) or not is_compressor(cat_hint(u)+text): continue
-        sn=ser_of(text, b)
+        if not any(ch.isdigit() for ch in text): continue
+        kind = kind_of(text, cat_hint(u))
+        if kind is None: continue
+        sn=ser_of(text, b, kind)
         if not sn: continue
+        sn=kind_key(sn, kind)
         d=specs.get(u, {})
         kw=None; oil=None; raw_bar=raw_flow=fkey=None; cool_raw=""
         for k,v in d.items():
@@ -945,6 +1135,7 @@ def load_comp_all():
             if oil is None and "безмасл" in kl: oil=oil_of(v)
             if not cool_raw and "охлажд" in kl: cool_raw=str(v)
         ff,vsd,rv = text_flags(nm) if nm else text_flags(slug(u))
+        if kind: ff=None          # см. тот же комментарий в загрузчике наших карточек
         ff,rv,vsd = suffix_flags(nm or slug(u), b, ff, rv, vsd)
         bsuf = berg_suffix(text) if b=="berg" else None
         if bsuf is not None:           # заводская схема ВК: код модели ПОЛНЫЙ, отсутствие
@@ -957,6 +1148,19 @@ def load_comp_all():
                 vsd = 1 if "e" in bsuf else 0
             if "o" in bsuf: ff=1
         we=dr=sku2=dim=None; lwh={}
+        dew=None
+        if kind=="осш":
+            rv=None       # см. тот же комментарий в загрузчике наших карточек
+            # У осушителя «пропускная способность» и «производительность» встречаются в
+            # одной таблице (первая — по воздуху, вторая иногда про компрессор-пару).
+            # is_flow_key пропускает обе и берёт ту, что раньше в словаре — для осушителя
+            # это лотерея, поэтому пропускную выбираем ЯВНО и перебиваем ею raw_flow.
+            for k,v in d.items():
+                kl=k.lower()
+                if "пропускн" in kl and num(v): raw_flow=v; fkey=kl; break
+            dew=next((num_dew(v) for k,v in d.items()
+                      if "точка росы" in k.lower() or "точки росы" in k.lower()), None)
+            dew=dew or dew_from_name(nm or slug(u).replace("-"," "))
         for k,v in d.items():
             kl=k.lower()
             if we is None and ("вес" in kl or "масса" in kl) and "кг" not in str(v).lower()[:0]:
@@ -981,7 +1185,7 @@ def load_comp_all():
             # сцеплялся с их VEGA 15 PLUS R 270 10 (с осушителем, 390 кг против наших 335),
             # хотя верная карточка лежит у них рядом — проверено агентом по живым страницам.
             # «Тип осушителя: адсорбционный» пропускаем: это характеристика уже имеющегося.
-            if ff is None and "осушит" in kl and not kl.startswith("тип"):
+            if not kind and ff is None and "осушит" in kl and not kl.startswith("тип"):
                 vl=str(v).strip().lower()
                 if vl in ("да","есть","yes") or vl.startswith("с осушител"): ff=1
             if vsd is None and "частот" in kl:     # «Частотный преобразователь: да/нет»;
@@ -1018,9 +1222,14 @@ def load_comp_all():
         pairs=sorted(bar_flow_pairs(raw_bar, raw_flow, (fkey or "")+" "+str(raw_flow or "")),
                      key=lambda bf:(bf[0] is None, bf[0] or 0))
         for i,(bar,fl) in enumerate(pairs):
-            if kw is None and fl is None: continue
+            # Гейт «нет ни мощности, ни производительности — не товар» писан под компрессор.
+            # У ресивера нет ни того, ни другого В ПРИНЦИПЕ: его паспорт — объём и давление.
+            # Без этой ветки в пул не попадал НИ ОДИН ресивер конкурента (399 карточек).
+            if kw is None and fl is None and not (kind=="рес" and (rv or bar)): continue
             cp=price.get(u) if (len(pairs)==1 or i==0) else None
-            cands[b].append(dict(brand=b, sn=sn, kw=kw, bar=bar or bar_from_text(text), fl=fl, oil=oil,
+            cands[b].append(dict(brand=b, sn=sn, kw=kw, fl=fl, oil=oil,
+                                 bar=(bar or bar_from_text(text)
+                                      or (rcv_bar(nm or slug(u)) if kind=="рес" else None)),
                                  ff=ff, vsd=vsd, rv=rv, name=nm or slug(u), url=u, site=dm(u),
                                  price=cp, status=status.get(u,""), ip=ip_class(text) or ip_from_specs(d),
                                  cool=(cool_class(text, cool_raw)
@@ -1029,7 +1238,8 @@ def load_comp_all():
                                  eng=ceng,
                                  we=we, dr=dr, sku=skus.get(u) or sku2, mnt=mnt,
                                  dim=dim or (dim_value(f"{lwh['l']}x{lwh['w']}x{lwh['h']}", "мм")
-                                             if len(lwh)==3 else None)))
+                                             if len(lwh)==3 else None),
+                                 kind=kind, dew=dew))
     unglue_code(cands)          # тот же слитный код бывает и у конкурентов
     learn_sku_letters(cands)    # буквы, которыми конкурент сам разводит свои SKU
     learn_family_weights(cands) # веса, раздаваемые продавцом по всему семейству
