@@ -184,6 +184,20 @@ def gen_series(text, brand):
 VARIANT_STRICT = os.getenv("VARIANT_STRICT", "1").strip() not in ("0", "false", "no")
 
 
+# BOGE склеивает букву исполнения с буквой серии: наш «C 4 D 10» и их «CD 4-10» — один
+# SKU (вес 210 кг грамм в грамм, как и у C 9 D / CD 9, C 3 L / CL 3, C 4 LDR / CLD 4 —
+# семь пар проверены агентом по живым карточкам, D = рефрижераторный осушитель). Из-за
+# склейки семейства расходились ('c',4) против ('cd',4), пулы не пересекались, и сравнение
+# даже не начиналось: 36 из 92 карточек конкурента висели на этом.
+_BOGE_GLUE=re.compile(r"^([cs])([dflr]{1,3})$")
+
+
+def boge_split(tok):
+    """«cd» -> ('c','d'), «sldf» -> ('s','ldf'); не-склейка возвращается как есть."""
+    m=_BOGE_GLUE.match(tok)
+    return (m.group(1), m.group(2)) if m else (tok, "")
+
+
 def base_family(text, brand):
     """Семейство без буквенного хвоста: первый буквенный токен кода модели + номер.
        наш «ET SL 45 H AC 10 бар»               -> ('sl', 45)
@@ -201,7 +215,9 @@ def base_family(text, brand):
     for t in model_code(text, brand)[0]:
         if re.fullmatch(r"[\d.]+", t) or t in _CYR_PREP or t.translate(_CYR2LAT) in btoks:
             continue
-        return (t.translate(_CYR2LAT), sn[1])
+        t=t.translate(_CYR2LAT)
+        if brand=="boge": t=boge_split(t)[0]
+        return (t, sn[1])
     return sn
 
 

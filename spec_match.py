@@ -320,6 +320,9 @@ def variant_letters(name, brand, drop_vsd=False):
     if drop_vsd:      # см. vsd_mark_fallback: только как фолбэк, не в общем пути
         drop = drop | VSD_MARK.get(brand, frozenset())
     toks, _ = model_code(name, brand)
+    if brand == "boge":      # «CD 4-10» -> метка {c,d}, как у нашего «C 4 D 10» (см. boge_split)
+        from brand_spec_review import boge_split
+        toks = [x for t in toks for x in (boge_split(t) if not re.fullmatch(r"[\d.]+", t) else (t,)) if x]
     return frozenset(t.translate(_CYR2LAT) for t in toks
                      if not re.fullmatch(r"[\d.]+", t) and len(t) <= 5
                      and t not in drop and t.translate(_CYR2LAT) not in drop
