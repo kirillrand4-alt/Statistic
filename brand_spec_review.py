@@ -1104,6 +1104,55 @@ def why(o, c):
         parts.append("⚠ у конкурента VSD, у нас не указано")
     return " · ".join(parts)
 
+def drop_back_forks(rows, brand, cands):
+    """Обратная развилка: одна карточка продавца досталась нескольким нашим.
+
+    Конвейер контролирует неоднозначность только в одну сторону — «у нашей карточки
+    больше одного кандидата». Обратную сторону не видит никто, а продавец заводит товар
+    одной карточкой: значит верной может быть только одна такая пара. Замер 19.08:
+    2 259 карточек конкурентов сцеплены с двумя и более нашими, это 2 631 заведомо
+    лишняя пара (8,4% выгрузки).
+
+    Разводит масса, но осторожно — три защиты, каждая из проверенного кейса:
+      * победитель обязан совпасть с продавцом по массе в пределах 2%, иначе молчим
+        (нет победителя — нечего и снимать);
+      * масса проигравшей должна встречаться у продавцов для этой же модели. Иначе она
+        битая, и судить по ней нельзя: наш Hansmann RS132A хранит вес 132 кг — это число
+        киловатт, а все шесть площадок дают 2 700;
+      * если габариты проигравшей сошлись с продавцом до 5% — молчим. Именно это спасает
+        BERG ВК-7.5О-500, где все шесть карточек продавцов дают 517 кг и на IP23, и на
+        IP54, а наша IP54-карточка хранит ошибочные 460: по массе правило выбрало бы
+        базовую версию вместо верной IP54.
+
+    Замер: снято 79 пар (fiac 34, atlas 15, abac 11, zif 8, et 7), наших карточек с
+    матчем 12 640 -> 12 633, четыре проверочных набора без изменений, BERG не задет."""
+    seen_w = defaultdict(set)
+    for c in cands:
+        if c.get("we"): seen_w[c["sn"]].add(round(c["we"]))
+    back = defaultdict(list)
+    for i, (o, per, _) in enumerate(rows):
+        for v in per.values():
+            for c in v.values(): back[c["url"]].append((i, o, c))
+    for url, lst in back.items():
+        if len(lst) < 2: continue
+        cw = lst[0][2].get("we")
+        if not cw: continue
+        d = [(abs(o["we"] - cw) / max(o["we"], cw), i, o, c) for i, o, c in lst if o.get("we")]
+        if len(d) != len(lst) or min(x[0] for x in d) > 0.02: continue
+        for r, i, o, c in d:
+            if r <= 0.10: continue
+            if round(o["we"]) not in seen_w.get(o["sn"], ()): continue
+            da, db = o.get("dim"), c.get("dim")
+            if da and db and max(abs(x - y) / max(x, y) for x, y in zip(da, db)) <= 0.05:
+                continue
+            per = rows[i][1]
+            for site, v in list(per.items()):
+                for k, cc in list(v.items()):
+                    if cc["url"] == url: del v[k]
+                if not v: del per[site]
+    return [r for r in rows if r[1]]
+
+
 def build_brand(brand, title, ours, cands, po=None):
     by_sn=defaultdict(list)
     for c in cands: by_sn[c["sn"]].append(c)
@@ -1120,6 +1169,7 @@ def build_brand(brand, title, ours, cands, po=None):
                 per[c["site"]][k]=c
         if not per: n0+=1; continue
         (ambig if any(len(v)>1 for v in per.values()) else clean).append((o, per, nexec))
+    clean, ambig = drop_back_forks(clean, brand, cands), drop_back_forks(ambig, brand, cands)
     matched={id(o) for o,_,_ in clean+ambig}
 
     st=_styles()
