@@ -169,10 +169,74 @@ def num_code(text):
     return m.group(0).replace(",", ".") if m else None
 
 
+# Скобочная метка исполнения осушителя: Atlas Copco «CD110+(HE)14B» — с подогревом
+# регенерации, «CD110(S)14B» — стандартная холодная. Один ключ, одна пропускная
+# способность, разный вес (217 против 165 кг) и разная цена. Проверка агентами 19.08
+# нашла на этом ложную пару, а замер даёт 46 таких пересечений при 125 парах, где
+# метка стоит с обеих сторон.
+#
+# Берём ТОЛЬКО короткие латинские токены в скобках: в скобках у осушителей ещё живут
+# точка росы «(-40°С)» и комплектация «(с лючком)» — их этот шаблон не ловит. «Плюс»
+# в метку не включаем: замер показал 0 пар, где расходится только он, а риск он несёт
+# (продавец пишет «CD110» там, где мы пишем «CD110+»).
+_DRY_PAREN = re.compile(r"\(([A-Za-z]{1,3})\)")
+
+
+def dry_exec(name):
+    return frozenset(x.lower() for x in _DRY_PAREN.findall(str(name or "")))
+
+
+def dry_exec_ok(a, b):
+    """Метки исполнения совместимы? Пустая метка с любой стороны = молчание."""
+    return not a or not b or a == b
+
+
 def num_code_ok(a, b):
     """Числовые коды моделей совместимы? Молчание любой стороны = совместимо."""
     ca, cb = num_code(a), num_code(b)
     return not ca or not cb or ca == cb
+
+
+# Исполнение ресивера — последний сегмент кода, и это МАТЕРИАЛ КОРПУСА, а не косметика.
+# Бежецкий АСО: «РВ 500-01/10» — окрашенная 09Г2С (уличное, -40 °C), «РВ 500-02/10» —
+# нержавейка 12Х18Н10Т, «РВ 500/10» — базовая Ст3; разделы заводского каталога у них
+# разные, цена расходится в 4-6 раз. Remeza: «РВ 500.16.00» вход 1¼", «.02» вход 2",
+# «900.10.10» с ревизионным лючком против «.11» без. Проверка агентами 19.08 по живым
+# страницам и каталогу завода: 6 ложных пар из 8 найденных — ровно этот сегмент, причём
+# у продавца рядом лежала ВЕРНАЯ карточка.
+#
+# Отсутствие сегмента — ЗНАНИЕ («базовое»), а не молчание: «РВ 500/10» это конкретный
+# товар. Молчание — это когда схема кода не распознана вовсе (None), тогда не режем.
+_RC_DOT  = re.compile(r"(\d{2,5})\.(\d{1,2})\.(\d{2})")            # Remeza: объём.бар.исполнение
+_RC_DASH = re.compile(r"(\d{2,5})\s*[-–]\s*(\d{2})\s*/\s*(\d{1,2})")  # АСО: объём-исполнение/бар
+_RC_BASE = re.compile(r"(\d{2,5})\s*/\s*(\d{1,2})(?![\d.])")        # АСО базовое: объём/бар
+
+
+def rcv_exec(name):
+    t = str(name or "")
+    m = _RC_DOT.search(t)
+    if m: return m.group(3)
+    m = _RC_DASH.search(t)
+    if m: return m.group(2)
+    return "" if _RC_BASE.search(t) else None
+
+
+OUR_RCVEXEC = defaultdict(set)      # (бренд, ключ) -> исполнения, которые держим МЫ
+
+
+def rcv_exec_filter(o, cands, brand):
+    """Исполнение ресивера — только там, где НАШ каталог сам разводит исполнения.
+
+    Тот же приём, что у OUR_BARE: раз мы держим и базовое, и -01, и -02 отдельными
+    карточками (11 ключей из 11, где схема распознана), значит сегмент несёт товар, а
+    не написание, и отдавать одну карточку продавца всем нашим исполнениям нельзя.
+    Там, где мы исполнений не различаем, правило молчит — данные не дают на него права."""
+    if len(OUR_RCVEXEC.get((brand, o["sn"]), ())) < 2: return cands
+    oe = rcv_exec(o.get("name"))
+    if oe is None: return cands
+    keep = [c for c in cands
+            if rcv_exec(c.get("name") or slug(c["url"]).replace("-", " ")) in (None, oe)]
+    return keep
 
 
 def rcv_bar(text):
@@ -255,7 +319,12 @@ def gen_series(text, brand, kind=""):
         # как маркер фазы «3 PH 50 HZ») убивал 54 наших осушителя и 417 карточек
         # конкурентов. Послабление действует ТОЛЬКО вне компрессоров: у компрессоров
         # ключ вылизан замерами, и трогать его ради чужой категории нельзя.
-        glued = kind and not re.search(r"\s", m.group(0)[len(w):m.group(0).find(m.group(4))])
+        # «ph» вне компрессоров стоп-словом не является вовсе: у Pneumatech это имя серии
+        # («PH 1020 HE», «PH120HE» — 77 наших карточек и 417 конкурентских), а маркер фазы
+        # пишется только с числом («3 PH 50 HZ»), и \b перед ph туда не пускает в принципе.
+        # Прочие стоп-слова вне компрессоров снимаются только если ПРИКЛЕЕНЫ к числу.
+        glued = kind and (w == "ph"
+                          or not re.search(r"\s", m.group(0)[len(w):m.group(0).find(m.group(4))]))
         if ((w in _STOPW and w!="plus") and not glued) or w in btoks: continue
         # одиночная ЛАТИНСКАЯ буква между серией и числом = вариант линейки (GENESIS I = инвертор);
         # кириллические одиночки (предлоги «с»/«и») игнорируются.
@@ -354,6 +423,20 @@ def boge_split(tok):
     return (m.group(1), m.group(2)) if m else (tok, "")
 
 
+# Категорийная проза и торговые имена линеек — не код модели. Снимается ТОЛЬКО вне
+# компрессоров: общий стоп-лист _DESCR трогать нельзя (см. отрицательный результат там же).
+#   «Осушитель сжатого воздуха рефрижераторного ТИПА АСО ОВ-1080М» -> ('типа',1080) вместо
+#   ('ov',1080): 14 карточек ASO и 3 ATS не сходились ни с чем.
+#   Наш «Dalgakiran DRYER DMD 10» против их «DALGAKIRAN DryAir DMD 10» — линейка называется
+#   по-разному с двух сторон, а код модели один и тот же (DMD 10).
+# Голого «dry» здесь нет намеренно: у ABAC это настоящая серия («ABAC DRY 1040»).
+_CAT_WORDS = {"типа","тип","рефрижераторный","рефрижераторного","рефрижераторных",
+              "рефрижераторное","адсорбционный","адсорбционного","адсорбционных",
+              "осушителя","осушители","сжатого","воздуха","воздушный","воздушного",
+              "вертикальный","горизонтальный","оцинкованный","dryer","dryair",
+              "refrizheratornyy","adsorbtsionnyy","osushitel","osushiteli"}
+
+
 def base_family(text, brand, kind=""):
     """Семейство без буквенного хвоста: первый буквенный токен кода модели + номер.
        наш «ET SL 45 H AC 10 бар»               -> ('sl', 45)
@@ -371,6 +454,7 @@ def base_family(text, brand, kind=""):
     for t in model_code(text, brand)[0]:
         if re.fullmatch(r"[\d.]+", t) or t in _CYR_PREP or t.translate(_CYR2LAT) in btoks:
             continue
+        if kind and t in _CAT_WORDS: continue
         t=t.translate(_CYR2LAT)
         if brand=="boge": t=boge_split(t)[0]
         return (t, sn[1])
@@ -707,6 +791,9 @@ def pick_cands(o, pool, brand):
     if o.get("kind") == "осш":
         m = [c for c in m if dew_ok(o.get("dew"), c.get("dew"))]
         m = [c for c in m if num_code_ok(o.get("name"), c.get("name") or slug(c["url"]))]
+        m = [c for c in m if dry_exec_ok(dry_exec(o.get("name")), dry_exec(c.get("name")))]
+    elif o.get("kind") == "рес":
+        m = rcv_exec_filter(o, m, brand)
     m = exec_filter(o.get("name", ""), m)
     m = (variant_filter(o.get("name", ""), m, brand, o.get("vsd")) if VARIANT_STRICT
          else prefer_exact_variant(o.get("name", ""), m))
@@ -875,7 +962,7 @@ def load_ours_all():
             # контрпример — KM18,5-13рВ (наш IP23 ошибочен) — принятая цена: 8 верных
             # отсевов против 1 ложного.
             ipopen.append(k)
-    OUR_BARE.clear(); OUR_IPBASE.clear(); OUR_NOVSD.clear(); OUR_EXEC.clear()   # OUR_IPBASE: (b,sn) -> имена открытых карточек без IP-метки
+    OUR_BARE.clear(); OUR_IPBASE.clear(); OUR_NOVSD.clear(); OUR_EXEC.clear(); OUR_RCVEXEC.clear()   # OUR_IPBASE: (b,sn) -> имена открытых карточек без IP-метки
     ours=defaultdict(list)
     for code,r in rows.items():
         man=(r.get("IP_PROP22553") or "").strip()
@@ -961,6 +1048,9 @@ def load_ours_all():
         et={k:v for k,v in exec_tags(name).items() if k in _EXEC_KEYS}
         if et: OUR_EXEC[(b, sn)].append((tuple(sorted(et.items())),
                                          wev if wev and 1<=wev<=50000 else None))
+        if kind=="рес":
+            e=rcv_exec(nm or name)
+            if e is not None: OUR_RCVEXEC[(b, sn)].add(e)
         if rv in (None, 0): OUR_BARE.add((b, sn))
         if not vsd: OUR_NOVSD.add((b, sn))
         ours[b].append(dict(brand=b, sn=sn, kw=sane_kw(num(r.get("IP_PROP22562"))),
