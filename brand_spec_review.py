@@ -438,6 +438,11 @@ def exec_filter(o_name, cands):
 # сами различаем исполнения, молчаливый кандидат принадлежит базовой версии.
 OUR_BARE=set(); OUR_IPBASE={}; OUR_NOVSD=set()
 _IPWORD=re.compile(r"[,(]?\s*ip\s*-?\s*\d{2}\)?", re.I)
+# «AC» + серия Atlas Copco в начале обозначения = Atlas Copco. Одиночное «AC» в общий
+# распознаватель брендов не добавить (это же «air cooled»: у нас 116 карточек вида
+# «ET SL 11 H AC 10 бар»), поэтому связка с серией: 154 карточки, из них 151 с
+# производителем SOUAIR — марки, которой нет ни у одного из четырёх конкурентов.
+_AC_ATLAS=re.compile(r"(^|\s)AC\s+(ZR|ZT|ZE|ZA|GA|GX|GV|LZ|LE|LF|LT|SF|AQ|XA[A-Z]{0,2})\s*-?\s*\d", re.I)
 def _noip(name):
     """Имя без IP-метки — для сравнения «отличаются ли карточки только классом защиты»."""
     return re.sub(r"\s+", " ", _IPWORD.sub(" ", str(name).lower())).strip()
@@ -622,9 +627,16 @@ def load_ours_all():
     ours=defaultdict(list)
     for code,r in rows.items():
         man=(r.get("IP_PROP22553") or "").strip()
-        b=brand_from_text(man) or BRAND_ALIASES.get(man.lower().split()[0] if man else "", None)
-        if not b: continue
         name=r.get("IE_NAME","")
+        b=brand_from_text(man) or BRAND_ALIASES.get(man.lower().split()[0] if man else "", None)
+        # Проп не распознан вовсе — не «другой бренд», а отсутствие сведений: тогда имя
+        # единственный источник. Ловит 151 карточку безмасляных Atlas Copco, заведённых
+        # как «AC ZR 110 FF 10» с производителем SOUAIR (такой марки нет ни у одного из
+        # четырёх конкурентов, а карточек серий ZR/ZT у них 336) — до этой правки они не
+        # доходили до матчера вообще. Правило узкое: имя пробуется ТОЛЬКО когда проп
+        # молчит; спорить с заполненным пропом по-прежнему нельзя (см. mig/airrus ниже).
+        b=b or brand_from_text(name) or ("atlas" if _AC_ATLAS.search(name) else None)
+        if not b: continue
         # Один завод — две торговые марки. В поле «Производитель» у нас стоит «РКЗ»
         # (Рязанский компрессорный завод), и все 136 карточек AIRRUS уезжали в бренд mig,
         # тогда как конкуренты держат 148 карточек под маркой AIRRUS — бренды не
