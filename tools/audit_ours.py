@@ -197,6 +197,34 @@ def kopipast_gabaritov(ours, min_kw_diff=0.25):
     return sorted(out, key=lambda r: -r["kartochek"])
 
 
+def odin_ves_raznye_ispolneniya(ours):
+    """Наши исполнения одного товара с ОДИНАКОВЫМ весом — вес скопирован.
+
+    Мы держим «на шасси» / «стационарный» / «в кожухе» отдельными SKU, и это разные
+    машины: ARIACOM SAX 110 на шасси весит 1650 кг против 1400 у стационарного. Там,
+    где вес у исполнений совпал, он проставлен копированием — и матчер не может отдать
+    молчаливую карточку конкурента одной из них (см. exec_weight_pick), поэтому она
+    достаётся всем сразу. На 19.08 таких групп 51, из них Atmos PDP 65 даёт 4 доказанно
+    ложные пары: пять исполнений и у всех 1570 кг."""
+    grp = defaultdict(list)
+    for b, lst in ours.items():
+        for o in lst:
+            et = {k: v for k, v in B.exec_tags(o["name"]).items() if k in B._EXEC_KEYS}
+            if et and o.get("we"):
+                grp[(b, o["sn"])].append((tuple(sorted(et.items())), o))
+    out = []
+    for (b, sn), lst in grp.items():
+        if len({t for t, _ in lst}) < 2:
+            continue
+        ws = {round(o["we"]) for _, o in lst}
+        if len(ws) > 1:
+            continue                      # вес уже различает исполнения — всё в порядке
+        out.append(dict(brand=b, ves=next(iter(ws)), ispolneniy=len({t for t, _ in lst}),
+                        chto=" || ".join(sorted({"/".join(f"{k}:{v}" for k, v in t) for t, _ in lst})),
+                        imena=" || ".join(o["name"] for _, o in lst[:3]), url=lst[0][1]["url"]))
+    return sorted(out, key=lambda r: -r["ispolneniy"])
+
+
 def _sheet(wb, title, rows, headers, widths, link_key="url"):
     ws = wb.create_sheet(title)
     st = B._styles()
@@ -265,6 +293,12 @@ def main() -> int:
         wb, "Пустые поля", pustye_polya(ours),
         dict(brand="Бренд", name="Наш товар", pusto="Не заполнено", url="Ссылка"),
         [14, 60, 18, 60])))
+
+    itog.append(("Один вес у разных исполнений", _sheet(
+        wb, "Вес не различает исполнения", odin_ves_raznye_ispolneniya(ours),
+        dict(brand="Бренд", ves="Вес, кг", ispolneniy="Исполнений", chto="Какие исполнения",
+             imena="Карточки", url="Ссылка"),
+        [14, 10, 12, 40, 80, 60])))
 
     itog.append(("Копипаст габаритов", _sheet(
         wb, "Копипаст габаритов", kopipast_gabaritov(ours),
