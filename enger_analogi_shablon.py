@@ -10,9 +10,14 @@
   * десять «зелёных» свойств шаблона при молчании сайта заменяются первым значением
     столбца, как и просил заказчик. Разбор цветов и обоснование — в `tools/enger_specs.py`.
 
-Строка отчёта = КАРТОЧКА Enger (модель + давление), а не модель целиком, потому что
-цена у нас различается по барам: BS-5,5BFR-250 на 8 бар стоит 312 125 ₽, на остальных —
-327 844 ₽. Схлопнув бары в одну строку (как в образце), мы бы показали одну цену из пяти.
+Листа со сводкой два, и это не дубль:
+
+  * «Сводная» — раскладка, формулы и цвета образца один в один: строка = модель Enger,
+    две строки на модель (во второй следующий по цене аналог бренда), сцепка по 8 бар с
+    откатом по ряду, если такого давления у серии нет (LUF идёт на 7,5 / 8,6 / 10,4);
+  * «Сводная по барам» — строка на каждое давление. Нужна потому, что цена у нас по
+    барам различается: BS-5,5BFR-250 на 8 бар стоит 312 125 ₽, на остальных 327 844 ₽,
+    и модельная строка образца показывает одну цену из пяти.
 
     python enger_analogi_shablon.py            # боевой прогон
     python enger_analogi_shablon.py --proba    # только 10 моделей из образца, с разбором
@@ -31,7 +36,9 @@ _HERE = Path(__file__).resolve().parent          # скрипт зовут и и
 sys.path[:0] = [str(_HERE), str(_HERE / "tools")]
 
 import openpyxl
+from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.styles.colors import Color
 from openpyxl.utils import get_column_letter
 
 from brand_spec_review import load_ours_all
@@ -457,13 +464,177 @@ def cheapest(lst):
     return min(lst, key=lambda t: (t[0]["price"] is None, t[0]["price"] or 0))
 
 
+# Заливки эталона. Держим их темой книги, а не готовым RGB: у заказчика в файле стоят
+# именно theme+tint, и при смене темы Office отчёт должен перекраситься так же, как его
+# собственный. theme 7 = accent4 (охра), 8 = accent5 (голубой), 0 = фон.
+F_MODEL = PatternFill("solid", start_color=Color(theme=7, tint=0.8))    # колонка модели
+F_PRICE = PatternFill("solid", start_color=Color(theme=8, tint=0.6))    # наша цена + шапка
+F_CALC = PatternFill("solid", start_color=Color(theme=7, tint=0.8))     # блок расчёта I..N
+F_NEW = PatternFill("solid", start_color=Color(theme=9, tint=0.6))      # колонки «new»
+F_EMPTY = PatternFill("solid", start_color=Color(theme=0, tint=-0.35))  # аналога нет
+F_WHITE = PatternFill("solid", start_color=Color(theme=0, tint=0.0))
+RUB = r'_-* #,##0\ _₽_-;\-* #,##0\ _₽_-;_-* "-"\ _₽_-;_-@_-'
+HDR_FONT = Font(bold=True, size=12)
+HDR_AL = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+# Порядок предпочтения давления при выборе строки-представителя модели. Эталон сцепляет
+# по 8 бар; если у серии его нет (LUF идёт на 7,5 / 8,6 / 10,4), спускаемся по ряду.
+BAR_PREF = ["8", "10", "7", "12", "13", "15/16", "20", "25", "30", "40"]
+
+
+def svodnaya_etalon(wb, rows, real):
+    """Лист «Сводная» в раскладке и цветах присланного образца.
+
+    Строка = МОДЕЛЬ Enger (как у заказчика), на модель отводится две строки — во второй
+    идёт следующий по цене аналог бренда; ровно так сделано в образце, где у Cross-air
+    в первой строке стоит исполнение IP54, во второй IP23. Колонки A/B/C/H заполняются
+    только в первой строке группы, и формулы «разницы» второй строки ссылаются на её H."""
+    ws = wb.create_sheet("Сводная", 0)
+    fix = ["Модель Enger", "8 бар", "10 бар", "Макс\n пр-ть", "Реальная\nпр-ть", "пр-ть new",
+           "% к 10 реальной", "Наша Цена", "цена мин", "цена сред", " цена new", "% сниж",
+           "мы дороже на", "накрутка после изменения цены"]
+    n_fix = len(fix)
+    b0 = n_fix + 1                       # короткий блок «цена по брендам» (O–Z образца)
+    t0 = b0 + len(BRANDS)                # тройки «Бренд | Цена | разница» (с AA образца)
+    for i, t in enumerate(fix + [TITLE[b] for b in BRANDS] +
+                          [x for b in BRANDS for x in (TITLE[b], "Цена", "разница")], 1):
+        c = ws.cell(1, i, t)
+        c.font, c.alignment = HDR_FONT, HDR_AL
+        # В образце голубым залито только имя бренда и «Наша Цена»; «Цена» в тройке белая,
+        # «разница» — вообще без заливки. Повторяем ровно так.
+        if i in (1, 8) or b0 <= i < t0 or (i >= t0 and (i - t0) % 3 == 0):
+            c.fill = F_PRICE
+        elif i in (6, 11, 13, 14):       # «пр-ть new», «цена new», «мы дороже», «накрутка»
+            c.fill = F_NEW
+        elif i >= t0 and (i - t0) % 3 == 2:
+            pass
+        else:
+            c.fill = F_WHITE
+    ws.row_dimensions[1].height = 128.25
+
+    groups = defaultdict(dict)
+    for r in rows:
+        groups[r["family"]].setdefault(r["props"]["bar"], r)
+    pcols = [get_column_letter(t0 + 3 * j + 1) for j in range(len(BRANDS))]
+
+    for fam in sorted(groups):
+        bars = groups[fam]
+        pick_bar = next((b for b in BAR_PREF if b in bars), next(iter(bars)))
+        r0 = bars[pick_bar]
+        top = ws.max_row + 1
+        # сколько строк на модель: как в образце — две, но если у бренда всего один аналог,
+        # вторая строка просто останется серой
+        depth = min(2, max([len(v) for v in r0["hits"].values()] or [1]))
+        for k in range(depth):
+            i = top + k
+            if k == 0:
+                ws.cell(i, 1, fam)
+                if r0["o"].get("url"):
+                    ws.cell(i, 1).hyperlink = r0["o"]["url"]
+                    ws.cell(i, 1).font = Font(color="0563C1", underline="single")
+                b8, b10 = bars.get("8"), bars.get("10")
+                ws.cell(i, 2, round(b8["o"]["fl"] / 1000, 2) if b8 and b8["o"].get("fl") else None)
+                ws.cell(i, 3, round(b10["o"]["fl"] / 1000, 2) if b10 and b10["o"].get("fl") else None)
+                rk = real.get(real_key(fam), (None, None))
+                ws.cell(i, 5, rk[1] if pick_bar == "10" else rk[0])
+                ws.cell(i, 8, r0["o"].get("price"))
+                rng = ",".join(f"{c}{i}" for c in pcols)
+                # MIN по пустому диапазону даёт 0, а не ошибку — поэтому COUNT, а не IFERROR:
+                # без этого «цена мин» показывала 0 ₽ у всех моделей без аналогов
+                ws.cell(i, 9, f'=IF(COUNT({rng})=0,"",MIN({rng}))')
+                ws.cell(i, 10, f'=IF(COUNT({rng})=0,"",AVERAGE({rng}))')
+                ws.cell(i, 12, f'=IF(N(K{i})=0,"",IFERROR((K{i}-H{i})/H{i},""))')
+                ws.cell(i, 13, f'=IFERROR((H{i}-I{i})/I{i},"")')
+                # Накрутка считается как в образце: цена / закупку. Две поправки к его
+                # формуле, обе вынужденные. Первая: ключом идёт не A2, а код без ресивера
+                # («BS-5,5BFR-250» → «BS-5,5BF») — в таблице закупок модели записаны так,
+                # и VLOOKUP по полному имени возвращал «*» на каждой строке. Вторая: закуп
+                # в долларах, а наша цена в рублях, поэтому делим ещё на курс — он лежит
+                # одной ячейкой накрутки!$F$1, чтобы его можно было поправить руками.
+                rk = real_key(fam) or fam
+                buy = f'VLOOKUP("{rk}",накрутки!A:C,2,FALSE)*накрутки!$F$1'
+                ws.cell(i, 14, f'=IFERROR(IF(N(K{i})=0,H{i}/({buy}),K{i}/({buy})),"*")')
+            for col in (1,):
+                ws.cell(i, col).fill = F_MODEL
+            for col in range(2, 8):
+                ws.cell(i, col).fill = F_WHITE
+            ws.cell(i, 8).fill = F_PRICE
+            for col in range(9, 15):
+                ws.cell(i, col).fill = F_CALC
+                ws.cell(i, col).number_format = RUB if col in (9, 10, 11) else (
+                    "0%" if col in (12, 13) else "#,##0.00")
+            for j, b in enumerate(BRANDS):
+                mc, pc, dc = t0 + 3 * j, t0 + 3 * j + 1, t0 + 3 * j + 2
+                lst = sorted(r0["hits"].get(b, []),
+                             key=lambda t: (t[0]["price"] is None, t[0]["price"] or 0))
+                if k == 0:
+                    ws.cell(i, b0 + j, f'=IF({get_column_letter(pc)}{i}="","",'
+                                       f'{get_column_letter(pc)}{i})')
+                    ws.cell(i, b0 + j).number_format = RUB
+                if k >= len(lst):
+                    for col in (mc, pc, dc):
+                        ws.cell(i, col).fill = F_EMPTY      # серым — аналога нет, как в образце
+                    continue
+                c, weak = lst[k]
+                cell = ws.cell(i, mc, model_label(c["name"]))
+                if c.get("url"):
+                    cell.hyperlink = c["url"]
+                    cell.font = Font(color="0563C1", underline="single",
+                                     italic=bool(weak))
+                elif weak:
+                    cell.font = Font(italic=True, color="808080")
+                ws.cell(i, pc, c["price"]).number_format = RUB
+                ws.cell(i, dc, f'=IFERROR((H{top}-{get_column_letter(pc)}{i})/'
+                               f'{get_column_letter(pc)}{i},"")').number_format = "0%"
+        # цветовая шкала по короткому блоку брендов — как в образце, построчно
+        ws.conditional_formatting.add(
+            f"{get_column_letter(b0)}{top}:{get_column_letter(b0+len(BRANDS)-1)}{top}",
+            ColorScaleRule(start_type="min", start_color="63BE7B",
+                           mid_type="percentile", mid_value=50, mid_color="FFEB84",
+                           end_type="max", end_color="F8696B"))
+    ws.freeze_panes = "B2"
+    ws.column_dimensions["A"].width = 27.9
+    for col, w in (("B", 9.9), ("C", 8.3), ("D", 1.0), ("E", 14.4), ("F", 8.4), ("G", 13.3),
+                   ("H", 12.0), ("I", 16.4), ("J", 11.4), ("K", 11.4), ("L", 1.0),
+                   ("M", 11.9), ("N", 13.0)):
+        ws.column_dimensions[col].width = w
+    for j in range(len(BRANDS)):
+        ws.column_dimensions[get_column_letter(b0 + j)].width = 11.9
+        ws.column_dimensions[get_column_letter(t0 + 3 * j)].width = 26
+        ws.column_dimensions[get_column_letter(t0 + 3 * j + 1)].width = 12.3
+        ws.column_dimensions[get_column_letter(t0 + 3 * j + 2)].width = 9.9
+    return ws
+
+
+def copy_table(wb, title, path, widths=(26, 14, 14)):
+    """Таблицы заказчика («накрутки», «реальная пр-ть») кладём в книгу как отдельные листы —
+    иначе VLOOKUP в колонке «накрутка» ссылается в пустоту."""
+    ws = wb.create_sheet(title)
+    if not Path(path).exists():
+        return ws
+    for r in csv.reader(open(path, encoding="utf-8-sig"), delimiter=";"):
+        ws.append([num(v) if i and v not in ("", "*") else v for i, v in enumerate(r)])
+    for i in range(1, 4):
+        c = ws.cell(1, i)
+        c.font, c.fill, c.alignment = HDR_FONT, F_PRICE, HDR_AL
+        ws.column_dimensions[get_column_letter(i)].width = widths[i - 1]
+    if title == "накрутки":
+        # Курс отдельной ячейкой, а не константой в формуле: закуп в таблице заказчика
+        # в долларах, наши цены в рублях, и курс он правит чаще, чем всё остальное.
+        ws["E1"], ws["F1"] = "Курс ₽/$", 78.9
+        ws["E1"].font = HDR_FONT
+        ws.column_dimensions["E"].width = 12
+    ws.freeze_panes = "A2"
+    return ws
+
+
 def save(rows, cands, out=OUT):
     real = real_flow_table()
     wb = openpyxl.Workbook()
 
-    # --- ЛИСТ «Сводная» — раскладка образца -------------------------------------------
+    # --- ЛИСТ «Сводная по барам» — строка на каждое давление --------------------------
     ws = wb.active
-    ws.title = "Сводная"
+    ws.title = "Сводная по барам"
     n_fix = len(FIX)
     b0 = n_fix + 1                       # блок «цена по брендам» (как колонки O–Z образца)
     t0 = b0 + len(BRANDS)                # тройки «Модель | Цена | разница»
@@ -692,6 +863,10 @@ def save(rows, cands, out=OUT):
         ws6.cell(i, 1).font = Font(bold=True)
         ws6.cell(i, 2).alignment = Alignment(wrap_text=True, vertical="top")
 
+    # Таблицы заказчика — чтобы формула «накрутка» и колонка «Реальная пр-ть» имели источник
+    copy_table(wb, "накрутки", _HERE / "data" / "enger_nakrutki.csv")
+    copy_table(wb, "реальная пр-ть", _HERE / "data" / "enger_realnaya_prt.csv")
+    svodnaya_etalon(wb, rows, real)            # первый лист — раскладка эталона
     wb.save(out)
     return out
 
