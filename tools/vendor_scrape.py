@@ -337,8 +337,159 @@ def run_sollant(limit: int = 0):
     return rows
 
 
+
+# --- адаптер: WooCommerce (GMP) -----------------------------------------------------------
+_WOO_AMOUNT = re.compile(r'woocommerce-Price-amount[^>]*>(?:<bdi>)?([\d\s\xa0 ]+)')
+_TR = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S | re.I)
+_TD = re.compile(r"<t[dh][^>]*>(.*?)</t[dh]>", re.S | re.I)
+
+
+def woo_price(page: str) -> str:
+    """Цена САМОГО товара — первая сумма внутри блока summary entry-summary.
+
+    На карточке GMP пять сумм: своя и четыре из блока «похожие товары». Брать первую
+    попавшуюся по странице нельзя — у GM 2,2-10-100A BOX это дало бы 377 695 вместо
+    122 305, то есть цену чужой машины."""
+    m = re.search(r'class="[^"]*summary entry-summary[^"]*"', page)
+    if not m:
+        return ""
+    seg = page[m.start():m.start() + 6000]
+    a = _WOO_AMOUNT.search(seg)
+    return re.sub(r"\D", "", a.group(1)) if a else ""
+
+
+_ATTR_LI = re.compile(
+    r'custom-attrs-label"[^>]*>(.*?)</p>\s*<p class="custom-attrs-value"[^>]*>(.*?)</p>', re.S)
+
+
+def attr_specs(page: str) -> dict:
+    """Пары из блока краткого описания (ul.custom-attrs-list).
+
+    У GMP мощность, производительность и частотный привод лежат ТОЛЬКО здесь, а
+    давление, IP, ресивер и осушитель — только в таблице ниже. Читать надо оба места:
+    по одной таблице половина карточек уходит без кВт вовсе.
+
+    Ограничиваемся блоком summary САМОГО товара: точно такой же список атрибутов есть
+    у каждого «похожего товара» ниже по странице, и без границы значения перетирались
+    чужими — GM 11R-16 (11 кВт) получал 185 кВт от соседа по блоку."""
+    m = re.search(r'class="[^"]*summary entry-summary[^"]*"', page)
+    if not m:
+        return {}
+    seg = page[m.start():m.start() + 6000]
+    return {re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", k))).strip():
+            re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", v))).strip()
+            for k, v in _ATTR_LI.findall(seg)}
+
+
+def table_specs(page: str) -> dict:
+    """Все пары «ключ / значение» из таблиц карточки."""
+    out = {}
+    for tr in _TR.findall(page):
+        cells = [re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", c))).strip()
+                 for c in _TD.findall(tr)]
+        if len(cells) == 2 and cells[0] and cells[1] and len(cells[0]) < 60:
+            out.setdefault(cells[0], cells[1])
+    return out
+
+
+def run_gmp(limit: int = 0):
+    base = "https://gmp.energy/"
+    # Из sitemap берём только КОМПРЕССОРЫ: там же лежат винтовые блоки, масла и
+    # запчасти («vintovoy-blok-baosi-...»), и по слову «kompressor» они не отсеиваются.
+    urls = [u for u in sitemap_urls(base)
+            if re.search(r"/product/[^/]*kompressor", u, re.I)
+            and not re.search(r"blok|maslo|filtr|zapchast|remkomplekt|osushitel|resiver", u, re.I)]
+    print(f"  карточек-компрессоров: {len(urls)}")
+    if limit:
+        urls = urls[:limit]
+    rows = []
+
+    def one(u):
+        c = get(u)
+        h1 = re.search(r"<h1[^>]*>(.*?)</h1>", c, re.S)
+        name = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", h1.group(1)))).strip() if h1 else ""
+        return u, name, woo_price(c), {**table_specs(c), **attr_specs(c)}
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        for u, name, price, sp in ex.map(one, urls):
+            if not name:
+                continue
+            g = lambda pat: next((v for k, v in sp.items() if re.search(pat, k, re.I)), "")
+            rows.append(dict(
+                brand="GMP", name=name, model=name.replace("Винтовой компрессор GMP", "").strip(),
+                price=price, url=u,
+                kw=re.sub(r"[^\d.,]", "", g(r"мощност")).replace(",", "."),
+                bar=re.sub(r"[^\d.,]", "", g(r"давлен")).replace(",", "."),
+                flow=re.sub(r"[^\d.,]", "", g(r"производительн")).replace(",", "."),
+                ip=re.sub(r"\s+", "", g(r"степень защит")),
+                vsd=g(r"частотн"),
+                specs=json.dumps(sp, ensure_ascii=False)))
+    return rows
+
+
+
+# --- адаптер: Xeleron (таблицы модельного ряда, БЕЗ цен) -----------------------------------
+_XEL_SECTIONS = ("vintovye-kompressory/", "vintovye-kompressory-zpma/",
+                 "vintovye-kompressory-dry-tank/", "bezmaslyanye-kompressory/",
+                 "bezmaslyanye-kompressory-suhogo-szhatiya/")
+
+
+def run_xeleron(limit: int = 0):
+    """У Xeleron НЕТ карточек товаров и НЕТ цен — проверено на 40 страницах сайта
+    исправленным разбором (двойной unescape + JSON-поля): ни одной суммы, ни даже
+    «цена по запросу». Сайт публикует таблицу модельного ряда, и это всё, что он даёт.
+
+    Таблица устроена так: одна строка = модель, а производительность перечислена
+    ЧЕТЫРЬМЯ значениями под четыре давления («1.3 1.2 1.0 0.8» для «7 8 10 12»).
+    Разворачиваем в отдельные строки по давлениям — иначе сцепка по шаблону заказчика
+    (точное совпадение давления) не сработает вовсе.
+
+    Прочерк вместо числа — значит на этом давлении модель не выпускается: строку не
+    создаём, чтобы не выдумывать несуществующее исполнение."""
+    base = "https://xelerone.com/kompressornoe-oborudovanie/"
+    rows = []
+    for sec in _XEL_SECTIONS:
+        page = get(base + sec)
+        if not page:
+            continue
+        for tbl in re.findall(r"<table.*?</table>", page, re.S):
+            trs = re.findall(r"<tr[^>]*>(.*?)</tr>", tbl, re.S)
+            grid = [[re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", c))).strip()
+                     for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, re.S)] for tr in trs]
+            grid = [g for g in grid if g]
+            if not grid or not re.search(r"модель", grid[0][0], re.I):
+                continue
+            hdr = grid[0]
+            col = lambda pat: next((i for i, h in enumerate(hdr) if re.search(pat, h, re.I)), None)
+            # «Произво-дительность» — в шапке таблицы слово разорвано ДЕФИСОМ переноса,
+            # и шаблон «производ» её не находит (как и «Присоеди- нение»). Ищем по корню.
+            i_fl, i_bar, i_kw = col(r"произв"), col(r"давлен"), col(r"мощност")
+            i_dim, i_we = col(r"размер|габарит"), col(r"масса|вес")
+            for g in grid[1:]:
+                if len(g) < len(hdr) or not g[0]:
+                    continue
+                bars = re.findall(r"\d+(?:[.,]\d+)?", g[i_bar]) if i_bar is not None else []
+                flows = re.split(r"\s+", g[i_fl].strip()) if i_fl is not None else []
+                pairs = list(zip(bars, flows)) if len(bars) == len(flows) else [
+                    (bars[0] if bars else "", flows[0] if flows else "")]
+                for bar, fl in pairs:
+                    if fl in ("-", "—", ""):   # на этом давлении модели нет
+                        continue
+                    rows.append(dict(
+                        brand="XELERON", name=f"Xeleron {g[0]}", model=g[0],
+                        price="", url=base + sec,
+                        kw=(g[i_kw].replace(",", ".") if i_kw is not None else ""),
+                        bar=bar.replace(",", "."), flow=fl.replace(",", "."),
+                        ip="", vsd="",
+                        specs=json.dumps({h: g[i] for i, h in enumerate(hdr) if i < len(g)},
+                                         ensure_ascii=False)))
+    return rows
+
+
 ADAPTERS = {"berg": ("berg-air.ru (BERG + ATOM)", run_berg),
-            "sollant": ("sollant-rus.ru (SOLLANT)", run_sollant)}
+            "sollant": ("sollant-rus.ru (SOLLANT)", run_sollant),
+            "gmp": ("gmp.energy (GMP)", run_gmp),
+            "xeleron": ("xelerone.com (XELERON) — только характеристики, цен на сайте нет", run_xeleron)}
 
 
 def main() -> int:
