@@ -204,7 +204,141 @@ def run_berg(limit: int = 0):
     return rows
 
 
-ADAPTERS = {"berg": ("berg-air.ru (BERG + ATOM)", run_berg)}
+
+# --- адаптер: Bitrix (Sollant) ------------------------------------------------------------
+_SOL_SECTIONS = ("/product/kompressornoe_oborudovanie/",
+                 "/product/dizelnye_kompressory_sollant/",
+                 "/product/bezmaslyanye_kompressory_sollant/")
+
+
+def sitemap_urls(base: str) -> list[str]:
+    """Все адреса из sitemap, включая вложенные карты. Отдельной функцией, потому что
+    у части заводских сайтов sitemap отдаётся через раз — повторы делает get()."""
+    urls: list[str] = []
+    for f in ("sitemap.xml", "sitemap_index.xml"):
+        x = get(urljoin(base, f), 30)
+        locs = re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", x)
+        for sub in [l for l in locs if l.endswith(".xml")][:12]:
+            locs += re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", get(sub, 30))
+        urls = [l for l in locs if not l.endswith(".xml")]
+        if len(urls) > 20:
+            break
+    return list(dict.fromkeys(urls))
+
+
+def sollant_urls(base: str) -> list[str]:
+    """Адреса карточек: sitemap ПЛЮС обход листингов.
+
+    Одного обхода листингов мало — постраничный цикл обрывался раньше времени и терял
+    товары, которые видно на первой же странице каталога (SLT-5.5F с ценой 167 763 из
+    скриншота заказчика в сбор не попал). Sitemap даёт полный список, листинги
+    добирают то, чего в нём нет. Дешевле, чем гадать, какой из двух источников полон."""
+    subs, out = list(_SOL_SECTIONS), []
+    for sec in list(_SOL_SECTIONS):
+        page = get(base + sec)
+        subs += [l for l in re.findall(rf'href="({re.escape(sec)}[^"?#]+/)"', page)
+                 if "/filter/" not in l]
+    subs = list(dict.fromkeys(subs))
+    for sec in subs:
+        for page_no in range(1, 21):
+            page = get(f"{base}{sec}?PAGEN_1={page_no}")
+            if not page:
+                break
+            links = [l for l in dict.fromkeys(
+                        re.findall(rf'href="({re.escape(sec)}[^"?#]+/)"', page))
+                     if "/filter/" not in l and l.rstrip("/") != sec.rstrip("/")
+                     # ТОВАР, а не подраздел: у карточки четыре сегмента пути
+                     # (/product/<раздел>/<подраздел>/<товар>/), у подраздела — три.
+                     # Без этой проверки в выборку попадали страницы разделов
+                     # («Компрессоры 4-в-1 Sollant»), у них нет ни характеристик,
+                     # ни цены предложения — только цена «от».
+                     and len([x for x in l.strip("/").split("/") if x]) == 4
+                     and l not in subs]
+            fresh = [urljoin(base, l) for l in links if urljoin(base, l) not in out]
+            if not fresh:
+                break
+            out += fresh
+    # добор из sitemap: товар = четыре сегмента пути под /product/
+    for u in sitemap_urls(base):
+        pth = urlparse(u).path
+        if (pth.startswith("/product/") and len([x for x in pth.strip("/").split("/") if x]) == 4
+                and u not in out and "/filter/" not in pth):
+            out.append(u)
+    return out
+
+
+def sollant_card(url: str, page: str) -> list[dict]:
+    """Карточка -> строки по ТОРГОВЫМ ПРЕДЛОЖЕНИЯМ.
+
+    Цена предложения в HTML карточки НЕ лежит: в data-json стоят только идентификаторы
+    (ID, TREE, CAN_BUY), а цену сайт подставляет при выборе варианта. Но страница
+    принимает ?oid=<ID> и отдаёт цену выбранного предложения в data-value — этого
+    достаточно, браузер не нужен.
+
+    Зачем вообще ходить по предложениям, а не взять цену «по умолчанию»: у SLT-5.5F
+    винтовой блок Hanbell AC стоит 167 763, а Hanbell AB — 221 938, то есть плюс 32%
+    при одинаковой мощности и давлении. «Модель винтового блока» — столбец шаблона
+    заказчика, и одна цена на карточку сравнивала бы разные машины."""
+    h1 = re.search(r"<h1[^>]*>(.*?)</h1>", page, re.S)
+    name = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", h1.group(1)))).strip() if h1 else ""
+    if not name:
+        return []
+    # расшифровка кодов свойств: data-treevalue="730_2906" + title="Рабочее давление (Бар): 8"
+    vals = {(m.group(1), m.group(2)): (m.group(3).strip(), m.group(4).strip())
+            for m in re.finditer(
+                r'data-treevalue="(\d+)_(\d+)"[^>]*title="([^:"]+):\s*([^"]+)"', page)}
+    m = re.search(r"data-json='(\[.*?\])'", page, re.S)
+    try:
+        offers = json.loads(m.group(1)) if m else []
+    except Exception:
+        offers = []
+    # общие свойства карточки — те же тройки «свойство / — / значение», что у Berg
+    ls, common = lines_of(page), {}
+    for k in range(len(ls) - 2):
+        if ls[k + 1] in ("—", "-") and re.search(
+                r"мощност|привод|частотн|габарит|тип двигат|диаметр|ступен|охлажд|масл", ls[k], re.I):
+            common.setdefault(ls[k].strip(), ls[k + 2].strip())
+    rows = []
+    for o in offers or [None]:
+        if o is None:
+            price = next(iter(re.findall(r'data-value="(\d{4,9})"', page)), "")
+            props = {}
+        else:
+            pg = get(f"{url}?oid={o['ID']}")
+            price = next(iter(re.findall(r'data-value="(\d{4,9})"', pg)), "")
+            props = {}
+            for pk, pv in (o.get("TREE") or {}).items():
+                label, value = vals.get((pk.replace("PROP_", ""), str(pv)), (pk, str(pv)))
+                props[label] = value
+        g = lambda pat, src: next((v for k, v in src.items() if re.search(pat, k, re.I)), "")
+        rows.append(dict(
+            brand="SOLLANT", name=name,
+            model=name.split()[-1] if name else "",
+            price=price, url=url,
+            kw=re.sub(r"[^\d.,]", "", g(r"мощност", common)).replace(",", "."),
+            bar=re.sub(r"[^\d.,]", "", g(r"давлен", props)).replace(",", "."),
+            flow=re.sub(r"[^\d.,]", "", g(r"производительн", props) or g(r"производительн", common)).replace(",", "."),
+            ip=re.sub(r"\s+", "", g(r"защит", props) or g(r"защит", common)),
+            vsd=g(r"частотн", common),
+            specs=json.dumps({**common, **props}, ensure_ascii=False)))
+    return rows
+
+
+def run_sollant(limit: int = 0):
+    base = "https://sollant-rus.ru"
+    urls = sollant_urls(base)
+    print(f"  карточек в каталоге: {len(urls)}")
+    if limit:
+        urls = urls[:limit]
+    rows = []
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        for r in ex.map(lambda u: sollant_card(u, get(u)), urls):
+            rows += r
+    return rows
+
+
+ADAPTERS = {"berg": ("berg-air.ru (BERG + ATOM)", run_berg),
+            "sollant": ("sollant-rus.ru (SOLLANT)", run_sollant)}
 
 
 def main() -> int:
