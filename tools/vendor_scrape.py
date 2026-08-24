@@ -63,6 +63,44 @@ def lines_of(page: str) -> list[str]:
     return [l.strip() for l in text_of(page).split("\n") if l.strip()]
 
 
+# --- универсальный обход каталога ---------------------------------------------------------
+_SKIP_URL = re.compile(r"/(filter|compare|basket|cart|search|login|auth|feed|page/\d+"
+                       r"|zapchast\w*|raskhodnik\w*|maslo\w*|filtry)(/|$)|"
+                       r"\.(jpg|jpeg|png|gif|webp|pdf|css|js|xml|zip)$", re.I)
+
+
+def crawl_cards(base: str, roots, sect_re: str, max_pages: int = 900) -> list[str]:
+    """Обход каталога вширь. Возвращает адреса страниц, похожих на карточку товара.
+
+    Почему обход, а не sitemap: sitemap у заводских сайтов отдаётся через раз — в одном
+    прогоне девять сайтов из десяти вернули пусто, и на этом уже уехала целая перепись.
+    Обход медленнее, но повторяем: get() сам делает три попытки.
+
+    Карточкой считаем страницу, где нашлась цена ИЛИ таблица характеристик с мощностью
+    и давлением. Судить по одному виду адреса нельзя: у одних сайтов товар лежит на
+    третьем уровне, у других на втором, а у части раздел и карточка неразличимы по пути."""
+    seen, queue, cards = set(), list(roots), []
+    host = urlparse(base).netloc.replace("www.", "")
+    rx = re.compile(sect_re, re.I)
+    while queue and len(seen) < max_pages:
+        u = queue.pop(0)
+        if u in seen or _SKIP_URL.search(urlparse(u).path):
+            continue
+        seen.add(u)
+        page = get(u, 35, 2)
+        if not page:
+            continue
+        if find_prices(page) or (re.search(r"мощност", page, re.I) and re.search(r"давлен", page, re.I)
+                                 and re.search(r"<h1", page, re.I)):
+            cards.append(u)
+        for m in re.findall(r'href="([^"#?]+)"', page):
+            v = urljoin(u, m).split("?")[0]
+            if (urlparse(v).netloc.replace("www.", "") == host and rx.search(urlparse(v).path)
+                    and v not in seen and v not in queue and not _SKIP_URL.search(urlparse(v).path)):
+                queue.append(v)
+    return cards
+
+
 _RUB = re.compile(r"(\d[\d\s\xa0 ]{2,12})\s*(?:₽|руб)", re.I)
 _ATTR_PRICE = re.compile(
     r'(?:itemprop="price"[^>]*content="|data-value="|"(?:value|price|PRICE)"\s*:\s*"?)(\d{3,9})')
@@ -547,10 +585,112 @@ def run_xeleron(limit: int = 0):
     return rows
 
 
+
+# --- универсальный адаптер: раздел -> постраничный листинг -> карточка ---------------------
+def main_price(page: str) -> str:
+    """Цена САМОГО товара — ближайшая к заголовку h1.
+
+    Обобщение того, что пришлось делать руками для GMP: на карточке почти всегда есть
+    ещё цены — блок «похожие товары», «с этим покупают», аксессуары. Брать первую по
+    странице нельзя (GM 2,2-10-100A BOX получал 377 695 вместо 122 305), а привязка к
+    имени CSS-класса не переносится с сайта на сайт. Расстояние до h1 переносится."""
+    h1 = re.search(r"<h1[^>]*>(.*?)</h1>", page, re.S)
+    if not h1:
+        return ""
+    title = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", h1.group(1)))).strip()
+    # Ищем в ТЕКСТЕ без тегов: в сыром HTML между числом и словом «руб» может лежать что
+    # угодно, и гибкий шаблон ловил мусор — на карточке ET он взял 7342 из
+    # id="bx_117848907_7342" вместо цены 207 303.
+    t = text_of(html.unescape(page))
+    anchor = t.find(title[:40]) if title else 0
+    if anchor < 0:
+        anchor = 0
+    best, bestd = "", 10 ** 9
+    for m in re.finditer(r"(\d[\d ]{2,12})\s*(?:₽|руб)", t, re.I):
+        v = re.sub(r"\D", "", m.group(1))
+        if not v.isdigit() or not (1000 <= int(v) <= 100_000_000):
+            continue
+        d = abs(m.start() - anchor)
+        if d < bestd:
+            best, bestd = v, d
+    if best:
+        return best
+    # запасной путь — цена в атрибуте/JSON (так её отдаёт Berg, где текста с «руб» нет)
+    for m in re.finditer(r'itemprop="price"[^>]*content="(\d{3,9})"|data-value="(\d{4,9})"',
+                         html.unescape(page)):
+        v = next((g for g in m.groups() if g), "")
+        if v.isdigit() and 1000 <= int(v) <= 100_000_000:
+            return v
+    return ""
+
+
+def listing_urls(base: str, sections, page_param: str = "PAGEN_1", max_pages: int = 60) -> list[str]:
+    """Адреса карточек: по каждому разделу идём постранично, пока приходят новые ссылки."""
+    out: list[str] = []
+    for sec in sections:
+        for n in range(1, max_pages + 1):
+            page = get(f"{base}{sec}?{page_param}={n}")
+            if not page:
+                break
+            links = [l for l in dict.fromkeys(
+                        re.findall(rf'href="({re.escape(sec)}[^"?#]+/)"', page))
+                     if l.rstrip("/") != sec.rstrip("/") and not _SKIP_URL.search(l)]
+            fresh = [urljoin(base, l) for l in links if urljoin(base, l) not in out]
+            if not fresh:
+                break
+            out += fresh
+    return out
+
+
+def parse_generic(url: str, page: str, brand: str) -> dict | None:
+    """Карточка -> строка. Характеристики берём и из таблиц, и из пар «ключ / значение»
+    подряд идущими строками: часть сайтов верстает их div'ами, а не таблицей."""
+    h1 = re.search(r"<h1[^>]*>(.*?)</h1>", page, re.S)
+    name = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", h1.group(1)))).strip() if h1 else ""
+    if not name:
+        return None
+    sp = dict(table_specs(page))
+    ls = lines_of(page)
+    try:
+        i = next(k for k, l in enumerate(ls) if re.fullmatch(r"Характеристики|Технические характеристики", l, re.I))
+        for k in range(i + 1, min(i + 80, len(ls) - 1), 2):
+            key, val = ls[k], ls[k + 1]
+            if len(key) < 60 and val and not re.fullmatch(r"[—\-]", val):
+                sp.setdefault(key, val)
+    except StopIteration:
+        pass
+    g = lambda pat: next((v for k, v in sp.items() if re.search(pat, k, re.I)), "")
+    return dict(brand=brand, name=name, model="", price=main_price(page), url=url,
+                kw=re.sub(r"[^\d.,]", "", g(r"мощност")).replace(",", "."),
+                bar=re.sub(r"[^\d.,]", "", g(r"давлен")).replace(",", "."),
+                flow=re.sub(r"[^\d.,]", "", g(r"произв\w*дительн")).replace(",", "."),
+                ip=re.sub(r"\s+", "", g(r"защит")), vsd=g(r"частотн"),
+                specs=json.dumps(sp, ensure_ascii=False))
+
+
+def make_runner(base: str, sections, brand: str, page_param: str = "PAGEN_1"):
+    def run(limit: int = 0):
+        urls = listing_urls(base, sections, page_param)
+        print(f"  карточек в листинге: {len(urls)}")
+        if limit:
+            urls = urls[:limit]
+        rows = []
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for r in ex.map(lambda u: parse_generic(u, get(u), brand), urls):
+                if r:
+                    rows.append(r)
+        return rows
+    return run
+
+
 ADAPTERS = {"berg": ("berg-air.ru (BERG + ATOM)", run_berg),
             "sollant": ("sollant-rus.ru (SOLLANT)", run_sollant),
             "gmp": ("gmp.energy (GMP)", run_gmp),
-            "xeleron": ("xelerone.com (XELERON)", run_xeleron)}
+            "xeleron": ("xelerone.com (XELERON)", run_xeleron),
+            "et": ("et-compressors.ru (ET)", make_runner(
+                "https://et-compressors.ru",
+                ["/catalog/vintovye_kompressory/", "/catalog/spiralnye_kompressory/",
+                 "/catalog/peredvizhnye_kompressory/"], "ET"))}
 
 
 def main() -> int:
