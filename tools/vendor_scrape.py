@@ -101,7 +101,9 @@ def crawl_cards(base: str, roots, sect_re: str, max_pages: int = 900) -> list[st
     return cards
 
 
-_RUB = re.compile(r"(\d[\d\s\xa0 ]{2,12})\s*(?:₽|руб)", re.I)
+# Копейки: Comprag пишет «1 916 470,00 ₽», и без хвоста (?:[.,]\d{2})? шаблон
+# цепляется за «00» и цену не находит вовсе.
+_RUB = re.compile(r"(\d[\d\s\xa0 ]{2,12})(?:[.,]\d{2})?\s*(?:₽|руб)", re.I)
 _ATTR_PRICE = re.compile(
     r'(?:itemprop="price"[^>]*content="|data-value="|"(?:value|price|PRICE)"\s*:\s*"?)(\d{3,9})')
 
@@ -606,7 +608,7 @@ def main_price(page: str) -> str:
     if anchor < 0:
         anchor = 0
     best, bestd = "", 10 ** 9
-    for m in re.finditer(r"(\d[\d ]{2,12})\s*(?:₽|руб)", t, re.I):
+    for m in re.finditer(r"(\d[\d ]{2,12})(?:[.,]\d{2})?\s*(?:₽|руб)", t, re.I):
         v = re.sub(r"\D", "", m.group(1))
         if not v.isdigit() or not (1000 <= int(v) <= 100_000_000):
             continue
@@ -751,6 +753,95 @@ def run_kraftmachine(limit: int = 0):
     return rows
 
 
+
+# --- адаптер: Comprag (статические .php, скидочная цена) -----------------------------------
+def run_comprag(limit: int = 0):
+    """Comprag — статический сайт: разделы catalog-<id>.php, товары product-<арт>.php.
+
+    Цен на карточке ДВЕ: действующая и зачёркнутая до скидки («-20%», 1 916 470 против
+    2 395 580). Берём МЕНЬШУЮ — это то, что покупатель платит, и то, с чем сравнивают
+    нашу цену. Взять большую значит завысить конкурента на четверть.
+
+    Характеристики идут парами после строки «Технические характеристики:» — обычным
+    списком, без таблицы, поэтому общий разбор их не видит."""
+    base = "https://www.comprag.ru/"
+    # Обходим сайт целиком (он маленький, ~60 страниц). Иначе не найти компрессоры:
+    # с главной видны только catalog-38/201/500 — это принадлежности и масла, а
+    # каталоги компрессоров (catalog-16…24) висят на страницах СЕРИЙ (a-series.php,
+    # f-series.php и т. д.), куда с главной ведёт лишь раздел «Производство сжатого
+    # воздуха». Первая версия адаптера собрала 13 позиций, и все — воздухосборники
+    # и масло.
+    seen_pages, queue, prods, seen = set(), [base], [], set()
+    while queue and len(seen_pages) < 200:
+        u = queue.pop(0)
+        if u in seen_pages:
+            continue
+        seen_pages.add(u)
+        page = get(u, 30, 2)
+        if not page:
+            continue
+        for m in re.findall(r'href="([^"#?]+\.php)"', page):
+            v = urljoin(u, m)
+            if not v.startswith(base):
+                continue
+            if re.search(r"product-\d+\.php$", v):
+                if v not in seen:
+                    seen.add(v); prods.append(v)
+            elif v not in seen_pages and v not in queue:
+                queue.append(v)
+    print(f"  страниц обойдено {len(seen_pages)} | карточек {len(prods)}")
+    if limit:
+        prods = prods[:limit]
+    rows = []
+
+    def one(u):
+        page = get(u)
+        ls = lines_of(page)
+        if not ls:
+            return None
+        name = ls[0].strip()
+        # Цена товара — строки НЕПОСРЕДСТВЕННО ПЕРЕД «кол-во»: там стоят действующая и
+        # зачёркнутая до скидки («-20%», 594 372,00 и 699 261,00). Брать минимум по всей
+        # странице нельзя — ниже висит блок сопутствующих товаров, и min() выдавал
+        # 13 517 руб. (цена масла ScrewLub) для компрессора за 594 тысячи.
+        pr = []
+        try:
+            q = next(k for k, l in enumerate(ls) if re.fullmatch(r"кол-во", l.strip(), re.I))
+            for k in range(q - 1, max(-1, q - 5), -1):
+                m = re.fullmatch(r"(\d[\d  ]*)(?:[.,]\d{2})?\s*₽?", ls[k].strip())
+                if m:
+                    v = re.sub(r"\D", "", m.group(1))
+                    if v.isdigit() and 1000 <= int(v) <= 100_000_000:
+                        pr.append(int(v))
+                elif pr:
+                    break
+        except StopIteration:
+            pr = find_prices(page)
+        sp = {}
+        try:
+            i = next(k for k, l in enumerate(ls) if re.match(r"Технические характеристики", l, re.I))
+            for k in range(i + 1, min(i + 40, len(ls) - 1), 2):
+                key, val = ls[k], ls[k + 1]
+                if len(key) < 60 and val and not re.match(r"Технические", key, re.I):
+                    sp.setdefault(key, val)
+        except StopIteration:
+            pass
+        g = lambda pat: next((v for k, v in sp.items() if re.search(pat, k, re.I)), "")
+        return dict(brand="COMPRAG", name=name, model=g(r"^модель"),
+                    price=(str(min(pr)) if pr else ""), url=u,
+                    kw=re.sub(r"[^\d.,]", "", g(r"мощност")).replace(",", "."),
+                    bar=re.sub(r"[^\d.,]", "", g(r"давлен")).replace(",", "."),
+                    flow=re.sub(r"[^\d.,]", "", g(r"производительн")).replace(",", "."),
+                    ip=re.sub(r"\s+", "", g(r"защит")), vsd=g(r"частотн"),
+                    specs=json.dumps(sp, ensure_ascii=False))
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for r in ex.map(one, prods):
+            if r:
+                rows.append(r)
+    return rows
+
+
 ADAPTERS = {"berg": ("berg-air.ru (BERG + ATOM)", run_berg),
             "sollant": ("sollant-rus.ru (SOLLANT)", run_sollant),
             "gmp": ("gmp.energy (GMP)", run_gmp),
@@ -760,6 +851,7 @@ ADAPTERS = {"berg": ("berg-air.ru (BERG + ATOM)", run_berg),
             # масла и услуги. Список короткий и меняется раз в год — дешевле держать его
             # здесь, чем разбирать мусор в отчёте.
             "kraftmachine": ("kraftmachine.ru (KRAFTMACHINE)", run_kraftmachine),
+            "comprag": ("comprag.ru (COMPRAG)", run_comprag),
             "magnus": ("magnus-prom.ru (MAGNUS)", make_runner(
                 "https://magnus-prom.ru",
                 ["/product/vintovye_kompressory/", "/product/porshnevye-kompressory/",
