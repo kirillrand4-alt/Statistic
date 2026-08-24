@@ -63,6 +63,34 @@ def lines_of(page: str) -> list[str]:
     return [l.strip() for l in text_of(page).split("\n") if l.strip()]
 
 
+_RUB = re.compile(r"(\d[\d\s\xa0 ]{2,12})\s*(?:₽|руб)", re.I)
+_ATTR_PRICE = re.compile(
+    r'(?:itemprop="price"[^>]*content="|data-value="|"(?:value|price|PRICE)"\s*:\s*"?)(\d{3,9})')
+
+
+def find_prices(page: str) -> list[int]:
+    """Все суммы со страницы. ДВА прохода, и оба обязательны — на этом я ошибся дважды:
+
+      * по тексту БЕЗ ТЕГОВ: у Xeleron цена свёрстана как
+        <span class='arp_price_value'>1 923 075</span><span ...> руб </span>,
+        то есть между числом и словом «руб» стоит разметка, и поиск по сырому HTML
+        её не находит;
+      * по атрибутам и JSON: у Berg цена живёт в data-data="{&quot;value&quot;:138478…}",
+        а срезание тегов выбрасывает атрибут вместе с тегом.
+
+    Один проход всегда пропускает половину сайтов. Санити-рамка 1 000…100 млн отсекает
+    телефоны, годы и артикулы."""
+    out: set[int] = set()
+    for src in (text_of(html.unescape(page)), html.unescape(html.unescape(page))):
+        for m in _RUB.findall(src):
+            v = re.sub(r"\D", "", m)
+            if v.isdigit():
+                out.add(int(v))
+    for m in _ATTR_PRICE.findall(html.unescape(page)):
+        out.add(int(m))
+    return sorted(v for v in out if 1000 <= v <= 100_000_000)
+
+
 # --- адаптер: Bitrix + шаблон intec (Berg/Atom) -------------------------------------------
 def berg_urls(base: str, section: str) -> list[str]:
     """Адреса карточек со страниц листинга.
@@ -434,10 +462,40 @@ _XEL_SECTIONS = ("vintovye-kompressory/", "vintovye-kompressory-zpma/",
                  "bezmaslyanye-kompressory-suhogo-szhatiya/")
 
 
+def xeleron_card_prices(base: str, secs) -> dict:
+    """Цены с карточек товаров: модель -> цена.
+
+    ОТЗЫВ ПРЕЖНЕГО ВЫВОДА. Сначала я записал, что у Xeleron нет ни карточек, ни цен, —
+    неверно оба раза. Карточки есть и со страниц разделов на них СТОЯТ ссылки; я
+    посмотрел первые четыре по алфавиту (конденсатоотводчики, масла) и сделал вывод по
+    ним. Цена на карточке свёрстана как <span class='arp_price_value'>1 923 075</span>
+    <span> руб </span> — между числом и словом стоит разметка, и поиск по сырому HTML
+    её не видит (см. find_prices, там теперь оба прохода).
+
+    Карточек ровно 15, цена стоит на трёх (Z7.5A, Z10A, Z175A). Остальные 73 модели
+    из таблиц цены на сайте не имеют: подстановка адресов по образцу даёт честный 404,
+    скрытых страниц нет — проверено по коду ответа, а не по факту «страница открылась»."""
+    out = {}
+    cards = set()
+    for sec in secs:
+        page = get(base + sec)
+        for m in re.findall(
+                r'href="(https://xelerone\.com/kompressornoe-oborudovanie/[^"?#]+/[^"?#]+/)"', page):
+            if not m.rstrip("/").endswith(tuple(x.strip("/") for x in secs)):
+                cards.add(m)
+    for u in sorted(cards):
+        page = get(u)
+        pr = find_prices(page)
+        h1 = re.search(r"<h1[^>]*>(.*?)</h1>", page, re.S)
+        nm = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", h1.group(1))).strip() if h1 else ""
+        m = re.search(r"\b([A-ZА-Я]{1,4}[\d.,]+\w*)\b", nm)
+        if pr and m:
+            out[m.group(1).upper().replace(",", ".")] = (pr[0], u)
+    return out
+
+
 def run_xeleron(limit: int = 0):
-    """У Xeleron НЕТ карточек товаров и НЕТ цен — проверено на 40 страницах сайта
-    исправленным разбором (двойной unescape + JSON-поля): ни одной суммы, ни даже
-    «цена по запросу». Сайт публикует таблицу модельного ряда, и это всё, что он даёт.
+    """Модельный ряд Xeleron из таблиц разделов + цены с тех карточек, где они есть.
 
     Таблица устроена так: одна строка = модель, а производительность перечислена
     ЧЕТЫРЬМЯ значениями под четыре давления («1.3 1.2 1.0 0.8» для «7 8 10 12»).
@@ -447,6 +505,8 @@ def run_xeleron(limit: int = 0):
     Прочерк вместо числа — значит на этом давлении модель не выпускается: строку не
     создаём, чтобы не выдумывать несуществующее исполнение."""
     base = "https://xelerone.com/kompressornoe-oborudovanie/"
+    prices = xeleron_card_prices(base, _XEL_SECTIONS)
+    print(f"  карточек с ценой: {len(prices)}")
     rows = []
     for sec in _XEL_SECTIONS:
         page = get(base + sec)
@@ -475,9 +535,10 @@ def run_xeleron(limit: int = 0):
                 for bar, fl in pairs:
                     if fl in ("-", "—", ""):   # на этом давлении модели нет
                         continue
+                    pr, purl = prices.get(g[0].upper().replace(",", "."), ("", ""))
                     rows.append(dict(
                         brand="XELERON", name=f"Xeleron {g[0]}", model=g[0],
-                        price="", url=base + sec,
+                        price=pr, url=purl or (base + sec),
                         kw=(g[i_kw].replace(",", ".") if i_kw is not None else ""),
                         bar=bar.replace(",", "."), flow=fl.replace(",", "."),
                         ip="", vsd="",
@@ -489,7 +550,7 @@ def run_xeleron(limit: int = 0):
 ADAPTERS = {"berg": ("berg-air.ru (BERG + ATOM)", run_berg),
             "sollant": ("sollant-rus.ru (SOLLANT)", run_sollant),
             "gmp": ("gmp.energy (GMP)", run_gmp),
-            "xeleron": ("xelerone.com (XELERON) — только характеристики, цен на сайте нет", run_xeleron)}
+            "xeleron": ("xelerone.com (XELERON)", run_xeleron)}
 
 
 def main() -> int:
