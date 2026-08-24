@@ -75,6 +75,37 @@ def bar_bucket(v) -> str | None:
     return str(int(x)) if abs(x - round(x)) < 0.05 else f"{x:g}"
 
 
+# Ряд давлений шаблона. К нему приводится давление на ОТДЕЛЬНОМ листе отчёта: в основном
+# сцепка строго по паспортному числу, как и просил заказчик («допусков нет»).
+_BAR_LADDER = [7, 8, 10, 12, 13, 15.5, 20, 25, 30, 40]
+
+
+def bar_classes(b: str | None) -> frozenset:
+    """Классы ряда шаблона, к которым относится давление карточки.
+
+    Зачем вообще: 323 наши строки не сцеплялись ни с чем только потому, что паспортное
+    давление безмасляных серий (LUF 7,5 / 8,6 / 10,4 бар, OFSA 8,5) в ряду шаблона
+    отсутствует, а у конкурентов те же машины стоят на 7/8/10. Порог 12% отобран по
+    данным: 8,6→8 это 7,5%, 12,5→12 — 4%, а 3, 3,5, 35 и 70 бар остаются своим классом
+    и ни к чему не подтягиваются.
+
+    При равном расстоянии (7,5 бар — ровно между 7 и 8) возвращаем ОБА класса: выбирать
+    за заказчика, куда отнести машину, оснований нет."""
+    if b is None:
+        return frozenset()
+    if b == "15/16":
+        return frozenset({"15/16"})
+    try:
+        x = float(b)
+    except ValueError:
+        return frozenset({b})
+    best = min(abs(v - x) for v in _BAR_LADDER)
+    near = [v for v in _BAR_LADDER if abs(v - x) <= best + 1e-9 and abs(v - x) <= 0.12 * max(v, x)]
+    if not near:
+        return frozenset({b})
+    return frozenset("15/16" if v == 15.5 else str(int(v)) for v in near)
+
+
 def kw_value(v) -> float | None:
     x = num(v)
     if x is None or not (0.5 <= x <= 1000):

@@ -36,7 +36,8 @@ from openpyxl.utils import get_column_letter
 
 from brand_spec_review import load_ours_all
 from scrape_files import find_ours
-from enger_specs import (PROPS, DEFAULTS, KW_LADDER, ip_classes, bar_bucket, kw_value, num,
+from enger_specs import (PROPS, DEFAULTS, KW_LADDER, ip_classes, bar_bucket, bar_classes,
+                         kw_value, num,
                          pick, yesno, yesno_or_model, from_name, block_class, motor_class,
                          cooling, stages)
 
@@ -355,7 +356,9 @@ def build(proba=False, strict=True):
     rows = []
     for o in ours:
         p = enger_props(o, ip_map)
-        hits, soft, base = defaultdict(list), defaultdict(list), defaultdict(list)
+        hits, soft, base, ladder = (defaultdict(list), defaultdict(list),
+                                    defaultdict(list), defaultdict(list))
+        ocls = bar_classes(p["bar"])
         for c in by_kw.get(p["kw"], []):
             ok, weak = match(p, c["props"], strict)
             if ok:
@@ -369,8 +372,14 @@ def build(proba=False, strict=True):
             ok3, diff = match_base(p, c["props"])
             if ok3:
                 base[c["brand"]].append((c, diff))
+                continue
+            # последний заход: давление приведено к ряду шаблона с обеих сторон
+            if ocls & bar_classes(c["props"]["bar"]) and p["bar"] != c["props"]["bar"]:
+                ok4, _ = match(dict(p, bar="~"), dict(c["props"], bar="~"), strict)
+                if ok4:
+                    ladder[c["brand"]].append((c, sorted(ocls & bar_classes(c["props"]["bar"]))))
         rows.append(dict(o=o, props=p, family=enger_family(o["name"], o.get("bar")),
-                         hits=hits, soft=soft, base=base))
+                         hits=hits, soft=soft, base=base, ladder=ladder))
     return rows, cands
 
 
@@ -569,6 +578,31 @@ def save(rows, cands, out=OUT):
     for col, w in (("A", 26), ("E", 34), ("G", 46), ("H", 40)):
         ws4.column_dimensions[col].width = w
 
+    # --- ЛИСТ «Аналог по классу давления» ----------------------------------------------
+    # Отдельно, а не в «Сводной»: тут давление приведено к ряду шаблона (наши 8,6 бар против
+    # их 8), то есть допуск, которого заказчик просил не делать. Без этого листа 323 строки
+    # безмасляных серий не сцеплялись вовсе — паспортных 7,5/8,5/8,6/12,5 бар в ряду нет.
+    ws45 = wb.create_sheet("Аналог по классу давления")
+    head(ws45, ["Модель Enger", "Наш бар", "Класс ряда", "Наша цена", "Бренд",
+                "Модель конкурента", "Их бар", "Цена", "Разница", "Ссылка"])
+    for r in rows:
+        for b in BRANDS:
+            if r["hits"].get(b) or r["soft"].get(b) or r["base"].get(b):
+                continue
+            for c, cls in sorted(r["ladder"].get(b, []),
+                                 key=lambda t: (t[0]["price"] is None, t[0]["price"] or 0))[:2]:
+                i = ws45.max_row + 1
+                ws45.append([r["family"], r["props"]["bar"], "/".join(cls), r["o"].get("price"),
+                             TITLE[b], model_label(c["name"]), c["props"]["bar"], c["price"],
+                             (r["o"]["price"] - c["price"]) / c["price"]
+                             if c["price"] and r["o"].get("price") else None, c.get("url")])
+                ws45.cell(i, 9).number_format = "0%"
+                if c.get("url"):
+                    ws45.cell(i, 10).hyperlink, ws45.cell(i, 10).font = c["url"], LINK
+    ws45.freeze_panes = "A2"
+    for col, w in (("A", 26), ("F", 34), ("J", 40)):
+        ws45.column_dimensions[col].width = w
+
     # --- ЛИСТ «Кандидаты (сайт молчит)» ------------------------------------------------
     ws5 = wb.create_sheet("Кандидаты (сайт молчит)")
     head(ws5, ["Модель Enger", "Бар", "Наша цена", "Бренд", "Модель конкурента", "Цена",
@@ -601,7 +635,29 @@ def save(rows, cands, out=OUT):
     for r in rows:
         for b in r["hits"]:
             hit_brand[b] += 1
+    n = len(rows)
+    cov = Counter()
+    for r in rows:
+        if r["hits"]:
+            cov["строгий"] += 1
+        elif r["base"]:
+            cov["комплектация"] += 1
+        elif r["soft"]:
+            cov["молчит"] += 1
+        elif r["ladder"]:
+            cov["класс бар"] += 1
+        else:
+            cov["ничего"] += 1
     lines = [
+        ("ПОКРЫТИЕ", f"строк (карточек Enger) всего {n}"),
+        ("  строгий аналог", f'{cov["строгий"]} ({cov["строгий"]/n:.0%}) — лист «Сводная»'),
+        ("  др. комплектация", f'{cov["комплектация"]} — только на листе «Другая комплектация»'),
+        ("  сайт молчит", f'{cov["молчит"]} — только на листе «Кандидаты (сайт молчит)»'),
+        ("  класс давления", f'{cov["класс бар"]} — только на листе «Аналог по классу давления»'),
+        ("  кандидата нет", f'{cov["ничего"]} ({cov["ничего"]/n:.0%}) — у собранных заводов такой '
+                            f"машины нет вовсе. Это почти целиком безмасляные серии сухого "
+                            f"сжатия (OF, OFS, OFSA, OFSZ) на 3–5 и 20–40 бар."),
+        ("", ""),
         ("Правило сцепки", "13 свойств шаблона, точное совпадение. кВт и бар обязательны "
                            "с обеих сторон. Десять свойств, выделенных в шаблоне зелёным, при "
                            "молчании сайта заменяются первым значением столбца."),
@@ -614,6 +670,9 @@ def save(rows, cands, out=OUT):
         ("Цены", "рубли, с сайтов производителей. В образце заказчика цены в долларах по "
                  "курсу 78,9 (лист «Лист1» образца: =A1/78.9)."),
         ("Серым в отчёте", "значение подставлено умолчанием шаблона, а не прочитано с сайта."),
+        ("Класс давления", "паспортных 7,5 / 8,5 / 8,6 / 12,5 бар (наши безмасляные LUF, OFSA, "
+                           "OFS) в ряду шаблона нет, а у заводов те же машины стоят на 7/8/10/12. "
+                           "Такие пары вынесены на отдельный лист: в «Сводной» допусков нет."),
         ("", ""),
         ("Remeza", "remeza.com — сайт завода, цен нет ни в разделах, ни в карточках "
                    "(проверено 24.08). Колонка оставлена пустой: брать цену с площадки нельзя."),
