@@ -624,16 +624,26 @@ def main_price(page: str) -> str:
     return ""
 
 
-def listing_urls(base: str, sections, page_param: str = "PAGEN_1", max_pages: int = 60) -> list[str]:
-    """Адреса карточек: по каждому разделу идём постранично, пока приходят новые ссылки."""
+def listing_urls(base: str, sections, page_param: str = "PAGEN_1", max_pages: int = 60,
+                 card_re: str | None = None) -> list[str]:
+    """Адреса карточек: по каждому разделу идём постранично, пока приходят новые ссылки.
+
+    card_re нужен там, где карточка лежит НЕ под адресом раздела: у Ironmac раздел
+    /catalog/vintovye_kompressory/, а товары — /catalog/product/ic_15_8_digi_wifi/.
+    Без него из семи страниц листинга не находилось ни одного товара."""
     out: list[str] = []
+    pat = card_re or None
     for sec in sections:
         for n in range(1, max_pages + 1):
             page = get(f"{base}{sec}?{page_param}={n}")
             if not page:
                 break
-            links = [l for l in dict.fromkeys(
-                        re.findall(rf'href="({re.escape(sec)}[^"?#]+/)"', page))
+            # Ссылки бывают и относительные, и абсолютные: Kraftmachine пишет
+            # href="https://kraftmachine.ru/catalog/...", и шаблон только под «/catalog/»
+            # не находил на странице в 285 КБ ни одной ссылки.
+            raw = (re.findall(pat, page) if pat
+                   else re.findall(rf'href="((?:https?://[^"]*?)?{re.escape(sec)}[^"?#]+/)"', page))
+            links = [l for l in dict.fromkeys(raw)
                      if l.rstrip("/") != sec.rstrip("/") and not _SKIP_URL.search(l)]
             fresh = [urljoin(base, l) for l in links if urljoin(base, l) not in out]
             if not fresh:
@@ -668,9 +678,10 @@ def parse_generic(url: str, page: str, brand: str) -> dict | None:
                 specs=json.dumps(sp, ensure_ascii=False))
 
 
-def make_runner(base: str, sections, brand: str, page_param: str = "PAGEN_1"):
+def make_runner(base: str, sections, brand: str, page_param: str = "PAGEN_1",
+                card_re: str | None = None):
     def run(limit: int = 0):
-        urls = listing_urls(base, sections, page_param)
+        urls = listing_urls(base, sections, page_param, card_re=card_re)
         print(f"  карточек в листинге: {len(urls)}")
         if limit:
             urls = urls[:limit]
@@ -683,10 +694,99 @@ def make_runner(base: str, sections, brand: str, page_param: str = "PAGEN_1"):
     return run
 
 
+
+# --- адаптер: Kraftmachine (разбор ЛИСТИНГА, карточки не нужны) ----------------------------
+_KM_CARD = re.compile(r'<h3 class="card-name">\s*<a href="([^"]+)"[^>]*>(.*?)</a>', re.S)
+_KM_CH = re.compile(r"<li>\s*<span>([^<]{2,60}?):?</span>\s*<span>[^<]*</span>\s*<span>\s*([^<]*?)\s*</span>", re.S)
+
+
+def run_kraftmachine(limit: int = 0):
+    """Kraftmachine отдаёт весь товар прямо в листинге, и ходить по карточкам не нужно.
+
+    Почему пришлось делать отдельный адаптер, а не общий: ссылка на товар записана
+    ОТНОСИТЕЛЬНО, без ведущей косой — href="catalog/vintovye-.../km11-10pv-...", и
+    универсальный сборщик, ищущий «/catalog/…», не находил на странице в 400 КБ ни
+    одной ссылки. Зато в листинге есть микроразметка: <meta itemprop="price"
+    content="354003"> и <meta itemprop="name" content="КМ11-10пВ (KMV01110PB23JH1)">,
+    плюс ul.card-characteristics с производительностью, мощностью и классом защиты.
+
+    Пагинация здесь ?page=N, а не PAGEN_1."""
+    base = "https://kraftmachine.ru/"
+    secs = ["catalog/vintovye-maslozapolnennye-kompressory/", "catalog/bezmaslyanye-kompressory/",
+            "catalog/dizelnye-kompressory/", "catalog/bezmaslyanye-bustery/"]
+    rows, seen = [], set()
+    for sec in secs:
+        for n in range(1, 41):
+            page = get(f"{base}{sec}?page={n}")
+            if not page:
+                break
+            cards = list(_KM_CARD.finditer(page))
+            if not cards:
+                break
+            new = 0
+            for i, m in enumerate(cards):
+                seg = page[m.end():cards[i + 1].start() if i + 1 < len(cards) else m.end() + 4000]
+                url = urljoin(base, m.group(1))
+                if url in seen:
+                    continue
+                seen.add(url); new += 1
+                name = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", m.group(2)))).strip()
+                # content="0" у этого сайта означает «цены нет» (товар под заказ), а не
+                # ноль рублей: пустая ячейка честнее нуля, который попадёт в MIN и
+                # обнулит всё сравнение.
+                pm = re.search(r'itemprop="price"\s+content="([1-9]\d{2,})"', seg)
+                nm2 = re.search(r'itemprop="name"\s+content="([^"]+)"', seg)
+                sp = {k.strip(): v.strip() for k, v in _KM_CH.findall(seg)}
+                g = lambda pat: next((v for k, v in sp.items() if re.search(pat, k, re.I)), "")
+                rows.append(dict(
+                    brand="KRAFTMACHINE", name=name,
+                    model=(nm2.group(1) if nm2 else ""), price=(pm.group(1) if pm else ""),
+                    url=url,
+                    kw=re.sub(r"[^\d.,]", "", g(r"мощност")).replace(",", "."),
+                    bar="", flow=re.sub(r"[^\d.,]", "", g(r"производительн")).replace(",", "."),
+                    ip=re.sub(r"\s+", "", g(r"защит")), vsd="",
+                    specs=json.dumps(sp, ensure_ascii=False)))
+            if not new:
+                break
+    return rows
+
+
 ADAPTERS = {"berg": ("berg-air.ru (BERG + ATOM)", run_berg),
             "sollant": ("sollant-rus.ru (SOLLANT)", run_sollant),
             "gmp": ("gmp.energy (GMP)", run_gmp),
             "xeleron": ("xelerone.com (XELERON)", run_xeleron),
+            # Разделы перечислены явно, а не ищутся автоматически: у каждого сайта своя
+            # раскладка, и «взять всё, где в адресе есть kompressor» тянет запчасти,
+            # масла и услуги. Список короткий и меняется раз в год — дешевле держать его
+            # здесь, чем разбирать мусор в отчёте.
+            "kraftmachine": ("kraftmachine.ru (KRAFTMACHINE)", run_kraftmachine),
+            "magnus": ("magnus-prom.ru (MAGNUS)", make_runner(
+                "https://magnus-prom.ru",
+                ["/product/vintovye_kompressory/", "/product/porshnevye-kompressory/",
+                 "/product/tsentrobezhnye-kompressory1/"], "MAGNUS")),
+            "hansmann": ("hansmann.ru (HANSMANN)", make_runner(
+                "https://hansmann.ru",
+                ["/catalog/vintovye_kompressory_hansmann_serii_rs/",
+                 "/catalog/vintovye_kompressory_hansmann_serii_rsa/",
+                 "/catalog/vintovye_kompressory_hansmann_serii_rse_s_chastotnym_preobazovatelem/",
+                 "/catalog/dizelnye_kompressory_hansmann/"], "HANSMANN")),
+            "zif": ("zif-kompressor.ru (ЗИФ)", make_runner(
+                "https://zif-kompressor.ru",
+                ["/catalog/vintovye-kompressory/", "/catalog/dizelnye-kompressory/",
+                 "/catalog/kompressory-zif-sve/", "/catalog/rudnichnye-kompressory-zif-rn/",
+                 "/catalog/vzryvozashchishchennye-kompressory/",
+                 "/catalog/kompressory-dlya-burovykh/"], "ЗИФ")),
+            "ironmac": ("ironmac-kompressor.com (IRONMAC)", make_runner(
+                "https://ironmac-kompressor.com",
+                ["/catalog/vintovye_kompressory/"], "IRONMAC",
+                card_re=r'href="(/catalog/product/[^"?#]+/)"')),
+            "exelute": ("exelute.ru (EXELUTE)", make_runner(
+                "https://exelute.ru",
+                ["/product/odnostupenchatye-vintovye-kompressory/",
+                 "/product/dvukhstupenchatye-vintovye-kompressory/",
+                 "/product/vintovye-kompressory-bezmaslyannye/",
+                 "/product/dizelnye-kompressory/",
+                 "/product/kompressory-dlya-lazernoy-rezki/"], "EXELUTE")),
             "et": ("et-compressors.ru (ET)", make_runner(
                 "https://et-compressors.ru",
                 ["/catalog/vintovye_kompressory/", "/catalog/spiralnye_kompressory/",
