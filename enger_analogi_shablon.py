@@ -36,7 +36,7 @@ _HERE = Path(__file__).resolve().parent          # скрипт зовут и и
 sys.path[:0] = [str(_HERE), str(_HERE / "tools")]
 
 import openpyxl
-from openpyxl.formatting.rule import ColorScaleRule
+from openpyxl.formatting.rule import CellIsRule, ColorScaleRule
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.styles.colors import Color
 from openpyxl.utils import get_column_letter
@@ -447,7 +447,7 @@ HFILL = PatternFill("solid", fgColor="305496")
 HFONT = Font(bold=True, color="FFFFFF")
 CTR = Alignment(horizontal="center", vertical="center", wrap_text=True)
 LINK = Font(color="0563C1", underline="single")
-RED = PatternFill("solid", fgColor="FFC7CE")       # конкурент дешевле нас
+RED = PatternFill("solid", fgColor="FFFFC7CE")       # конкурент дешевле нас
 GREY = Font(color="808080", italic=True)           # значение держится на умолчании
 FIX = ["Модель Enger", "Бар", "Пр-ть, м³/мин", "Реальная\nпр-ть", "Наша цена, ₽",
        "Цена мин", "Цена сред", "Цена new", "% сниж", "Мы дороже на", "Аналогов"]
@@ -586,12 +586,39 @@ def svodnaya_etalon(wb, rows, real):
                 ws.cell(i, pc, c["price"]).number_format = RUB
                 ws.cell(i, dc, f'=IFERROR((H{top}-{get_column_letter(pc)}{i})/'
                                f'{get_column_letter(pc)}{i},"")').number_format = "0%"
-        # цветовая шкала по короткому блоку брендов — как в образце, построчно
+        # Цветовая шкала по короткому блоку брендов — построчно, как в образце. Полярность
+        # оттуда же и она обратная «интуитивной»: min = красный F8696B, max = зелёный
+        # 63BE7B. Смысл в том, что шкала смотрит на цены КОНКУРЕНТОВ: самый дешёвый в
+        # строке — красный (он и бьёт по нам), самый дорогой — зелёный.
         ws.conditional_formatting.add(
             f"{get_column_letter(b0)}{top}:{get_column_letter(b0+len(BRANDS)-1)}{top}",
-            ColorScaleRule(start_type="min", start_color="63BE7B",
-                           mid_type="percentile", mid_value=50, mid_color="FFEB84",
-                           end_type="max", end_color="F8696B"))
+            ColorScaleRule(start_type="min", start_color="FFF8696B",
+                           mid_type="percentile", mid_value=50, mid_color="FFFFEB84",
+                           end_type="max", end_color="FF63BE7B"))
+    # Колонки «разница» — то самое «относительно нашей цены». В образце на них висит пара
+    # правил Excel «больше 0 → зелёный / меньше 0 → красный»: разница считается как
+    # (наша цена − цена конкурента) / цена конкурента, поэтому зелёный = мы дороже,
+    # красный = мы дешевле. У заказчика они разложены поячеечно (714 правил, местами с
+    # перевёрнутой полярностью от повторного копирования) — кладём по одному правилу на
+    # колонку и в той полярности, которая у него преобладает (682 ячейки против 338).
+    last = ws.max_row
+    for j in range(len(BRANDS)):
+        d = get_column_letter(t0 + 3 * j + 2)
+        for rule in (CellIsRule(operator="greaterThan", formula=["0"],
+                                fill=PatternFill("solid", start_color="FFC6EFCE"),
+                                font=Font(color="FF006100")),
+                     CellIsRule(operator="lessThan", formula=["0"],
+                                fill=PatternFill("solid", start_color="FFFFC7CE"),
+                                font=Font(color="FF9C0006"))):
+            ws.conditional_formatting.add(f"{d}2:{d}{last}", rule)
+    for rule in (CellIsRule(operator="greaterThan", formula=["0"],
+                            fill=PatternFill("solid", start_color="FFC6EFCE"),
+                            font=Font(color="FF006100")),
+                 CellIsRule(operator="lessThan", formula=["0"],
+                            fill=PatternFill("solid", start_color="FFFFC7CE"),
+                            font=Font(color="FF9C0006"))):
+        ws.conditional_formatting.add(f"G2:G{last}", rule)   # «% к 10 реальной», как в образце
+
     ws.freeze_panes = "B2"
     ws.column_dimensions["A"].width = 27.9
     for col, w in (("B", 9.9), ("C", 8.3), ("D", 1.0), ("E", 14.4), ("F", 8.4), ("G", 13.3),
