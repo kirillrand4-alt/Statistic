@@ -237,9 +237,25 @@ def berg_card_common(page: str) -> tuple[str, dict, dict]:
     return name, common, flow_by_bar
 
 
+# Берём ВСЕ компрессорные разделы, а не один. Первая версия собирала только
+# /catalog/vintovye-kompressory/ — 53 позиции, и это было принято за весь каталог.
+# У berg-air.ru одиннадцать разделов, компрессоры лежат в шести: кроме винтовых это
+# безмасляные сухого сжатия, двухступенчатые, передвижные, дожимные и «решения на
+# ресивере» (те же машины в сборе с ресивером — у нас они отдельные товары).
+# Осушители, воздухоподготовка, расходники, частотники и погрузчики не берём.
+_BERG_SECTIONS = ("/catalog/vintovye-kompressory/",
+                  "/catalog/bezmaslyanye_vintovye_kompressory_sukhogo_szhatiya/",
+                  "/catalog/dvukhstupenchatye_kompressory/",
+                  "/catalog/peredvizhnye_kompressory/",
+                  "/catalog/dozhimnye_ustanovki/",
+                  "/catalog/resheniya_na_resivere/")
+
+
 def run_berg(limit: int = 0):
-    base, section = "https://berg-air.ru", "/catalog/vintovye-kompressory/"
-    urls = berg_urls(base, section)
+    base = "https://berg-air.ru"
+    urls = []
+    for section in _BERG_SECTIONS:
+        urls += [u for u in berg_urls(base, section) if u not in urls]
     print(f"  карточек в листинге: {len(urls)}")
     if limit:
         urls = urls[:limit]
@@ -250,10 +266,23 @@ def run_berg(limit: int = 0):
         name, common, flow = berg_card_common(page)
         return u, name, common, flow, berg_offers(page)
 
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        for u, name, common, flow, offers in ex.map(one, urls):
-            if not name:
-                continue
+    # Второй проход по тем адресам, что не дали строки. На 7 000 карточек стабильно
+    # теряются одна-две — сайт изредка обрывает соединение, и каждый прогон терял РАЗНЫЕ
+    # карточки. Три попытки внутри get() этого не ловят, потому что сбой приходит уже
+    # после отдачи заголовков. В логе такая потеря не видна — только сверкой.
+    done = []
+    for attempt in (1, 2):
+        with ThreadPoolExecutor(max_workers=5) as ex:
+            res = list(ex.map(one, urls))
+        done += [r for r in res if r[1]]
+        urls = [r[0] for r in res if not r[1]]
+        if not urls:
+            break
+        print(f"  не отдались с попытки {attempt}: {len(urls)}, повторяю")
+    if urls:
+        print(f"  ПОТЕРЯНО карточек: {len(urls)}")
+    for u, name, common, flow, offers in done:
+        if True:
             # berg-air.ru везёт две марки — разводим по названию товара
             brand = "ATOM" if re.search(r"atom|атом", name, re.I) else "BERG"
             kw = re.sub(r"[^\d.,]", "", next((v for k, v in common.items()
@@ -695,14 +724,24 @@ def make_runner(base: str, sections, brand: str, page_param: str = "PAGEN_1",
         if limit:
             urls = urls[:limit]
         rows, dropped = [], 0
-        with ThreadPoolExecutor(max_workers=8) as ex:
-            for r in ex.map(lambda u: parse_generic(u, get(u), brand), urls):
-                if not r:
-                    continue
-                if drop and drop.search(r["name"]):
-                    dropped += 1
-                    continue
-                rows.append(r)
+        # Второй проход по неудавшимся адресам — см. комментарий в run_berg: сайт изредка
+        # обрывает соединение, и каждый прогон терял разные одну-две карточки.
+        todo, got = list(urls), []
+        for attempt in (1, 2):
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                res = list(ex.map(lambda u: (u, parse_generic(u, get(u), brand)), todo))
+            got += [r for _, r in res if r]
+            todo = [u for u, r in res if not r]
+            if not todo:
+                break
+            print(f"  не отдались с попытки {attempt}: {len(todo)}, повторяю")
+        if todo:
+            print(f"  ПОТЕРЯНО карточек: {len(todo)}")
+        for r in got:
+            if drop and drop.search(r["name"]):
+                dropped += 1
+                continue
+            rows.append(r)
         if dropped:
             print(f"  отсеяно чужих марок: {dropped}")
         return rows
@@ -905,7 +944,10 @@ ADAPTERS = {"berg": ("berg-air.ru (BERG + ATOM)", run_berg),
             "comprag": ("comprag.ru (COMPRAG)", run_comprag),
             "crossair": ("crossair-compressor.ru (CROSSAIR)", make_runner(
                 "https://crossair-compressor.ru",
-                ["/catalog/vintovye-kompressory/na-rame/",
+                # Родительский раздел тоже нужен: в самом /catalog/vintovye-kompressory/
+                # лежат 20 товаров помимо четырёх подразделов, и без него они терялись.
+                ["/catalog/vintovye-kompressory/",
+                 "/catalog/vintovye-kompressory/na-rame/",
                  "/catalog/vintovye-kompressory/na-resivere/",
                  "/catalog/vintovye-kompressory/na-resivere-s-osushitelem/",
                  "/catalog/vintovye-kompressory/capm-dlya-lazernoy-rezki/",
@@ -913,7 +955,11 @@ ADAPTERS = {"berg": ("berg-air.ru (BERG + ATOM)", run_berg),
                 "CROSSAIR")),
             "dali": ("dali-kompressor.ru (DALI)", make_runner(
                 "https://dali-kompressor.ru",
-                ["/catalog/dl/", "/catalog/dl-bazovaya-komplektaciya/",
+                # /catalog/vintovye-kompressory/ и /peredvizhnye-kompressory/ найдены
+                # ревизией 24.08. Раздел /peredvizhnye-kompressory-cross-air-borey/ НЕ берём:
+                # это Cross Air, у него свой сайт (см. drop_re ниже).
+                ["/catalog/vintovye-kompressory/", "/catalog/peredvizhnye-kompressory/",
+                 "/catalog/dl/", "/catalog/dl-bazovaya-komplektaciya/",
                  "/catalog/dl-chastotni-preobrazovatel/", "/catalog/ca/", "/catalog/ca-r/",
                  "/catalog/caad/", "/catalog/dlad-m/", "/catalog/dlad-w/", "/catalog/dlcy/",
                  "/catalog/dldy/", "/catalog/ed/", "/catalog/en-dvukhstupenchatyi/"],
@@ -933,7 +979,10 @@ ADAPTERS = {"berg": ("berg-air.ru (BERG + ATOM)", run_berg),
                 ["/catalog/vintovye-kompressory/", "/catalog/dizelnye-kompressory/",
                  "/catalog/kompressory-zif-sve/", "/catalog/rudnichnye-kompressory-zif-rn/",
                  "/catalog/vzryvozashchishchennye-kompressory/",
-                 "/catalog/kompressory-dlya-burovykh/"], "ЗИФ")),
+                 "/catalog/kompressory-dlya-burovykh/",
+                 # найдены ревизией разделов 24.08 — были пропущены
+                 "/catalog/kompressory-dlya-mobilnykh-burovykh-ustanovok/",
+                 "/catalog/vzryvozashchishchennye-kompressory-shakhty-neftegaz/"], "ЗИФ")),
             "ironmac": ("ironmac-kompressor.com (IRONMAC)", make_runner(
                 "https://ironmac-kompressor.com",
                 ["/catalog/vintovye_kompressory/"], "IRONMAC",
