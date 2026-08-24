@@ -681,23 +681,73 @@ def parse_generic(url: str, page: str, brand: str) -> dict | None:
 
 
 def make_runner(base: str, sections, brand: str, page_param: str = "PAGEN_1",
-                card_re: str | None = None):
+                card_re: str | None = None, drop_re: str | None = None):
+    """drop_re — марки, которые сайт возит ЧУЖИЕ. Заказчик просил «с сайта только его
+    бренд», а dali-kompressor.ru держит рядом 241 карточку Cross Air (разделы /ca/ и
+    /ca-r/), и у Cross Air есть собственный сайт, откуда мы их и берём. Без отсева одни
+    и те же товары попали бы в отчёт дважды, с разных сайтов и с разными ценами.
+    Проверено по всем 14 собранным файлам: смешение только у Dali."""
+    drop = re.compile(drop_re, re.I) if drop_re else None
+
     def run(limit: int = 0):
         urls = listing_urls(base, sections, page_param, card_re=card_re)
         print(f"  карточек в листинге: {len(urls)}")
         if limit:
             urls = urls[:limit]
-        rows = []
+        rows, dropped = [], 0
         with ThreadPoolExecutor(max_workers=8) as ex:
             for r in ex.map(lambda u: parse_generic(u, get(u), brand), urls):
-                if r:
-                    rows.append(r)
+                if not r:
+                    continue
+                if drop and drop.search(r["name"]):
+                    dropped += 1
+                    continue
+                rows.append(r)
+        if dropped:
+            print(f"  отсеяно чужих марок: {dropped}")
         return rows
     return run
 
 
 
 # --- адаптер: Kraftmachine (разбор ЛИСТИНГА, карточки не нужны) ----------------------------
+# Давления в листинге Kraftmachine нет НИ У ОДНОЙ из 2 047 позиций, а по шаблону
+# заказчика оно обязательно к точному совпадению. Ходить за ним в карточки не нужно:
+# оно зашито в код модели — КМ11-10пВ = 11 кВт / 10 бар, КМ110-ВБМс-10 = 110 кВт /
+# 10 бар (ВБМс — безмасляный блок), КМВ11-0,4 ПМ = 11 кВт / 0,4 бар.
+#
+# Схема доказана двумя независимыми уликами, а не прочитана из названия:
+#   * давление из кода совпало с разделом каталога в адресе (…/kompressory-s-davleniem-
+#     16-bar/…) 31 раз из 31;
+#   * все 280 позиций, где код даёт меньше 6 бар, лежат в разделах «малого давления»
+#     (252 + 28) — то есть десятичные 0,4…1,5 это реальные бары, а не обрезанные числа.
+# Мощность из кода сверена с собранной из листинга: совпало 1 634 из 1 642, поэтому
+# кВт по-прежнему берём из листинга, а код используем только для давления.
+_KM_CODE = re.compile(r"^[A-ZА-Я]{1,3}-?\d+(?:[.,]\d+)?-(?:[А-Яа-яA-Za-z]+-)?"
+                      r"(\d+(?:[.,]\d+)?)(?:\s*/\s*(\d+))?")
+# Дизельные пишутся наоборот: КМ-10/12-ВДШ = 10 м3/мин и 12 бар. Что первое число —
+# производительность, а не мощность, доказывает собранная из листинга колонка: у
+# КМ-10/12-ВДШ там ровно 10 000 л/мин, у КМ-15/15-ВД — 15 000.
+_KM_DIESEL = re.compile(r"^[A-ZА-Я]{1,3}-(\d+(?:[.,]\d+)?)\s*/\s*(\d+(?:[.,]\d+)?)-")
+
+
+def km_bar(model: str) -> str:
+    """Рабочее давление из кода модели Kraftmachine."""
+    t = (model or "").strip()
+    m = _KM_DIESEL.match(t) or _KM_CODE.match(t)
+    if not m:
+        return ""
+    # Дожимной (КМ11-БД-10/40, КМ1,5-БДК-3/150): первое число — давление на входе,
+    # второе — рабочее на выходе. Для сравнения с нашим каталогом нужно выходное, и
+    # оно бывает высоким: у кислородных бустеров 150 и 200 бар — это не мусор, поэтому
+    # верхняя граница санитарной рамки 400, а не 60.
+    v = ((m.group(2) if m.lastindex and m.group(2) else m.group(1)) or "").replace(",", ".")
+    try:
+        return v if 0.3 <= float(v) <= 400 else ""
+    except ValueError:
+        return ""
+
+
 _KM_CARD = re.compile(r'<h3 class="card-name">\s*<a href="([^"]+)"[^>]*>(.*?)</a>', re.S)
 _KM_CH = re.compile(r"<li>\s*<span>([^<]{2,60}?):?</span>\s*<span>[^<]*</span>\s*<span>\s*([^<]*?)\s*</span>", re.S)
 
@@ -740,12 +790,13 @@ def run_kraftmachine(limit: int = 0):
                 nm2 = re.search(r'itemprop="name"\s+content="([^"]+)"', seg)
                 sp = {k.strip(): v.strip() for k, v in _KM_CH.findall(seg)}
                 g = lambda pat: next((v for k, v in sp.items() if re.search(pat, k, re.I)), "")
+                bar = km_bar(nm2.group(1) if nm2 else name)
                 rows.append(dict(
                     brand="KRAFTMACHINE", name=name,
                     model=(nm2.group(1) if nm2 else ""), price=(pm.group(1) if pm else ""),
                     url=url,
                     kw=re.sub(r"[^\d.,]", "", g(r"мощност")).replace(",", "."),
-                    bar="", flow=re.sub(r"[^\d.,]", "", g(r"производительн")).replace(",", "."),
+                    bar=bar, flow=re.sub(r"[^\d.,]", "", g(r"производительн")).replace(",", "."),
                     ip=re.sub(r"\s+", "", g(r"защит")), vsd="",
                     specs=json.dumps(sp, ensure_ascii=False)))
             if not new:
@@ -852,6 +903,21 @@ ADAPTERS = {"berg": ("berg-air.ru (BERG + ATOM)", run_berg),
             # здесь, чем разбирать мусор в отчёте.
             "kraftmachine": ("kraftmachine.ru (KRAFTMACHINE)", run_kraftmachine),
             "comprag": ("comprag.ru (COMPRAG)", run_comprag),
+            "crossair": ("crossair-compressor.ru (CROSSAIR)", make_runner(
+                "https://crossair-compressor.ru",
+                ["/catalog/vintovye-kompressory/na-rame/",
+                 "/catalog/vintovye-kompressory/na-resivere/",
+                 "/catalog/vintovye-kompressory/na-resivere-s-osushitelem/",
+                 "/catalog/vintovye-kompressory/capm-dlya-lazernoy-rezki/",
+                 "/catalog/dizelnye-kompressory/", "/catalog/benzinovye-kompressory/"],
+                "CROSSAIR")),
+            "dali": ("dali-kompressor.ru (DALI)", make_runner(
+                "https://dali-kompressor.ru",
+                ["/catalog/dl/", "/catalog/dl-bazovaya-komplektaciya/",
+                 "/catalog/dl-chastotni-preobrazovatel/", "/catalog/ca/", "/catalog/ca-r/",
+                 "/catalog/caad/", "/catalog/dlad-m/", "/catalog/dlad-w/", "/catalog/dlcy/",
+                 "/catalog/dldy/", "/catalog/ed/", "/catalog/en-dvukhstupenchatyi/"],
+                "DALI", drop_re=r"cross\s*air")),
             "magnus": ("magnus-prom.ru (MAGNUS)", make_runner(
                 "https://magnus-prom.ru",
                 ["/product/vintovye_kompressory/", "/product/porshnevye-kompressory/",
