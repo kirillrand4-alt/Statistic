@@ -239,7 +239,10 @@ def vendor_props(row: dict, specs: dict) -> dict:
         v = pick(specs, r"об[ъь]?[её]м\s+ресивера")
         if v is not None:
             p["ресивер"] = "нет" if re.search(r"без|^нет$", v, re.I) else ("да" if num(v) else None)
-    p["осушитель"] = yesno_or_model(pick(specs, r"осушител|с\s+осушителем", exclude=r"модель\s+осушител"))
+    # «Осушители» во множественном числе — пункт меню сайта, а не свойство: у DALI под
+    # этим ключом лежит телефон «+7 (495) …», и _YES ловил его как «да» по ведущему плюсу.
+    p["осушитель"] = yesno_or_model(pick(specs, r"осушител(?:ь|ем)\b|с\s+осушителем",
+                                         exclude=r"модель\s+осушител|^осушители$"))
     if p["осушитель"] is None:
         p["осушитель"] = yesno_or_model(pick(specs, r"модель\s+осушител"))
     p["частотник"] = yesno_or_model(pick(specs, r"частотн"))
@@ -376,6 +379,12 @@ def load_vendors() -> list:
                 specs = {}
             p = vendor_props(row, specs)
             if p["kw"] is None or p["bar"] is None:
+                continue
+            # У GMP на части карточек высокого давления диапазон склеен в одно число:
+            # «5080» вместо 50–80 бар, «150250», «330400». Порог 400, а не 60: 80, 100 и
+            # 350 бар — это реальные дыхательные и дожимные машины GMP HB, их резать
+            # нельзя (проверено по именам: «GMP HB 22-80», «GMP HB 30-100»).
+            if p["bar"].isdigit() and int(p["bar"]) > 400:
                 continue
             try:
                 price = float(row["price"]) if row.get("price") else None
@@ -629,6 +638,7 @@ def dxf_fill(rgb: str) -> PatternFill:
     return PatternFill(fill_type="solid", start_color=rgb, end_color=rgb)
 
 RUB = r'_-* #,##0\ _₽_-;\-* #,##0\ _₽_-;_-* "-"\ _₽_-;_-@_-'
+ACC = r'_-* #,##0.00_-;\-* #,##0.00_-;_-* "-"??_-;_-@_-'   # «накрутка», формат образца
 HDR_FONT = Font(bold=True, size=12)
 HDR_AL = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
@@ -727,15 +737,16 @@ def svodnaya_etalon(wb, rows, real):
             for col in range(9, 15):
                 ws.cell(i, col).fill = F_CALC
                 ws.cell(i, col).number_format = RUB if col in (9, 10, 11) else (
-                    "0%" if col in (12, 13) else "#,##0.00")
+                    "0%" if col in (12, 13) else ACC)
             for j, b in enumerate(BRANDS):
                 mc, pc, dc = t0 + 3 * j, t0 + 3 * j + 1, t0 + 3 * j + 2
                 lst = sorted(r0["hits"].get(b, []),
                              key=lambda t: (t[0]["price"] is None, t[0]["price"] or 0))
-                if k == 0:
-                    ws.cell(i, b0 + j, f'=IF({get_column_letter(pc)}{i}="","",'
-                                       f'{get_column_letter(pc)}{i})')
-                    ws.cell(i, b0 + j).number_format = RUB
+                # Короткий блок пишем в ОБЕИХ строках группы: в образце он тоже есть в
+                # обеих (O5=AB5, T3=AN3), иначе второе исполнение выпадает из градиента.
+                ws.cell(i, b0 + j, f'=IF({get_column_letter(pc)}{i}="","",'
+                                   f'{get_column_letter(pc)}{i})')
+                ws.cell(i, b0 + j).number_format = RUB
                 if k >= len(lst):
                     for col in (mc, pc, dc):
                         ws.cell(i, col).fill = F_EMPTY      # серым — аналога нет, как в образце
