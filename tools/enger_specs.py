@@ -35,12 +35,20 @@ KW_LADDER = [4, 5.5, 7.5, 11, 15, 18.5, 22, 30, 37, 45, 55, 75, 90, 110, 132, 16
              200, 220, 250, 315]
 
 # Классы винтового блока. Ключ — как в шаблоне, значение — что реально пишут на сайтах.
-# Порядок проверки важен: «Hanbell AB» должен ловиться раньше голого «Hanbell», иначе
-# AB-блок GMP уедет в класс «Hanbell AC/Hanbell/GE».
-_BLOCK_CLASSES = [
+#
+# Признаки разделены на точные и общие. Точный называет конкретную серию блока, общий —
+# только производителя. Без этого деления «Hanbell AB (6 подшипников)» (699 карточек
+# Enger на нашем сайте, 351 у Sollant) совпадал СРАЗУ с двумя классами — по «hanbell ab»
+# и по голому «hanbell» — и отбрасывался как неоднозначный.
+_BLOCK_EXACT = [
     ("Hanbell AB/SKK",          r"hanbell\s*ab|\bskk\b"),
-    ("Hanbell AC/ Hanbell/ GE", r"hanbell\s*a[cс]|\bhanbell\b|ge\s*niemann|\bge\b"),
+    ("Hanbell AC/ Hanbell/ GE", r"hanbell\s*a[cс]"),
     ("Baosi/Taitiang/OEM/BERG", r"baosi|bao\s*si|tai\s*ti?an|taitiang|\boem\b|\bberg\b|\bберг\b"),
+]
+# Голый «Hanbell» — только когда за ним НЕ идёт код серии: иначе он снова перебивал бы
+# точный признак. GE и GE Niemann отдельной серии не имеют, поэтому они всегда общие.
+_BLOCK_LOOSE = [
+    ("Hanbell AC/ Hanbell/ GE", r"hanbell(?!\s*a[abcсh])|ge\s*niemann|\bge\b"),
 ]
 
 _IP_CLASS = {"23": "IP23", "54": "IP54/IP55", "55": "IP54/IP55", "65": "IP65"}
@@ -220,13 +228,22 @@ def from_name(name: str) -> dict:
 
 
 def block_class(v) -> str | None:
-    """Марка винтового блока → класс шаблона. «HANBELL AB / GE» у GMP — две модификации,
-    класс однозначно не определить: возвращаем None (не указано), а не первый попавшийся."""
+    """Марка винтового блока → класс шаблона.
+
+    «Hanbell AB (6 подшипников)» → «Hanbell AB/SKK»: точный признак перебивает общий.
+    «HANBELL AB / GE» у GMP (536 карточек) → None: тут в одной карточке названы две
+    РАЗНЫЕ серии, и выбрать за поставщика мы не можем.
+    «Jiuyi», «HDHJ», «Ingersoll Rand», «ACI» → None: этих блоков в шаблоне нет вовсе."""
     if not v:
         return None
     s = str(v)
-    hits = [name for name, pat in _BLOCK_CLASSES if re.search(pat, s, re.I)]
-    return hits[0] if len(hits) == 1 else None
+    exact = {name for name, pat in _BLOCK_EXACT if re.search(pat, s, re.I)}
+    loose = {name for name, pat in _BLOCK_LOOSE if re.search(pat, s, re.I)}
+    if len(exact) == 1 and not (loose - exact):
+        return next(iter(exact))
+    if not exact and len(loose) == 1:
+        return next(iter(loose))
+    return None
 
 
 def motor_class(v) -> str | None:

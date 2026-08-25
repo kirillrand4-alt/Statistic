@@ -43,6 +43,7 @@ from openpyxl.utils import get_column_letter
 
 from brand_spec_review import load_ours_all
 from scrape_files import find_ours
+from atlas_need_specs import load_universe
 from enger_specs import (PROPS, DEFAULTS, KW_LADDER, enger_block, ip_classes,
                          bar_bucket, bar_classes, kw_value, num,
                          pick, yesno, yesno_or_model, from_name, block_class, motor_class,
@@ -94,6 +95,26 @@ def our_ip_by_name() -> dict:
     return out
 
 
+def our_block_by_code() -> dict:
+    """Винтовой блок с НАШЕГО сайта, по коду карточки.
+
+    Свойство есть и в Битриксе (22670), и на сайте, просто в `specs_compact` оно не
+    выгружалось — в KEEP его не было. До пересборки компакта берём из того же скрейпа
+    нашего сайта, откуда матчер уже берёт «IP электродвигателя»: заполнено у 10 214
+    карточек каталога, из них 2 182 винтовых Enger (81% серии).
+
+    Значения сырые и разнобойные («Hanbell AB (6 подшипников)», «HANBELL AB», «Baosi»,
+    «BAOSI»), в класс шаблона их сводит block_class()."""
+    out = {}
+    for u, d in load_universe()[1].items():
+        if "prokompressor.ru" not in u:
+            continue
+        v = (d.get("Винтовой блок") or "").strip()
+        if v:
+            out[u.rstrip("/").split("/")[-1].lower()] = v
+    return out
+
+
 _ENG_TAIL = re.compile(r"\s+(\d+(?:[.,]\d+)?)\s*$")
 
 
@@ -109,10 +130,11 @@ def enger_family(name: str, bar) -> str:
     return s
 
 
-def enger_props(o: dict, ip_map: dict) -> dict:
+def enger_props(o: dict, ip_map: dict, blk_map: dict) -> dict:
     """13 свойств шаблона для нашей карточки. None = «в выгрузке не указано»."""
     p = dict.fromkeys(PROPS)
     nm = o.get("name") or ""
+    code = (o.get("url") or "").rstrip("/").split("/")[-1].lower()
     p["ресивер"] = "да" if o.get("rv") else None
     p["осушитель"] = "да" if o.get("ff") == 1 else None
     p["частотник"] = {1: "да", 0: "нет"}.get(o.get("vsd"))
@@ -120,12 +142,11 @@ def enger_props(o: dict, ip_map: dict) -> dict:
     p["безмасляный"] = {"безмасло": "да", "масл": "нет"}.get(oil)
     p["охлаждение"] = {"возд": "воздушный", "вода": "водяной"}.get(o.get("cool"))
     p.update(from_name(nm))          # ступени / передвижной / PM-двигатель / безмасляный из имени
-    # Винтовой блок берём из кода модели: свойство в Битриксе и на сайте есть (22670,
-    # 23168), но в `specs_compact` не выгружается, и без этого правила все 2 701 карточка
-    # уходила в умолчание шаблона «Baosi» — заказчик поймал это 25.08 на листе «Свойства
-    # Enger». Когда компакт пересоберут с 22670, значение оттуда должно иметь приоритет,
-    # а это правило останется фолбэком для серий вне списка.
-    p["блок"] = enger_block(nm)
+    # Винтовой блок: сначала реальное значение с нашего сайта, и только если его нет —
+    # правило заказчика по коду модели. Порядок именно такой: сайт покрывает 81% серии
+    # и знает блоки, которых в правиле нет вовсе (JIUYI у LC и OFS, HDHJ у HJ, Ingersoll
+    # Rand и ACI у карточек без префикса). Правило остаётся для оставшихся 19%.
+    p["блок"] = block_class(blk_map.get(code)) or enger_block(nm)
     # «фильтры» в выгрузке Битрикса нет как свойства (22760 в компакт не выгружается) —
     # по всему нашему каталогу это честное «не указано».
     return {"kw": kw_value(o.get("kw")), "bar": bar_bucket(o.get("bar")),
@@ -308,6 +329,19 @@ def value(p: dict, key: str, strict: bool):
     return v
 
 
+# Винтовой блок — тристейт, как IP: сравниваем, только когда известен с ОБЕИХ сторон.
+#
+# Умолчание шаблона здесь ломает больше, чем чинит, и это видно на числах. Пока блока не
+# было ни у нас, ни у конкурентов, обе стороны получали «Baosi» и всегда сходились. Как
+# только с нашей стороны появились настоящие значения (1 496 карточек), выяснилось, что у
+# конкурентов блок не указан на 5 635 карточках из 7 982 — они уезжают в то же умолчание,
+# и наш Hanbell AC перестаёт совпадать с их безымянным блоком. Строгий режим на этом
+# терял 8 253 пары из 12 148, включая ручные сцепки самого заказчика из образца
+# (HC-7,5BFR-250 ↔ Cross-air CA7.5-8RA-500DRY: у нас Hanbell AC, сайт Cross-air блок не
+# печатает). В шаблоне рядом с этой колонкой и стоит пометка «часто не указывается».
+TRISTATE = {"блок"}
+
+
 def match(o: dict, c: dict, strict: bool) -> tuple[bool, list]:
     """Совпал ли кандидат. Возвращает (да/нет, список свойств, которые держатся на умолчании)."""
     if o["kw"] != c["kw"] or o["bar"] != c["bar"]:
@@ -315,7 +349,15 @@ def match(o: dict, c: dict, strict: bool) -> tuple[bool, list]:
     if o["ip"] and c["ip"] and not (o["ip"] & c["ip"]):     # IP — тристейт, см. enger_specs
         return False, []
     weak = []
+    for k in TRISTATE:
+        a, b = o.get(k), c.get(k)
+        if a and b and a != b:
+            return False, []
+        if a is None or b is None:
+            weak.append(k)
     for k in PROPS:
+        if k in TRISTATE:
+            continue
         a, b = value(o, k, strict), value(c, k, strict)
         if a is None or b is None:                          # мягкий режим: молчит хоть одна
             if o.get(k) is None and c.get(k) is None:
@@ -356,6 +398,7 @@ KOMPLEKT = {"ресивер", "осушитель", "фильтры"}
 
 def build(proba=False, strict=True):
     ip_map = our_ip_by_name()
+    blk_map = our_block_by_code()
     ours = [o for o in load_ours_all().get("enger", [])
             if _SCREW.search(o.get("name") or "") and o.get("kw") and o.get("bar")]
     if proba:
@@ -368,7 +411,7 @@ def build(proba=False, strict=True):
 
     rows = []
     for o in ours:
-        p = enger_props(o, ip_map)
+        p = enger_props(o, ip_map, blk_map)
         hits, soft, base, ladder = (defaultdict(list), defaultdict(list),
                                     defaultdict(list), defaultdict(list))
         ocls = bar_classes(p["bar"])
@@ -404,6 +447,11 @@ def match_base(o: dict, c: dict) -> tuple[bool, list]:
         return False, []
     diff = []
     for k in PROPS:
+        if k in TRISTATE:                       # блок — только при явном конфликте, см. match()
+            a, b = o.get(k), c.get(k)
+            if a and b and a != b:
+                return False, []
+            continue
         a, b = value(o, k, True), value(c, k, True)
         if a == b:
             continue
