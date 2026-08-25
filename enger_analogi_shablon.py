@@ -43,8 +43,8 @@ from openpyxl.utils import get_column_letter
 
 from brand_spec_review import load_ours_all
 from scrape_files import find_ours
-from enger_specs import (PROPS, DEFAULTS, KW_LADDER, ip_classes, bar_bucket, bar_classes,
-                         kw_value, num,
+from enger_specs import (PROPS, DEFAULTS, KW_LADDER, enger_block, ip_classes,
+                         bar_bucket, bar_classes, kw_value, num,
                          pick, yesno, yesno_or_model, from_name, block_class, motor_class,
                          cooling, stages)
 
@@ -120,8 +120,14 @@ def enger_props(o: dict, ip_map: dict) -> dict:
     p["безмасляный"] = {"безмасло": "да", "масл": "нет"}.get(oil)
     p["охлаждение"] = {"возд": "воздушный", "вода": "водяной"}.get(o.get("cool"))
     p.update(from_name(nm))          # ступени / передвижной / PM-двигатель / безмасляный из имени
-    # «блок» и «фильтры» в выгрузке Битрикса отсутствуют как свойства (22670 и 22760 в
-    # компакт не выгружаются) — по всему нашему каталогу это честное «не указано».
+    # Винтовой блок берём из кода модели: свойство в Битриксе и на сайте есть (22670,
+    # 23168), но в `specs_compact` не выгружается, и без этого правила все 2 701 карточка
+    # уходила в умолчание шаблона «Baosi» — заказчик поймал это 25.08 на листе «Свойства
+    # Enger». Когда компакт пересоберут с 22670, значение оттуда должно иметь приоритет,
+    # а это правило останется фолбэком для серий вне списка.
+    p["блок"] = enger_block(nm)
+    # «фильтры» в выгрузке Битрикса нет как свойства (22760 в компакт не выгружается) —
+    # по всему нашему каталогу это честное «не указано».
     return {"kw": kw_value(o.get("kw")), "bar": bar_bucket(o.get("bar")),
             "ip": ip_map.get(nm), **p}
 

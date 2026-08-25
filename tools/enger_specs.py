@@ -45,6 +45,26 @@ _BLOCK_CLASSES = [
 
 _IP_CLASS = {"23": "IP23", "54": "IP54/IP55", "55": "IP54/IP55", "65": "IP65"}
 
+# Винтовой блок Enger по префиксу серии. Правило дал заказчик 25.08 и подтвердил
+# карточкой 1С (HB-22DTRE-450 → «Hanbell AB (в подшипниках)»): в нашей выгрузке
+# `specs_compact` свойства «Винтовой блок» нет вовсе, и все 2 701 винтовая карточка
+# уезжала в умолчание шаблона «Baosi/Taitiang/OEM/BERG» — заказчик это и заметил.
+#
+# HA («Hanbell AA/AH») в шаблоне отдельной строкой не значится; отнесён к колонке с
+# голым «Hanbell» — это ДОПУЩЕНИЕ, 58 карточек, требует подтверждения.
+ENGER_BLOCK = {"HC": "Hanbell AC/ Hanbell/ GE",
+               "HB": "Hanbell AB/SKK",
+               "HA": "Hanbell AC/ Hanbell/ GE",
+               "BS": "Baosi/Taitiang/OEM/BERG"}
+_ENG_PREFIX = re.compile(r"\bEnger\s+([A-Z]{2})-", re.I)
+
+
+def enger_block(name: str) -> str | None:
+    """Класс винтового блока по коду модели Enger. None — серия вне правила заказчика
+    (LC, HJ, OFS, AHG и карточки без префикса: 1 017 из 2 701, блок остаётся неизвестным)."""
+    m = _ENG_PREFIX.search(str(name or ""))
+    return ENGER_BLOCK.get(m.group(1).upper()) if m else None
+
 
 def ip_classes(text: str) -> frozenset | None:
     """Все классы защиты, названные в строке. «IP55, IP65» у GMP — это две модификации
