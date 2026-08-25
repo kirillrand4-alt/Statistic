@@ -473,6 +473,17 @@ F_CALC = PatternFill("solid", start_color=Color(theme=7, tint=0.8))     # бло
 F_NEW = PatternFill("solid", start_color=Color(theme=9, tint=0.6))      # колонки «new»
 F_EMPTY = PatternFill("solid", start_color=Color(theme=0, tint=-0.35))  # аналога нет
 F_WHITE = PatternFill("solid", start_color=Color(theme=0, tint=0.0))
+
+
+def dxf_fill(rgb: str) -> PatternFill:
+    """Заливка для правила условного форматирования.
+
+    В обычной ячейке solid-заливка берётся из fgColor, а в dxf (differential formatting,
+    то есть в правилах) Excel красит по bgColor. openpyxl из PatternFill("solid",
+    start_color=X) пишет только fgColor — правило срабатывало, но фон оставался белым, и
+    в отчёте красился один шрифт. У заказчика в образце заданы оба цвета, делаем так же."""
+    return PatternFill(fill_type="solid", start_color=rgb, end_color=rgb)
+
 RUB = r'_-* #,##0\ _₽_-;\-* #,##0\ _₽_-;_-* "-"\ _₽_-;_-@_-'
 HDR_FONT = Font(bold=True, size=12)
 HDR_AL = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -600,7 +611,7 @@ def svodnaya_etalon(wb, rows, real):
             # обе проверки на пустоту обязательны: у второй строки группы «наша цена»
             # пустая, и без них пустое сравнивалось бы с нулём и красило всю строку
             formula=[f'AND({first}2<>"",$H2<>"",{first}2{op}$H2)'],
-            fill=PatternFill("solid", start_color=fill), font=Font(color=color)))
+            fill=dxf_fill(fill), font=Font(color=color)))
     # Колонки «разница» — то самое «относительно нашей цены». В образце на них висит пара
     # правил Excel «больше 0 → зелёный / меньше 0 → красный»: разница считается как
     # (наша цена − цена конкурента) / цена конкурента, поэтому зелёный = мы дороже,
@@ -611,18 +622,14 @@ def svodnaya_etalon(wb, rows, real):
     for j in range(len(BRANDS)):
         d = get_column_letter(t0 + 3 * j + 2)
         for rule in (CellIsRule(operator="greaterThan", formula=["0"],
-                                fill=PatternFill("solid", start_color="FFC6EFCE"),
-                                font=Font(color="FF006100")),
+                                fill=dxf_fill("FFC6EFCE"), font=Font(color="FF006100")),
                      CellIsRule(operator="lessThan", formula=["0"],
-                                fill=PatternFill("solid", start_color="FFFFC7CE"),
-                                font=Font(color="FF9C0006"))):
+                                fill=dxf_fill("FFFFC7CE"), font=Font(color="FF9C0006"))):
             ws.conditional_formatting.add(f"{d}2:{d}{last}", rule)
     for rule in (CellIsRule(operator="greaterThan", formula=["0"],
-                            fill=PatternFill("solid", start_color="FFC6EFCE"),
-                            font=Font(color="FF006100")),
+                            fill=dxf_fill("FFC6EFCE"), font=Font(color="FF006100")),
                  CellIsRule(operator="lessThan", formula=["0"],
-                            fill=PatternFill("solid", start_color="FFFFC7CE"),
-                            font=Font(color="FF9C0006"))):
+                            fill=dxf_fill("FFFFC7CE"), font=Font(color="FF9C0006"))):
         ws.conditional_formatting.add(f"G2:G{last}", rule)   # «% к 10 реальной», как в образце
 
     ws.freeze_panes = "B2"
