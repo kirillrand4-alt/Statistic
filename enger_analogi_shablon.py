@@ -588,7 +588,14 @@ def svodnaya_etalon(wb, rows, real):
         groups[r["family"]].setdefault(r["props"]["bar"], r)
     pcols = [get_column_letter(t0 + 3 * j + 1) for j in range(len(BRANDS))]
 
-    for fam in sorted(groups):
+    # Порядок строк — по мощности, как у заказчика (5,5 → 7,5 → 11 → 15 → 18,5 → 22).
+    # Алфавитный ставил HC-7,5 после HC-22, и ряд переставал читаться.
+    def by_kw(fam):
+        b = groups[fam]
+        kw = next((r["props"]["kw"] for r in b.values() if r["props"]["kw"]), 0)
+        return (kw, fam)
+
+    for fam in sorted(groups, key=by_kw):
         bars = groups[fam]
         pick_bar = next((b for b in BAR_PREF if b in bars), next(iter(bars)))
         r0 = bars[pick_bar]
@@ -627,8 +634,11 @@ def svodnaya_etalon(wb, rows, real):
                 ws.cell(i, 14, f'=IFERROR(IF(N(K{i})=0,H{i}/({buy}),K{i}/({buy})),"*")')
             for col in (1,):
                 ws.cell(i, col).fill = F_MODEL
-            for col in range(2, 8):
+            for col in (2, 3, 5):                 # B, C, E — белые, как в образце
                 ws.cell(i, col).fill = F_WHITE
+            for col in (4, 6, 7):                 # D, F, G — охра, как в образце
+                ws.cell(i, col).fill = F_CALC
+            ws.cell(i, 7).number_format = "0%"    # «% к 10 реальной»
             ws.cell(i, 8).fill = F_PRICE
             for col in range(9, 15):
                 ws.cell(i, col).fill = F_CALC
@@ -681,23 +691,28 @@ def svodnaya_etalon(wb, rows, real):
         ws.conditional_formatting.add(band, FormulaRule(
             formula=[f'AND({",".join(parts)})'], fill=dxf_fill(rgb)))
 
-    # Колонки «разница» — то самое «относительно нашей цены». В образце на них висит пара
-    # правил Excel «больше 0 → зелёный / меньше 0 → красный»: разница считается как
-    # (наша цена − цена конкурента) / цена конкурента, поэтому зелёный = мы дороже,
-    # красный = мы дешевле. У заказчика они разложены поячеечно (714 правил, местами с
-    # перевёрнутой полярностью от повторного копирования) — кладём по одному правилу на
-    # колонку и в той полярности, которая у него преобладает (682 ячейки против 338).
+    # Колонки «разница». Разница = (наша цена − цена конкурента) / цена конкурента,
+    # поэтому ПЛЮС значит «мы дороже» — и красится он КРАСНЫМ, минус зелёным.
+    #
+    # Прошлый вывод «плюс = зелёный, 682 ячейки против 338» был получен подсчётом всех
+    # 714 правил образца подряд и оказался неверным: Excel применяет то правило, у
+    # которого меньше `priority`, а у заказчика поверх старых правил лежат новые с
+    # обратной полярностью. Пересчёт по приоритету даёт 129 ячеек «плюс = красный»
+    # против 68. Пример стека на AX2: (1157, >0, красный), (1158, <0, зелёный),
+    # (1345, <0, красный), (1346, >0, зелёный) — побеждают 1157 и 1158.
+    # Сходится и со смыслом: у заказчика в «Выводах» строка «Мы дороже Exelute и ET на
+    # 12-25%» стоит как проблема, а не как достижение.
     for j in range(len(BRANDS)):
         d = get_column_letter(t0 + 3 * j + 2)
         for rule in (CellIsRule(operator="greaterThan", formula=["0"],
-                                fill=dxf_fill("FFC6EFCE"), font=Font(color="FF006100")),
+                                fill=dxf_fill("FFFFC7CE"), font=Font(color="FF9C0006")),
                      CellIsRule(operator="lessThan", formula=["0"],
-                                fill=dxf_fill("FFFFC7CE"), font=Font(color="FF9C0006"))):
+                                fill=dxf_fill("FFC6EFCE"), font=Font(color="FF006100"))):
             ws.conditional_formatting.add(f"{d}2:{d}{last}", rule)
     for rule in (CellIsRule(operator="greaterThan", formula=["0"],
-                            fill=dxf_fill("FFC6EFCE"), font=Font(color="FF006100")),
+                            fill=dxf_fill("FFFFC7CE"), font=Font(color="FF9C0006")),
                  CellIsRule(operator="lessThan", formula=["0"],
-                            fill=dxf_fill("FFFFC7CE"), font=Font(color="FF9C0006"))):
+                            fill=dxf_fill("FFC6EFCE"), font=Font(color="FF006100"))):
         ws.conditional_formatting.add(f"G2:G{last}", rule)   # «% к 10 реальной», как в образце
 
     ws.freeze_panes = "B2"
@@ -763,15 +778,19 @@ def save(rows, cands, out=OUT):
         ws.cell(i, 5, o.get("price"))
         cols = [get_column_letter(t0 + 3 * j + 1) for j in range(len(BRANDS))]
         rng = ",".join(f"{c}{i}" for c in cols)
-        ws.cell(i, 6, f"=IFERROR(MIN({rng}),\"\")")
-        ws.cell(i, 7, f"=IFERROR(AVERAGE({rng}),\"\")")
+        # MIN по пустому диапазону даёт 0, а не ошибку, поэтому IFERROR тут не спасает —
+        # ровно тот же баг, что был на «Сводной». 706 строк из 2 528 не имеют ни одного
+        # аналога, и без COUNT они показывали «цена мин» = 0 ₽.
+        ws.cell(i, 6, f'=IF(COUNT({rng})=0,"",MIN({rng}))')
+        ws.cell(i, 7, f'=IF(COUNT({rng})=0,"",AVERAGE({rng}))')
         ws.cell(i, 9, f'=IF(N(H{i})=0,"",IFERROR((H{i}-E{i})/E{i},""))')
         ws.cell(i, 10, f'=IFERROR((E{i}-F{i})/F{i},"")')
         ws.cell(i, 11, sum(len(v) for v in r["hits"].values()))
         for j, b in enumerate(BRANDS):
             lst = r["hits"].get(b)
             mc, pc, dc = t0 + 3 * j, t0 + 3 * j + 1, t0 + 3 * j + 2
-            ws.cell(i, b0 + j, f"={get_column_letter(pc)}{i}")
+            ws.cell(i, b0 + j, f'=IF({get_column_letter(pc)}{i}="","",'
+                               f'{get_column_letter(pc)}{i})')
             if not lst:
                 continue
             c, weak = cheapest(lst)
@@ -970,8 +989,11 @@ def save(rows, cands, out=OUT):
                            "зелёный 63BE7B. Красный всегда значит «конкурент дешевле нас», "
                            "насыщенность показывает насколько. Границы сняты с данных: по "
                            "2 061 паре квантили отношения 0,55 / 0,78 / 0,97 / 1,21 / 1,58."),
-        ("  колонки «разница»", "как в образце: больше нуля — зелёный (мы дороже), меньше — "
-                                "красный (мы дешевле)."),
+        ("  колонки «разница»", "разница = (наша цена − цена конкурента) / цена конкурента. "
+                                "Больше нуля (мы дороже) — красный, меньше нуля (мы дешевле) — "
+                                "зелёный. Так же в образце: там 714 правил, местами с "
+                                "перевёрнутой полярностью, но по приоритету Excel побеждает "
+                                "красный на плюсе — 129 ячеек против 68."),
         ("Курсив в тройке", "модель сцеплена с опорой на умолчание шаблона, а не на данные сайта."),
         ("", ""),
         ("Серым в «Свойствах»", "значение подставлено умолчанием шаблона, а не прочитано с сайта."),
