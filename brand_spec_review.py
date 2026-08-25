@@ -23,7 +23,14 @@ from scrape_files import U, OURS_DIR, find_ours
 # меняются от выгрузки к выгрузке (products_export_20260608, _20260711, …),
 # поэтому берём последний подходящий из OURS_DIR, а не прибиваем имя гвоздями.
 SPECS_CSV = find_ours("specs_compact", "specs2/specs_compact.csv")
-PROKO_CSV = find_ours("products_export", "e7171060-products_export_20260608.csv")
+# Каталожная выгрузка, НЕ прайс-фид. Рядом лежат products_export_20260811.csv и
+# products_export_feed_20260811.csv, они расходятся на 1 141 позиции, а find_ours брал
+# «самый свежий по mtime» — разница между файлами 4 миллисекунды, то есть выбор был
+# случайным. Из-за фида отчёт утверждал, будто наша цена зависит от давления:
+# BS-5,5BFR-250 на 8 бар 312 125 ₽ против 327 844 ₽ на остальных. В каталоге цена одна
+# на все пять баров.
+PROKO_CSV = find_ours("products_export", "e7171060-products_export_20260608.csv",
+                      exclude=r"_feed")
 OUTDIR = "/home/user/Statistic/brand_reports"
 ZIP    = "/home/user/Statistic/Brands_spec_match.zip"
 COMPETITORS = ["compressortyt.ru","aerocompressors.ru","pnevmoteh.ru",

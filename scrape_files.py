@@ -68,7 +68,7 @@ NEW_PARSER_FILES: list[str] = [f for f in SCRAPE_FILES
                                if _stamp(Path(f)) >= _NEW_PARSER_FROM]
 
 
-def find_ours(part: str, legacy: str = "") -> str:
+def find_ours(part: str, legacy: str = "", *, exclude: str = "") -> str:
     """Файл нашего каталога по куску имени: самый свежий из OURS_DIR.
 
     Имена выгрузок Битрикса меняются от раза к разу
@@ -83,7 +83,8 @@ def find_ours(part: str, legacy: str = "") -> str:
         # сделан на 20 секунд позже, и «самый свежий по mtime» выбрал именно его.
         found = [p for p in OURS_DIR.rglob("*.csv")
                  if part.lower() in p.name.lower()
-                 and not re.search(r"\.(bak|prev|old|copy)\b", p.name, re.I)]
+                 and not re.search(r"\.(bak|prev|old|copy)\b", p.name, re.I)
+                 and not (exclude and re.search(exclude, p.name, re.I))]
         if found:
             return str(max(found, key=lambda p: p.stat().st_mtime))
     return U + legacy if legacy else ""
