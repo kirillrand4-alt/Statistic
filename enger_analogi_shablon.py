@@ -717,8 +717,11 @@ def svodnaya_etalon(wb, rows, real):
                 # без этого «цена мин» показывала 0 ₽ у всех моделей без аналогов
                 ws.cell(i, 9, f'=IF(COUNT({rng})=0,"",MIN({rng}))')
                 ws.cell(i, 10, f'=IF(COUNT({rng})=0,"",AVERAGE({rng}))')
-                ws.cell(i, 12, f'=IF(N(K{i})=0,"",IFERROR((K{i}-H{i})/H{i},""))')
-                ws.cell(i, 13, f'=IFERROR((H{i}-I{i})/I{i},"")')
+                # Обе колонки молчат, когда нашей цены нет. Без проверки H пустая ячейка
+                # читается как 0, и «мы дороже на» показывало −100% у 95 моделей, которых
+                # попросту нет в прайсе (BS-7,5BFR-250 — 0 строк в products_export).
+                ws.cell(i, 12, f'=IF(OR(N(K{i})=0,H{i}=""),"",IFERROR((K{i}-H{i})/H{i},""))')
+                ws.cell(i, 13, f'=IF(H{i}="","",IFERROR((H{i}-I{i})/I{i},""))')
                 # Накрутка считается как в образце: цена / закупку. Две поправки к его
                 # формуле, обе вынужденные. Первая: ключом идёт не A2, а код без ресивера
                 # («BS-5,5BFR-250» → «BS-5,5BF») — в таблице закупок модели записаны так,
@@ -880,8 +883,8 @@ def save(rows, cands, out=OUT):
         # аналога, и без COUNT они показывали «цена мин» = 0 ₽.
         ws.cell(i, 6, f'=IF(COUNT({rng})=0,"",MIN({rng}))')
         ws.cell(i, 7, f'=IF(COUNT({rng})=0,"",AVERAGE({rng}))')
-        ws.cell(i, 9, f'=IF(N(H{i})=0,"",IFERROR((H{i}-E{i})/E{i},""))')
-        ws.cell(i, 10, f'=IFERROR((E{i}-F{i})/F{i},"")')
+        ws.cell(i, 9, f'=IF(OR(N(H{i})=0,E{i}=""),"",IFERROR((H{i}-E{i})/E{i},""))')
+        ws.cell(i, 10, f'=IF(E{i}="","",IFERROR((E{i}-F{i})/F{i},""))')
         ws.cell(i, 11, sum(len(v) for v in r["hits"].values()))
         for j, b in enumerate(BRANDS):
             lst = r["hits"].get(b)
