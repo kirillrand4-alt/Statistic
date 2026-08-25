@@ -435,6 +435,7 @@ def build(proba=False, strict=True):
                 if ok4:
                     ladder[c["brand"]].append((c, sorted(ocls & bar_classes(c["props"]["bar"]))))
         rows.append(dict(o=o, props=p, family=enger_family(o["name"], o.get("bar")),
+                         block_raw=blk_map.get((o.get("url") or "").rstrip("/").split("/")[-1].lower()),
                          hits=hits, soft=soft, base=base, ladder=ladder))
     return rows, cands
 
@@ -796,19 +797,31 @@ def save(rows, cands, out=OUT):
 
     # --- ЛИСТ «Свойства Enger» — из чего сложился ключ --------------------------------
     ws2 = wb.create_sheet("Свойства Enger")
-    head(ws2, ["Модель Enger", "Бар", "кВт", "IP"] + PROPS + ["взято из выгрузки"])
+    # Две служебные колонки в конце. «Блок на сайте (как есть)» — сырое значение с нашей
+    # карточки до сведения в класс шаблона: без него не видно, что у 589 карточек блок
+    # ИЗВЕСТЕН, но строки под него в шаблоне нет вовсе (Ingersoll Rand, Jiuyi, ACI, HDHJ,
+    # Hanbell AA). «Откуда блок» отделяет данные от правила и от умолчания.
+    head(ws2, ["Модель Enger", "Бар", "кВт", "IP"] + PROPS +
+              ["взято из выгрузки", "Блок на сайте (как есть)", "Откуда блок"])
     for r in rows:
         p = r["props"]
         i = ws2.max_row + 1
+        raw = r.get("block_raw") or ""
+        src = ("сайт" if block_class(raw) else
+               ("правило по коду" if p.get("блок") else "не указан"))
         ws2.append([r["family"], p["bar"], p["kw"],
                     "/".join(sorted(p["ip"])) if p["ip"] else ""] +
                    [p.get(k) or DEFAULTS[k] for k in PROPS] +
-                   [sum(1 for k in PROPS if p.get(k) is not None)])
+                   [sum(1 for k in PROPS if p.get(k) is not None), raw, src])
         for j, k in enumerate(PROPS, 5):
             if p.get(k) is None:
                 ws2.cell(i, j).font = GREY              # серым — то, что подставлено умолчанием
+        if src != "сайт":
+            ws2.cell(i, ws2.max_column).font = GREY
     ws2.freeze_panes = "B2"
     ws2.column_dimensions["A"].width = 26
+    ws2.column_dimensions[get_column_letter(ws2.max_column - 1)].width = 30
+    ws2.column_dimensions[get_column_letter(ws2.max_column)].width = 18
 
     # --- ЛИСТ «Все совпадения» --------------------------------------------------------
     ws3 = wb.create_sheet("Все совпадения")
