@@ -74,7 +74,7 @@ PROBA = ["BS-5,5BFR-250", "HC-7,5BFR-250", "HC-7,5DFRE-250", "HC-11BFR-400",
 
 
 # --- наша сторона -----------------------------------------------------------------------
-def our_ip_by_name() -> dict:
+def our_ip_by_code() -> dict:
     """IP из выгрузки Битрикса (22959) по имени карточки.
 
     load_ours_all() это свойство в матчер НЕ пускает — арбитраж 12.08 дал 15 ложных
@@ -85,13 +85,16 @@ def our_ip_by_name() -> dict:
     path = find_ours("specs_compact")
     out = {}
     for r in csv.DictReader(open(path, encoding="utf-8-sig", errors="replace"), delimiter=";"):
-        name = (r.get("IE_NAME") or "").strip()
-        if not name:
+        # Ключ — IE_CODE, а не имя. Имя в прайс-фиде и в компакте расходится пробелами и
+        # хвостами («…BS-15DFRE-400-5+ 15» против «…-400-5+»), и 65 карточек из-за этого
+        # оставались без IP, то есть сцеплялись с любым исполнением.
+        code = (r.get("IE_CODE") or "").strip().lower()
+        if not code:
             continue
         raw = (r.get("IP_PROP22959") or "").strip() or (r.get("IP_PROP22674") or "").strip()
         cls = ip_classes(raw)
         if cls:
-            out[name] = cls
+            out[code] = cls
     return out
 
 
@@ -120,6 +123,30 @@ def our_block_by_code() -> dict:
     return out
 
 
+def our_flags_by_code() -> dict:
+    """Явные «да/нет» из Битрикса по ресиверу и осушителю, ключ — IE_CODE.
+
+    load_ours_all() отдаёт только положительные признаки (rv — объём, ff — флаг), а
+    «нет» теряет. Для отчёта разница важна: без неё в колонке «На умолчании шаблона»
+    честное «нет» выглядит как молчание сайта."""
+    out = {}
+    for r in csv.DictReader(open(find_ours("specs_compact"), encoding="utf-8-sig",
+                                 errors="replace"), delimiter=";"):
+        code = (r.get("IE_CODE") or "").strip().lower()
+        if not code:
+            continue
+        d = {}
+        for key, col in (("ресивер", "IP_PROP22574"), ("осушитель", "IP_PROP22565")):
+            v = (r.get(col) or "").strip().lower()
+            if v in ("да", "есть"):
+                d[key] = "да"
+            elif v == "нет":
+                d[key] = "нет"
+        if d:
+            out[code] = d
+    return out
+
+
 _ENG_TAIL = re.compile(r"\s+(\d+(?:[.,]\d+)?)\s*$")
 
 
@@ -130,22 +157,36 @@ def enger_family(name: str, bar) -> str:
     хвост — часть кода («BS-11DFR-400-5»), и слепое отрезание сломало бы имя модели."""
     s = re.sub(r"^.*?\bEnger\b\s*", "", name, flags=re.I).strip()
     m = _ENG_TAIL.search(s)
-    if m and bar and abs(float(m.group(1).replace(",", ".")) - float(bar)) < 0.05:
-        s = s[:m.start()].strip()
-    return s
+    if not m:
+        return s
+    tail = float(m.group(1).replace(",", "."))
+    # Хвост срезаем, если он совпал с давлением карточки ИЛИ просто похож на давление
+    # (3…40 бар). Второе условие нужно для шести карточек, где имя и Битрикс спорят:
+    # «BS-132DT 7» при 8 бар в выгрузке, «HB-18,5BT 16» при 13. Раньше такие имена
+    # оставались с хвостом и давали лишнюю строку-двойник в «Сводной».
+    if bar and abs(tail - float(bar)) < 0.05:
+        return s[:m.start()].strip()
+    return s[:m.start()].strip() if 3 <= tail <= 40 else s
 
 
-def enger_props(o: dict, ip_map: dict, blk_map: dict) -> dict:
+def enger_props(o: dict, ip_map: dict, blk_map: dict, flags: dict) -> dict:
     """13 свойств шаблона для нашей карточки. None = «в выгрузке не указано»."""
     p = dict.fromkeys(PROPS)
     nm = o.get("name") or ""
     code = (o.get("url") or "").rstrip("/").split("/")[-1].lower()
-    p["ресивер"] = "да" if o.get("rv") else None
-    p["осушитель"] = "да" if o.get("ff") == 1 else None
+    # Явное «нет» из Битрикса — это ДАННЫЕ, а не молчание. Раньше «нет» (1 686 карточек
+    # по 22574 и 1 738 по 22565) превращалось в None, и 9 076 пар помечались в отчёте
+    # «держится на умолчании», хотя обе стороны честно сказали «нет».
+    flag = flags.get(code, {})
+    p["ресивер"] = "да" if o.get("rv") else flag.get("ресивер")
+    p["осушитель"] = "да" if o.get("ff") == 1 else flag.get("осушитель")
     p["частотник"] = {1: "да", 0: "нет"}.get(o.get("vsd"))
     oil = o.get("oil")
     p["безмасляный"] = {"безмасло": "да", "масл": "нет"}.get(oil)
-    p["охлаждение"] = {"возд": "воздушный", "вода": "водяной"}.get(o.get("cool"))
+    # cool_class() отдаёт "air"/"water" (spec_match.py), а не «возд»/«вода» — из-за
+    # опечатки в ключах вся колонка охлаждения была пустой, и все пары держались на
+    # умолчании «воздушный», включая водяные исполнения LUF…W.
+    p["охлаждение"] = {"air": "воздушный", "water": "водяной"}.get(o.get("cool"))
     p.update(from_name(nm))          # ступени / передвижной / PM-двигатель / безмасляный из имени
     # Винтовой блок: сначала реальное значение с нашего сайта, и только если его нет —
     # правило заказчика по коду модели. Порядок именно такой: сайт покрывает 81% серии
@@ -154,8 +195,9 @@ def enger_props(o: dict, ip_map: dict, blk_map: dict) -> dict:
     p["блок"] = block_class(blk_map.get(code)) or enger_block(nm)
     # «фильтры» в выгрузке Битрикса нет как свойства (22760 в компакт не выгружается) —
     # по всему нашему каталогу это честное «не указано».
+    fuel = "дизель" if re.search(r"дизел|бензин", nm, re.I) else None
     return {"kw": kw_value(o.get("kw")), "bar": bar_bucket(o.get("bar")),
-            "ip": ip_map.get(nm), **p}
+            "ip": ip_map.get(code), "топливо": fuel, **p}
 
 
 # --- сторона сайтов производителей ------------------------------------------------------
@@ -222,7 +264,15 @@ def vendor_props(row: dict, specs: dict) -> dict:
 
     if brand in ("BERG", "ATOM"):
         code = name.split()[-1]
-        if _BERG_RCV.search(code):
+        m = _BERG_RCV.search(code)
+        # Хвост «-NNN» у BERG — объём ресивера, но у голых машин там стоит МОЩНОСТЬ:
+        # «ВК-11», «ВК-110», «ВК-132». Раньше они все получали «ресивер: да» и сцеплялись
+        # с нашими машинами на ресивере (HB-11DF-400 за 472 457 ₽ против голого ВК-11 за
+        # 280 273 ₽ — «мы дороже на 69%»). Отличаем по совпадению с кВт карточки.
+        vol = num(m.group(1)) if m else None
+        if vol is not None and vol == kw_value(row.get("kw")):
+            vol = None
+        if vol is not None:
             p["ресивер"], p["осушитель"] = "да", ("да" if _BERG_DRY.search(code) else "нет")
         elif p["ресивер"] is None:
             p["ресивер"] = "нет"
@@ -239,6 +289,8 @@ def vendor_props(row: dict, specs: dict) -> dict:
         p["ресивер"] = "да" if _IRON_RCV.search(name) else (p["ресивер"] or "нет")
         if p["осушитель"] is None and _IRON_DRY.search(name):
             p["осушитель"] = "да"
+    if brand == "XELERON" and "bezmaslyanye" in (row.get("url") or ""):
+        p["безмасляный"] = "да"      # раздел сайта — единственный признак: в имени его нет
     if brand == "XELERON":
         # Раздел «vintovye-kompressory-dry-tank» и приставка «Dry T250» в имени — это и есть
         # комплектация «ресивер 250 л + осушитель»: у Xeleron она обозначена только так,
@@ -250,9 +302,23 @@ def vendor_props(row: dict, specs: dict) -> dict:
     if p["двигатель"] is None and re.search(r"\d\s*(?:PMA?|ПМ)\b", name):
         p["двигатель"] = "синхронный"
 
-    ip = ip_classes(row.get("ip") or "") or ip_classes(
-        pick(specs, r"степень\s+защиты|класс\s+защиты|уровень\s+защиты") or "")
-    return {"kw": kw_value(row.get("kw")), "bar": bar_bucket(row.get("bar")), "ip": ip, **p}
+    # IP на трёх сайтах записан в ИМЯ ключа, а не в значение: у crossair ключ
+    # «Степень защиты IP 23, IP 55» несёт значение «Класс изоляции F» (84 карточки из
+    # 114), у dali «Класс защиты IP 54, класс изоляции F.» (70 из 320), у ironmac класс
+    # лежит в ключе «Тип двигателя» со значением «IP65» (61 из 101). Без разбора ключей
+    # эти карточки шли без IP и сцеплялись с чужим исполнением.
+    # Род привода в 13 колонок шаблона не входит (там «асинхронный/синхронный», то есть
+    # про обмотку), но сцеплять дизельную передвижную станцию с нашим электрическим
+    # компрессором бессмысленно: BS-132DT за 1 433 805 ₽ против Cross Air Borey 180-10B
+    # за 2 274 650 ₽. Держим отдельным служебным полем.
+    drive = pick(specs, r"^тип\s+двигател") or ""
+    fuel = "дизель" if re.search(r"дизел|бензин", drive + " " + name, re.I) else None
+
+    ip = (ip_classes(row.get("ip") or "")
+          or ip_classes(pick(specs, r"степень\s+защиты|класс\s+защиты|уровень\s+защиты") or "")
+          or ip_classes(" ".join(k for k in specs if re.search(r"IP\s*\d{2}", str(k)))))
+    return {"kw": kw_value(row.get("kw")), "bar": bar_bucket(row.get("bar")),
+            "ip": ip, "топливо": fuel, **p}
 
 
 _SCREW = re.compile(r"винтов|vintov|screw", re.I)
@@ -353,6 +419,8 @@ def match(o: dict, c: dict, strict: bool) -> tuple[bool, list]:
         return False, []
     if o["ip"] and c["ip"] and not (o["ip"] & c["ip"]):     # IP — тристейт, см. enger_specs
         return False, []
+    if o.get("топливо") != c.get("топливо"):               # дизель ↔ электричество не пара
+        return False, []
     weak = []
     for k in TRISTATE:
         a, b = o.get(k), c.get(k)
@@ -364,13 +432,18 @@ def match(o: dict, c: dict, strict: bool) -> tuple[bool, list]:
         if k in TRISTATE:
             continue
         a, b = value(o, k, strict), value(c, k, strict)
+        # Считаем «слабым» свойство, по которому молчит РОВНО ОДНА сторона: именно оно и
+        # есть причина, по которой строгий режим пару отбросил. Раньше сюда попадало
+        # двойное молчание — то есть колонка «Молчат свойства» на листе «Кандидаты»
+        # перечисляла что угодно, кроме причины.
+        one_side = (o.get(k) is None) != (c.get(k) is None)
         if a is None or b is None:                          # мягкий режим: молчит хоть одна
-            if o.get(k) is None and c.get(k) is None:
+            if one_side:
                 weak.append(k)
             continue
         if a != b:
             return False, []
-        if o.get(k) is None or c.get(k) is None:
+        if one_side:
             weak.append(k)
     return True, weak
 
@@ -402,8 +475,9 @@ KOMPLEKT = {"ресивер", "осушитель", "фильтры"}
 
 
 def build(proba=False, strict=True):
-    ip_map = our_ip_by_name()
+    ip_map = our_ip_by_code()
     blk_map = our_block_by_code()
+    flags = our_flags_by_code()
     ours = [o for o in load_ours_all().get("enger", [])
             if _SCREW.search(o.get("name") or "") and o.get("kw") and o.get("bar")]
     if proba:
@@ -416,7 +490,7 @@ def build(proba=False, strict=True):
 
     rows = []
     for o in ours:
-        p = enger_props(o, ip_map, blk_map)
+        p = enger_props(o, ip_map, blk_map, flags)
         hits, soft, base, ladder = (defaultdict(list), defaultdict(list),
                                     defaultdict(list), defaultdict(list))
         ocls = bar_classes(p["bar"])

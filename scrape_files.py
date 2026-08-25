@@ -78,7 +78,12 @@ def find_ours(part: str, legacy: str = "") -> str:
     ошибка была понятной («нет такого файла»), а не «переменная не задана».
     """
     if OURS_DIR.is_dir():
-        found = [p for p in OURS_DIR.rglob("*.csv") if part.lower() in p.name.lower()]
+        # Резервные копии рядом с рабочим файлом отсекаем по имени. 25.08 матчер месяц
+        # читал specs_compact.PREV.bak.csv вместо свежего specs_compact.csv — бэкап был
+        # сделан на 20 секунд позже, и «самый свежий по mtime» выбрал именно его.
+        found = [p for p in OURS_DIR.rglob("*.csv")
+                 if part.lower() in p.name.lower()
+                 and not re.search(r"\.(bak|prev|old|copy)\b", p.name, re.I)]
         if found:
             return str(max(found, key=lambda p: p.stat().st_mtime))
     return U + legacy if legacy else ""
